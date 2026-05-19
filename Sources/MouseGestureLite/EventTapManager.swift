@@ -398,7 +398,7 @@ final class EventTapManager {
 
         if type == .flagsChanged {
             if let mode = windowDragMode(for: event.flags) {
-                prepareWindowDragSession(mode: mode, at: event.location)
+                prewarmWindowDragLookup(mode: mode, at: event.location)
             } else {
                 resetWindowDragSession()
             }
@@ -513,6 +513,7 @@ final class EventTapManager {
     private func resetWindowDragSession() {
         windowControlLock.lock()
         pendingWindowDragUpdate = nil
+        windowDragUpdateScheduled = false
         windowControlLock.unlock()
 
         windowControlQueue.async { [weak self] in
@@ -520,12 +521,10 @@ final class EventTapManager {
         }
     }
 
-    private func prepareWindowDragSession(mode: WindowDragMode, at location: CGPoint) {
+    private func prewarmWindowDragLookup(mode: WindowDragMode, at location: CGPoint) {
         windowControlQueue.async { [weak self] in
             guard let self else { return }
-            if self.windowDragSession?.mode != mode {
-                self.windowDragSession = self.beginWindowDrag(mode: mode, at: location)
-            }
+            _ = self.beginWindowDrag(mode: mode, at: location)
         }
     }
 

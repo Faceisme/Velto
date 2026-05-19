@@ -99,7 +99,10 @@ enum GestureTargetController {
     }
 
     static func setFrame(_ frame: CGRect, ofWindow window: AXUIElement) -> Bool {
-        setSize(frame.size, ofWindow: window) && setPosition(frame.origin, ofWindow: window)
+        guard setSize(frame.size, ofWindow: window) else {
+            return false
+        }
+        return setPosition(frame.origin, ofWindow: window)
     }
 
     static func maximizeWindowUnderPointer(at point: CGPoint) {
@@ -210,10 +213,10 @@ enum GestureTargetController {
     private static func targetLookupPoints(for point: CGPoint) -> [CGPoint] {
         let accessibilityPoint = DisplayCoordinateConverter.eventLocationToAccessibilityPoint(point)
         guard point != accessibilityPoint else {
-            return [accessibilityPoint]
+            return [point]
         }
 
-        return [accessibilityPoint, point]
+        return [point, accessibilityPoint]
     }
 
     private static func firstElementAtPosition(_ points: [CGPoint]) -> AXUIElement? {
