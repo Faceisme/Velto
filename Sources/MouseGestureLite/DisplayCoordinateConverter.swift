@@ -17,8 +17,9 @@ enum DisplayCoordinateConverter {
 
     static func visibleAccessibilityFrame(containingEventLocation point: CGPoint) -> CGRect {
         let accessibilityPoint = eventLocationToAccessibilityPoint(point)
+        let desktopFrame = desktopFrame()
         let screenFrames = NSScreen.screens.map { screen in
-            accessibilityRect(fromAppKitRect: screen.visibleFrame)
+            accessibilityRect(fromAppKitRect: screen.visibleFrame, desktopFrame: desktopFrame)
         }
 
         if let frame = screenFrames.first(where: { $0.contains(accessibilityPoint) }) {
@@ -45,8 +46,7 @@ enum DisplayCoordinateConverter {
         )
     }
 
-    private static func accessibilityRect(fromAppKitRect rect: CGRect) -> CGRect {
-        let desktopFrame = desktopFrame()
+    private static func accessibilityRect(fromAppKitRect rect: CGRect, desktopFrame: CGRect) -> CGRect {
         guard !desktopFrame.isEmpty else {
             return rect
         }
@@ -59,24 +59,21 @@ enum DisplayCoordinateConverter {
         )
     }
 
-    private static func desktopFrame() -> NSRect {
+    static func desktopFrame() -> NSRect {
         registerScreenObserverIfNeeded()
 
         cacheLock.lock()
+        defer { cacheLock.unlock() }
+
         if let cachedDesktopFrame {
-            cacheLock.unlock()
             return cachedDesktopFrame
         }
-        cacheLock.unlock()
 
         let frame = NSScreen.screens.reduce(NSRect.zero) { partial, screen in
             partial.union(screen.frame)
         }
 
-        cacheLock.lock()
         cachedDesktopFrame = frame
-        cacheLock.unlock()
-
         return frame
     }
 

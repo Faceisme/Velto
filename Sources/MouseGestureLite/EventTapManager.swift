@@ -140,7 +140,6 @@ final class EventTapManager {
         }
 
         guard PermissionManager.isAccessibilityTrusted else {
-            log("缺少辅助功能权限，无法启动主动右键拦截。")
             onStatusChange?("需要辅助功能权限")
             PermissionManager.requestAccessibilityPrompt()
             return false
@@ -161,7 +160,6 @@ final class EventTapManager {
             callback: mouseGestureEventTapCallback,
             userInfo: Unmanaged.passUnretained(self).toOpaque()
         ) else {
-            log("创建主动右键拦截失败，请检查辅助功能权限。")
             onStatusChange?("事件拦截启动失败")
             return false
         }
@@ -196,7 +194,6 @@ final class EventTapManager {
 
         CGEvent.tapEnable(tap: tap, enable: true)
         prewarmWindowControlCaches()
-        log("主动右键拦截已启动。普通右键会补发，右键拖动会进入手势模式。")
         onStatusChange?("监听中（主动拦截）")
         return true
     }
@@ -219,7 +216,6 @@ final class EventTapManager {
             eventTap = nil
             runLoopSource = nil
             hideOverlay()
-            log("监听停止")
             return (runLoop, tap, source)
         }
 
@@ -278,11 +274,10 @@ final class EventTapManager {
 
     private func handleLocked(proxy: CGEventTapProxy, type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-            resetTracking(reason: "系统禁用了事件 tap，已重置状态")
+            resetTracking()
             if let eventTap {
                 CGEvent.tapEnable(tap: eventTap, enable: true)
             }
-            log("事件 tap 被系统禁用后已自动重启")
             onStatusChange?("监听中（tap 已重启）")
             return nil
         }
@@ -307,7 +302,7 @@ final class EventTapManager {
 
     private func handleRightMouseDown(at location: CGPoint) -> Unmanaged<CGEvent>? {
         if state != .idle {
-            resetTracking(reason: "收到新的右键按下，重置旧状态")
+            resetTracking()
         }
 
         state = .pending
@@ -316,7 +311,6 @@ final class EventTapManager {
         lastPoint = location
         points = [location]
         displayPoints = [DisplayCoordinateConverter.eventLocationToOverlayPoint(location)]
-        log("右键按下已拦截 raw=\(format(location)) display=\(format(displayPoints[0]))")
         armGestureTimeoutTimer()
         armSafetyTimer()
         return nil
@@ -330,7 +324,6 @@ final class EventTapManager {
             let moved = distance(startPoint, location)
             if moved >= movementThreshold {
                 state = .gesturing
-                log("进入手势模式，移动距离 \(Int(moved))px")
                 if preferences.showTrail {
                     showOverlay(points: displayPoints)
                 }
@@ -356,8 +349,8 @@ final class EventTapManager {
         switch state {
         case .pending:
             let point = startPoint
-            resetTracking(reason: "普通右键完成")
-            replayRightClickAsync(at: point, reason: "未进入手势，补发普通右键")
+            resetTracking()
+            replayRightClickAsync(at: point)
             return nil
 
         case .gesturing:
@@ -365,9 +358,7 @@ final class EventTapManager {
             let capturedPoints = points
             let capturedTargetPoint = startPoint
             let capturedFrontmostApplication = frontmostApplicationAtGestureStart
-            let capturedDisplayPointsCount = displayPoints.count
-            resetTracking(reason: "手势候选完成")
-            log("右键松开，手势点数=\(capturedPoints.count)，显示点数=\(capturedDisplayPointsCount)，不补发右键菜单")
+            resetTracking()
 
             DispatchQueue.main.async { [weak self] in
                 self?.runGesture(
@@ -379,7 +370,7 @@ final class EventTapManager {
             return nil
 
         case .cleanupAwaitingUp:
-            resetTracking(reason: "保险重置后的物理右键已松开")
+            resetTracking()
             return nil
 
         case .idle:
@@ -439,15 +430,7 @@ final class EventTapManager {
         let moveFlags = windowMoveModifierFlags
         windowControlLock.unlock()
 
-        if resizeFlags != 0, rawValue == resizeFlags {
-            return .resize
-        }
-
-        if moveFlags != 0, rawValue == moveFlags {
-            return .move
-        }
-
-        return nil
+        return windowDragMode(rawValue: rawValue, moveFlags: moveFlags, resizeFlags: resizeFlags)
     }
 
     private func handleWindowShortcutLocked(event: CGEvent) -> Unmanaged<CGEvent>? {
@@ -691,13 +674,19 @@ final class EventTapManager {
 
     private func windowDragMode(for flags: CGEventFlags) -> WindowDragMode? {
         let rawValue = ModifierFormatter.normalizedRawValue(from: flags)
-        if preferences.windowResizeModifierFlags != 0,
-           rawValue == preferences.windowResizeModifierFlags {
+        return windowDragMode(
+            rawValue: rawValue,
+            moveFlags: preferences.windowMoveModifierFlags,
+            resizeFlags: preferences.windowResizeModifierFlags
+        )
+    }
+
+    private func windowDragMode(rawValue: UInt64, moveFlags: UInt64, resizeFlags: UInt64) -> WindowDragMode? {
+        if resizeFlags != 0, rawValue == resizeFlags {
             return .resize
         }
 
-        if preferences.windowMoveModifierFlags != 0,
-           rawValue == preferences.windowMoveModifierFlags {
+        if moveFlags != 0, rawValue == moveFlags {
             return .move
         }
 
@@ -719,27 +708,18 @@ final class EventTapManager {
 
         if let match {
             guard let shortcut = match.command.shortcut else {
-                log("识别到 \(match.command.name)，但未设置快捷键，已跳过执行")
                 return
             }
 
             resolveTargetAndExecute(
-                match: match,
                 shortcut: shortcut,
                 targetPoint: targetPoint,
                 frontmostApplicationAtGestureStart: frontmostApplicationAtGestureStart
             )
-        } else {
-            if let best {
-                log("未识别，最接近 \(best.command.name)，距离=\(String(format: "%.3f", Double(best.distance)))，阈值=\(threshold)")
-            } else {
-                log("未识别，没有可用候选，点数=\(points.count)")
-            }
         }
     }
 
     private func resolveTargetAndExecute(
-        match: GestureMatch,
         shortcut: Shortcut,
         targetPoint: CGPoint,
         frontmostApplicationAtGestureStart: NSRunningApplication?
@@ -754,7 +734,6 @@ final class EventTapManager {
                 frontmostApplicationAtGestureStart: frontmostApplicationAtGestureStart
             )
             executeMatchedGesture(
-                match: match,
                 shortcut: shortcut,
                 target: target,
                 frontmostApplicationAtGestureStart: frontmostApplicationAtGestureStart
@@ -770,7 +749,6 @@ final class EventTapManager {
 
                 DispatchQueue.main.async { [weak self] in
                     self?.executeMatchedGesture(
-                        match: match,
                         shortcut: shortcut,
                         target: target,
                         frontmostApplicationAtGestureStart: frontmostApplicationAtGestureStart
@@ -781,31 +759,22 @@ final class EventTapManager {
     }
 
     private func executeMatchedGesture(
-        match: GestureMatch,
         shortcut: Shortcut,
         target: GestureExecutionTarget,
         frontmostApplicationAtGestureStart: NSRunningApplication?
     ) {
         GestureTargetController.prepareForExecution(target)
 
-        let delivery = target.usesProcessPosting ? "按进程投递" : "系统前台投递"
-        log("识别到 \(match.command.name)，距离=\(String(format: "%.3f", Double(match.distance)))，目标=\(target.displayName)，方式=\(delivery)，执行快捷键=\(shortcut.displayName)")
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + target.deliveryDelay) { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + target.deliveryDelay) {
             if target.restoresOriginalFrontmostApplication {
                 GestureTargetController.restoreFrontmostApplication(frontmostApplicationAtGestureStart)
             }
 
             if GestureTargetController.performDirectWindowCloseIfAvailable(for: target, shortcut: shortcut) {
-                self?.log("已通过辅助功能直接关闭目标窗口")
                 return
             }
 
-            if target.usesProcessPosting, let pid = target.pid {
-                ShortcutSynthesizer.send(shortcut, toPid: pid)
-            } else {
-                ShortcutSynthesizer.send(shortcut)
-            }
+            ShortcutSynthesizer.send(shortcut)
 
             if target.restoresOriginalFrontmostApplication {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
@@ -815,7 +784,7 @@ final class EventTapManager {
         }
     }
 
-    private func replayRightClick(at point: CGPoint, reason: String) {
+    private func replayRightClick(at point: CGPoint) {
         guard let down = CGEvent(
             mouseEventSource: nil,
             mouseType: .rightMouseDown,
@@ -827,21 +796,19 @@ final class EventTapManager {
             mouseCursorPosition: point,
             mouseButton: .right
         ) else {
-            log("补发普通右键失败")
             return
         }
 
         down.setIntegerValueField(.eventSourceUserData, value: syntheticMarker)
         up.setIntegerValueField(.eventSourceUserData, value: syntheticMarker)
 
-        log("\(reason) \(format(point))")
         down.post(tap: .cgSessionEventTap)
         up.post(tap: .cgSessionEventTap)
     }
 
-    private func replayRightClickAsync(at point: CGPoint, reason: String) {
+    private func replayRightClickAsync(at point: CGPoint) {
         DispatchQueue.global(qos: .userInteractive).async { [weak self] in
-            self?.replayRightClick(at: point, reason: reason)
+            self?.replayRightClick(at: point)
         }
     }
 
@@ -867,8 +834,12 @@ final class EventTapManager {
         }
     }
 
-    private func resetTracking(reason: String) {
+    private func resetTracking() {
         state = .idle
+        clearTrackingState()
+    }
+
+    private func clearTrackingState() {
         gestureTimeoutToken = nil
         safetyToken = nil
         points = []
@@ -878,7 +849,6 @@ final class EventTapManager {
         startPoint = .zero
         lastPoint = .zero
         hideOverlay()
-        log(reason)
     }
 
     private func armSafetyTimer() {
@@ -894,10 +864,7 @@ final class EventTapManager {
             }
 
             self.state = .cleanupAwaitingUp
-            self.points = []
-            self.displayPoints = []
-            self.hideOverlay()
-            self.log("保险重置，继续吞掉事件直到物理右键松开")
+            self.clearTrackingState()
         }
     }
 
@@ -914,19 +881,11 @@ final class EventTapManager {
             }
 
             self.state = .cleanupAwaitingUp
-            self.gestureTimeoutToken = nil
-            self.safetyToken = nil
-            self.points = []
-            self.displayPoints = []
-            self.frontmostApplicationAtGestureStart = nil
-            self.startPoint = .zero
-            self.lastPoint = .zero
-            self.hideOverlay()
+            self.clearTrackingState()
             DispatchQueue.main.async { [weak self] in
                 self?.onGestureMatch?(nil)
                 self?.onStatusChange?("本次手势超时，已取消")
             }
-            self.log("手势超过 \(String(format: "%.1f", timeout)) 秒，已取消")
         }
     }
 
@@ -980,10 +939,4 @@ final class EventTapManager {
         hypot(left.x - right.x, left.y - right.y)
     }
 
-    private func format(_ point: CGPoint) -> String {
-        "(\(Int(point.x)), \(Int(point.y)))"
-    }
-
-    private func log(_ message: String) {
-    }
 }

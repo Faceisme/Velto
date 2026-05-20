@@ -185,12 +185,14 @@ final class GestureStore {
         gestures = Self.load(
             [GestureCommand].self,
             key: gesturesKey,
-            legacyKeys: [Self.legacyMyGesturesKey, Self.legacyGesturesKey]
+            legacyKeys: [Self.legacyMyGesturesKey, Self.legacyGesturesKey],
+            decoder: decoder
         ) ?? Self.defaultGestures()
         preferences = Self.load(
             AppPreferences.self,
             key: preferencesKey,
-            legacyKeys: [Self.legacyMyGesturesPreferencesKey, Self.legacyPreferencesKey]
+            legacyKeys: [Self.legacyMyGesturesPreferencesKey, Self.legacyPreferencesKey],
+            decoder: decoder
         ) ?? .defaults
         preferences.gesturesEnabled = true
         localizeBuiltInGestureNames()
@@ -257,15 +259,20 @@ final class GestureStore {
         NotificationCenter.default.post(name: .gestureStoreDidChange, object: self)
     }
 
-    private static func load<T: Decodable>(_ type: T.Type, key: String, legacyKeys: [String]) -> T? {
+    private static func load<T: Decodable>(
+        _ type: T.Type,
+        key: String,
+        legacyKeys: [String],
+        decoder: JSONDecoder
+    ) -> T? {
         if let data = UserDefaults.standard.data(forKey: key),
-           let decoded = try? JSONDecoder().decode(T.self, from: data) {
+           let decoded = try? decoder.decode(T.self, from: data) {
             return decoded
         }
 
         for legacyKey in legacyKeys {
             if let data = UserDefaults.standard.data(forKey: legacyKey),
-               let decoded = try? JSONDecoder().decode(T.self, from: data) {
+               let decoded = try? decoder.decode(T.self, from: data) {
                 UserDefaults.standard.set(data, forKey: key)
                 return decoded
             }
@@ -278,7 +285,7 @@ final class GestureStore {
 
             for legacyKey in legacyKeys {
                 if let data = legacyDefaults.data(forKey: legacyKey),
-                   let decoded = try? JSONDecoder().decode(T.self, from: data) {
+                   let decoded = try? decoder.decode(T.self, from: data) {
                     UserDefaults.standard.set(data, forKey: key)
                     return decoded
                 }

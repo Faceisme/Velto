@@ -6,16 +6,10 @@ import Foundation
 struct GestureExecutionTarget {
     let policy: GestureTargetPolicy
     let pid: pid_t?
-    let displayName: String
     let restoresOriginalFrontmostApplication: Bool
-    let postsToProcess: Bool
     let deliveryDelay: TimeInterval
     let window: AXUIElement?
     let prefersDirectWindowClose: Bool
-
-    var usesProcessPosting: Bool {
-        postsToProcess && pid != nil
-    }
 }
 
 enum GestureTargetController {
@@ -32,14 +26,11 @@ enum GestureTargetController {
     ) -> GestureExecutionTarget {
         switch policy {
         case .activeWindow:
-            if let frontmostApplicationAtGestureStart {
-                let name = frontmostApplicationAtGestureStart.localizedName
+            if frontmostApplicationAtGestureStart != nil {
                 return GestureExecutionTarget(
                     policy: policy,
                     pid: nil,
-                    displayName: "手势开始时的活动应用：\(name?.isEmpty == false ? name! : "pid \(frontmostApplicationAtGestureStart.processIdentifier)")",
                     restoresOriginalFrontmostApplication: true,
-                    postsToProcess: false,
                     deliveryDelay: 0,
                     window: nil,
                     prefersDirectWindowClose: false
@@ -49,9 +40,7 @@ enum GestureTargetController {
             return GestureExecutionTarget(
                 policy: policy,
                 pid: nil,
-                displayName: "未找到手势开始时的活动应用，已回退到系统前台",
                 restoresOriginalFrontmostApplication: false,
-                postsToProcess: false,
                 deliveryDelay: 0,
                 window: nil,
                 prefersDirectWindowClose: false
@@ -125,7 +114,7 @@ enum GestureTargetController {
                 return target(from: candidate)
             }
 
-            return fallbackTarget(reason: "未找到鼠标指针下方应用，已回退到活动窗口")
+            return fallbackTarget()
         }
 
         let window = windowElement(containing: element)
@@ -142,9 +131,7 @@ enum GestureTargetController {
             return GestureExecutionTarget(
                 policy: .windowUnderPointer,
                 pid: nil,
-                displayName: "未找到鼠标指针下方应用，已回退到活动窗口",
                 restoresOriginalFrontmostApplication: false,
-                postsToProcess: false,
                 deliveryDelay: 0,
                 window: nil,
                 prefersDirectWindowClose: false
@@ -155,13 +142,10 @@ enum GestureTargetController {
         let app = foregroundApplication(for: rawApp) ?? rawApp
         let isWeChatFamily = isWeChat(rawApp) || isWeChat(app)
 
-        let name = app?.localizedName
         return GestureExecutionTarget(
             policy: .windowUnderPointer,
             pid: pid,
-            displayName: "鼠标指针下方并已切换：\(name?.isEmpty == false ? name! : "pid \(pid)")",
             restoresOriginalFrontmostApplication: false,
-            postsToProcess: false,
             deliveryDelay: isWeChatFamily ? 0.12 : 0.08,
             window: window,
             prefersDirectWindowClose: isWeChatFamily
@@ -174,13 +158,10 @@ enum GestureTargetController {
         let isWeChatFamily = isWeChat(rawApp) || isWeChat(app) || isWeChatText(candidate.ownerName)
         let window = axWindow(matching: candidate)
 
-        let name = app?.localizedName
         return GestureExecutionTarget(
             policy: .windowUnderPointer,
             pid: candidate.pid,
-            displayName: "鼠标指针下方并已切换：\(name?.isEmpty == false ? name! : "pid \(candidate.pid)")",
             restoresOriginalFrontmostApplication: false,
-            postsToProcess: false,
             deliveryDelay: isWeChatFamily ? 0.12 : 0.08,
             window: window,
             prefersDirectWindowClose: isWeChatFamily
@@ -497,13 +478,11 @@ enum GestureTargetController {
             || text.localizedCaseInsensitiveContains("wechat")
     }
 
-    private static func fallbackTarget(reason: String) -> GestureExecutionTarget {
+    private static func fallbackTarget() -> GestureExecutionTarget {
         GestureExecutionTarget(
             policy: .windowUnderPointer,
             pid: nil,
-            displayName: reason,
             restoresOriginalFrontmostApplication: false,
-            postsToProcess: false,
             deliveryDelay: 0,
             window: nil,
             prefersDirectWindowClose: false

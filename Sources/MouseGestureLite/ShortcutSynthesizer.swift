@@ -9,15 +9,7 @@ enum ShortcutSynthesizer {
         sendKey(keyCode: shortcut.keyCode, modifierFlags: shortcut.modifierFlags)
     }
 
-    static func send(_ shortcut: Shortcut, toPid pid: pid_t) {
-        sendKey(keyCode: shortcut.keyCode, modifierFlags: shortcut.modifierFlags, pid: pid)
-    }
-
     static func sendKey(keyCode: UInt16, modifierFlags: UInt64 = 0) {
-        sendKey(keyCode: keyCode, modifierFlags: modifierFlags, pid: nil)
-    }
-
-    private static func sendKey(keyCode: UInt16, modifierFlags: UInt64 = 0, pid: pid_t?) {
         guard let source = CGEventSource(stateID: .hidSystemState) else {
             return
         }
@@ -33,17 +25,8 @@ enum ShortcutSynthesizer {
         keyUp?.flags = flags
         keyUp?.setIntegerValueField(.eventSourceUserData, value: syntheticEventMarker)
 
-        if let pid {
-            if let keyDown {
-                keyDown.postToPid(pid)
-            }
-            if let keyUp {
-                keyUp.postToPid(pid)
-            }
-        } else {
-            keyDown?.post(tap: .cghidEventTap)
-            keyUp?.post(tap: .cghidEventTap)
-        }
+        keyDown?.post(tap: .cghidEventTap)
+        keyUp?.post(tap: .cghidEventTap)
     }
 
     static func sendEscape() {

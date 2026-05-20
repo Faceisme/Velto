@@ -44,7 +44,7 @@ final class GestureOverlayController {
     }
 
     private func ensureWindow() {
-        let frame = Self.desktopFrame()
+        let frame = DisplayCoordinateConverter.desktopFrame()
 
         if let window {
             if window.frame != frame {
@@ -134,12 +134,6 @@ final class GestureOverlayController {
         pendingPoints = nil
         hasPendingRender = false
         return points
-    }
-
-    private static func desktopFrame() -> NSRect {
-        NSScreen.screens.reduce(NSRect.zero) { partial, screen in
-            partial.union(screen.frame)
-        }
     }
 }
 

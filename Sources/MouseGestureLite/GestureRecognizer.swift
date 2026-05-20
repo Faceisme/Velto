@@ -7,8 +7,15 @@ struct GestureMatch {
 }
 
 final class GestureRecognizer {
+    private struct NormalizedTemplate {
+        var command: GestureCommand
+        var points: [CGPoint]
+    }
+
     private let sampleCount = 64
     private let minimumPathLength: CGFloat = 24
+    private var cachedCommands: [GestureCommand]?
+    private var cachedTemplates: [NormalizedTemplate] = []
 
     func bestMatch(points: [CGPoint], commands: [GestureCommand], threshold: CGFloat) -> GestureMatch? {
         guard let best = bestCandidate(points: points, commands: commands) else {
@@ -23,23 +30,18 @@ final class GestureRecognizer {
     }
 
     func bestCandidate(points: [CGPoint], commands: [GestureCommand]) -> GestureMatch? {
-        guard pathLength(points) >= minimumPathLength,
-              let candidate = normalize(points) else {
+        let candidatePathLength = pathLength(points)
+        guard candidatePathLength >= minimumPathLength,
+              let candidate = normalize(points, knownPathLength: candidatePathLength) else {
             return nil
         }
 
         var best: GestureMatch?
 
-        for command in commands where !command.templates.isEmpty {
-            for template in command.templates {
-                guard let normalizedTemplate = normalize(template.map(\.cgPoint)) else {
-                    continue
-                }
-
-                let distance = averageDistance(candidate, normalizedTemplate)
-                if best == nil || distance < best!.distance {
-                    best = GestureMatch(command: command, distance: distance)
-                }
+        for template in normalizedTemplates(for: commands) {
+            let distance = averageDistance(candidate, template.points)
+            if best == nil || distance < best!.distance {
+                best = GestureMatch(command: template.command, distance: distance)
             }
         }
 
@@ -47,11 +49,15 @@ final class GestureRecognizer {
     }
 
     func normalize(_ points: [CGPoint]) -> [CGPoint]? {
+        normalize(points, knownPathLength: nil)
+    }
+
+    private func normalize(_ points: [CGPoint], knownPathLength: CGFloat?) -> [CGPoint]? {
         guard points.count >= 2 else {
             return nil
         }
 
-        let resampled = resample(points, targetCount: sampleCount)
+        let resampled = resample(points, targetCount: sampleCount, knownPathLength: knownPathLength)
         guard let scaled = scaleToUnitBox(resampled) else {
             return nil
         }
@@ -59,7 +65,26 @@ final class GestureRecognizer {
         return translateToOrigin(scaled)
     }
 
-    private func resample(_ points: [CGPoint], targetCount: Int) -> [CGPoint] {
+    private func normalizedTemplates(for commands: [GestureCommand]) -> [NormalizedTemplate] {
+        if cachedCommands == commands {
+            return cachedTemplates
+        }
+
+        let templates = commands.flatMap { command in
+            command.templates.compactMap { template -> NormalizedTemplate? in
+                guard let points = normalize(template.map(\.cgPoint)) else {
+                    return nil
+                }
+                return NormalizedTemplate(command: command, points: points)
+            }
+        }
+
+        cachedCommands = commands
+        cachedTemplates = templates
+        return templates
+    }
+
+    private func resample(_ points: [CGPoint], targetCount: Int, knownPathLength: CGFloat?) -> [CGPoint] {
         guard let first = points.first else {
             return []
         }
@@ -68,7 +93,7 @@ final class GestureRecognizer {
             return [first]
         }
 
-        let totalLength = pathLength(points)
+        let totalLength = knownPathLength ?? pathLength(points)
         guard totalLength > 0 else {
             return Array(repeating: first, count: targetCount)
         }
