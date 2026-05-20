@@ -311,7 +311,6 @@ final class EventTapManager {
         lastPoint = location
         points = [location]
         displayPoints = [DisplayCoordinateConverter.eventLocationToOverlayPoint(location)]
-        armGestureTimeoutTimer()
         armSafetyTimer()
         return nil
     }
@@ -319,11 +318,12 @@ final class EventTapManager {
     private func handleRightMouseDragged(at location: CGPoint, event: CGEvent) -> Unmanaged<CGEvent>? {
         switch state {
         case .pending:
-            appendPoint(location)
+            _ = appendPoint(location)
 
             let moved = distance(startPoint, location)
             if moved >= movementThreshold {
                 state = .gesturing
+                armGestureTimeoutTimer()
                 if preferences.showTrail {
                     showOverlay(points: displayPoints)
                 }
@@ -331,13 +331,17 @@ final class EventTapManager {
             return nil
 
         case .gesturing:
-            appendPoint(location)
-            if preferences.showTrail {
+            let didAppendPoint = appendPoint(location)
+            if didAppendPoint {
+                armGestureTimeoutTimer()
+            }
+            if didAppendPoint, preferences.showTrail {
                 updateOverlay(points: displayPoints)
             }
             return nil
 
         case .cleanupAwaitingUp:
+            lastPoint = location
             return nil
 
         case .idle:
@@ -354,7 +358,7 @@ final class EventTapManager {
             return nil
 
         case .gesturing:
-            appendPoint(location)
+            _ = appendPoint(location)
             let capturedPoints = points
             let capturedTargetPoint = startPoint
             let capturedFrontmostApplication = frontmostApplicationAtGestureStart
@@ -812,16 +816,17 @@ final class EventTapManager {
         }
     }
 
-    private func appendPoint(_ point: CGPoint) {
+    @discardableResult
+    private func appendPoint(_ point: CGPoint) -> Bool {
         lastPoint = point
         guard let previousPoint = points.last else {
             points = [point]
             displayPoints = [DisplayCoordinateConverter.eventLocationToOverlayPoint(point)]
-            return
+            return true
         }
 
         guard distance(previousPoint, point) >= minimumRecordedPointDistance else {
-            return
+            return false
         }
 
         let displayPoint = DisplayCoordinateConverter.eventLocationToOverlayPoint(point)
@@ -832,6 +837,7 @@ final class EventTapManager {
             points.append(point)
             displayPoints.append(displayPoint)
         }
+        return true
     }
 
     private func resetTracking() {
@@ -851,6 +857,17 @@ final class EventTapManager {
         hideOverlay()
     }
 
+    private func cancelGestureAndWaitForRightMouseUp() {
+        state = .cleanupAwaitingUp
+        gestureTimeoutToken = nil
+        safetyToken = nil
+        points = []
+        displayPoints = []
+        frontmostApplicationAtGestureStart = nil
+        resetWindowDragSession()
+        hideOverlay()
+    }
+
     private func armSafetyTimer() {
         let token = UUID()
         safetyToken = token
@@ -863,8 +880,7 @@ final class EventTapManager {
                 return
             }
 
-            self.state = .cleanupAwaitingUp
-            self.clearTrackingState()
+            self.cancelGestureAndWaitForRightMouseUp()
         }
     }
 
@@ -880,8 +896,7 @@ final class EventTapManager {
                 return
             }
 
-            self.state = .cleanupAwaitingUp
-            self.clearTrackingState()
+            self.cancelGestureAndWaitForRightMouseUp()
             DispatchQueue.main.async { [weak self] in
                 self?.onGestureMatch?(nil)
                 self?.onStatusChange?("本次手势超时，已取消")
