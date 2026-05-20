@@ -4,6 +4,8 @@ import UniformTypeIdentifiers
 
 struct GestureSettingsView: View {
     private let store = GestureStore.shared
+    @State private var draftGestures: [GestureCommand] = []
+    @State private var didLoadDraft = false
     @State private var selectedGestureID: UUID?
     @State private var editingName = ""
     @State private var shortcut: Shortcut?
@@ -27,14 +29,12 @@ struct GestureSettingsView: View {
             Divider()
             actionBar
         }
-        .onChange(of: selectedGestureID) { _, newID in
-            syncEditorFromStore(id: newID)
-        }
-        .onChange(of: store.gestures) { _, _ in
-            if let id = selectedGestureID,
-               store.gestures.contains(where: { $0.id == id }) {
-                syncEditorFromStore(id: id)
+        .onChange(of: selectedGestureID) { oldID, newID in
+            guard newID != nil || draftGestures.isEmpty else {
+                selectedGestureID = oldID ?? draftGestures.first?.id
+                return
             }
+            syncEditorFromDraft(id: newID)
         }
         .confirmationDialog(
             "导入配置会覆盖当前手势",
@@ -52,10 +52,81 @@ struct GestureSettingsView: View {
             Text(errorMessage)
         }
         .onAppear {
-            if selectedGestureID == nil, let first = store.gestures.first {
-                selectedGestureID = first.id
-            }
+            guard !didLoadDraft else { return }
+            didLoadDraft = true
+            reloadDraftFromStore()
         }
+    }
+
+    private var visibleStatusMessage: String {
+        if !statusMessage.isEmpty {
+            return statusMessage
+        }
+        if draftGestures != store.gestures {
+            return "有未保存的更改。"
+        }
+        return ""
+    }
+
+    private var selectedGesture: GestureCommand? {
+        guard let id = selectedGestureID else { return nil }
+        return draftGestures.first { $0.id == id }
+    }
+
+    private func reloadDraftFromStore(select id: UUID? = nil) {
+        draftGestures = store.gestures
+        let targetID = id ?? selectedGestureID
+        if let targetID, draftGestures.contains(where: { $0.id == targetID }) {
+            selectedGestureID = targetID
+            syncEditorFromDraft(id: targetID)
+        } else {
+            selectedGestureID = draftGestures.first?.id
+            syncEditorFromDraft(id: selectedGestureID)
+        }
+    }
+
+    private func syncEditorFromDraft(id: UUID?) {
+        guard let id, let gesture = draftGestures.first(where: { $0.id == id }) else {
+            editingName = ""
+            shortcut = nil
+            return
+        }
+        editingName = gesture.name
+        shortcut = gesture.shortcut
+    }
+
+    private func updateSelectedDraftGesture(_ update: (inout GestureCommand) -> Void) {
+        guard let id = selectedGestureID,
+              let idx = draftGestures.firstIndex(where: { $0.id == id }) else { return }
+        update(&draftGestures[idx])
+        statusMessage = ""
+    }
+
+    private func applyEditorToDraft() {
+        let trimmed = editingName.trimmingCharacters(in: .whitespacesAndNewlines)
+        updateSelectedDraftGesture { gesture in
+            gesture.name = trimmed.isEmpty ? "未命名" : trimmed
+            gesture.shortcut = shortcut
+        }
+    }
+
+    private func normalizedDraftGesturesForSave() -> [GestureCommand] {
+        draftGestures.map { gesture in
+            var normalized = gesture
+            let trimmed = normalized.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            normalized.name = trimmed.isEmpty ? "未命名" : trimmed
+            return normalized
+        }
+    }
+
+    private func gestureNameBinding() -> Binding<String> {
+        Binding(
+            get: { editingName },
+            set: { value in
+                editingName = value
+                updateSelectedDraftGesture { $0.name = value }
+            }
+        )
     }
 
     // MARK: - General Settings
@@ -120,8 +191,12 @@ struct GestureSettingsView: View {
 
     private var gestureListPanel: some View {
         VStack(spacing: 0) {
-            List(store.gestures, selection: $selectedGestureID) { gesture in
+            List(draftGestures, selection: $selectedGestureID) { gesture in
                 GestureRowView(gesture: gesture)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        selectGesture(gesture.id)
+                    }
             }
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
@@ -140,7 +215,7 @@ struct GestureSettingsView: View {
                     Image(systemName: "minus")
                 }
                 .buttonStyle(.borderless)
-                .disabled(selectedGestureID == nil)
+                .disabled(draftGestures.isEmpty)
                 .help("删除所选手势")
 
                 Spacer()
@@ -159,15 +234,14 @@ struct GestureSettingsView: View {
             ScrollView {
                 Form {
                     Section("名称") {
-                        TextField("手势名称", text: $editingName)
-                            .onSubmit { saveGestureName() }
+                        TextField("手势名称", text: gestureNameBinding())
                     }
 
                     Section("快捷键") {
                         ShortcutRecorderRepresentable(shortcut: $shortcut)
                             .frame(height: 44)
                             .onChange(of: shortcut) { _, newVal in
-                                updateSelectedGesture { $0.shortcut = newVal }
+                                updateSelectedDraftGesture { $0.shortcut = newVal }
                             }
                     }
 
@@ -175,7 +249,7 @@ struct GestureSettingsView: View {
                         GestureCaptureRepresentable(
                             templates: gesture.templates,
                             onStrokeFinished: { points in
-                                updateSelectedGesture { $0.templates.append(points.map(StrokePoint.init)) }
+                                updateSelectedDraftGesture { $0.templates.append(points.map(StrokePoint.init)) }
                             }
                         )
                         .frame(minHeight: 200)
@@ -186,13 +260,13 @@ struct GestureSettingsView: View {
                                 .font(.callout)
                             Spacer()
                             Button("撤销上一个") {
-                                updateSelectedGesture { gesture in
+                                updateSelectedDraftGesture { gesture in
                                     if !gesture.templates.isEmpty { gesture.templates.removeLast() }
                                 }
                             }
                             .disabled(gesture.templates.isEmpty)
                             Button("清空样本") {
-                                updateSelectedGesture { $0.templates.removeAll() }
+                                updateSelectedDraftGesture { $0.templates.removeAll() }
                             }
                             .disabled(gesture.templates.isEmpty)
                         }
@@ -221,8 +295,8 @@ struct GestureSettingsView: View {
             Button("导入配置") { importConfiguration() }
             Button("导出配置") { exportConfiguration() }
             Spacer()
-            if !statusMessage.isEmpty {
-                Text(statusMessage)
+            if !visibleStatusMessage.isEmpty {
+                Text(visibleStatusMessage)
                     .foregroundStyle(.secondary)
                     .font(.callout)
             }
@@ -238,47 +312,35 @@ struct GestureSettingsView: View {
 
     // MARK: - Helpers
 
-    private var selectedGesture: GestureCommand? {
-        guard let id = selectedGestureID else { return nil }
-        return store.gestures.first { $0.id == id }
-    }
-
-    private func syncEditorFromStore(id: UUID?) {
-        guard let id, let gesture = store.gestures.first(where: { $0.id == id }) else { return }
-        editingName = gesture.name
-        shortcut = gesture.shortcut
-    }
-
-    private func updateSelectedGesture(_ update: (inout GestureCommand) -> Void) {
-        guard let id = selectedGestureID,
-              let idx = store.gestures.firstIndex(where: { $0.id == id }) else { return }
-        store.updateGestures { update(&$0[idx]) }
-    }
-
-    private func saveGestureName() {
-        let trimmed = editingName.trimmingCharacters(in: .whitespacesAndNewlines)
-        updateSelectedGesture { $0.name = trimmed.isEmpty ? "未命名" : trimmed }
+    private func selectGesture(_ id: UUID?) {
+        selectedGestureID = id
+        syncEditorFromDraft(id: id)
     }
 
     private func saveCurrentEditor() {
-        saveGestureName()
+        applyEditorToDraft()
+        let gesturesToSave = normalizedDraftGesturesForSave()
+        store.updateGestures { $0 = gesturesToSave }
+        draftGestures = gesturesToSave
         statusMessage = "已保存。"
     }
 
     private func addGesture() {
         let newGesture = GestureCommand(name: "新手势", templates: [], shortcut: nil)
-        store.updateGestures { $0.append(newGesture) }
-        selectedGestureID = newGesture.id
+        draftGestures.append(newGesture)
+        selectGesture(newGesture.id)
+        statusMessage = ""
     }
 
     private func deleteSelectedGesture() {
-        guard let id = selectedGestureID,
-              let idx = store.gestures.firstIndex(where: { $0.id == id }) else { return }
-        let nextID: UUID? = store.gestures.count > 1
-            ? store.gestures[idx == store.gestures.count - 1 ? idx - 1 : idx + 1].id
+        guard let id = selectedGestureID ?? draftGestures.last?.id,
+              let idx = draftGestures.firstIndex(where: { $0.id == id }) else { return }
+        let nextID: UUID? = draftGestures.count > 1
+            ? draftGestures[idx == draftGestures.count - 1 ? idx - 1 : idx + 1].id
             : nil
-        store.updateGestures { $0.remove(at: idx) }
-        selectedGestureID = nextID
+        draftGestures.remove(at: idx)
+        selectGesture(nextID)
+        statusMessage = ""
     }
 
     private func importConfiguration() {
@@ -298,7 +360,7 @@ struct GestureSettingsView: View {
         do {
             let data = try Data(contentsOf: url)
             try store.importBackupData(data)
-            selectedGestureID = store.gestures.first?.id
+            reloadDraftFromStore(select: store.gestures.first?.id)
             statusMessage = "配置已导入：\(url.lastPathComponent)"
         } catch {
             errorMessage = error.localizedDescription
@@ -307,7 +369,6 @@ struct GestureSettingsView: View {
     }
 
     private func exportConfiguration() {
-        saveGestureName()
         let panel = NSSavePanel()
         panel.title = "导出 MyGestures 配置"
         panel.nameFieldStringValue = "MyGestures-Backup.json"
