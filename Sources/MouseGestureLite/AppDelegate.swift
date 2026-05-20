@@ -1,12 +1,13 @@
 import AppKit
 import Foundation
+import SwiftUI
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let store = GestureStore.shared
     private let inputSubsystemEnabled = true
     private var eventTapManager: EventTapManager?
     private var statusItem: NSStatusItem?
-    private var settingsWindowController: SettingsWindowController?
+    private var settingsWindow: NSWindow?
     private var lastStatus = "正在启动"
     private var lastGesture = "暂无手势"
     private var isListenerRunning = false
@@ -140,10 +141,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func openSettings() {
-        if settingsWindowController == nil {
-            settingsWindowController = SettingsWindowController()
+        if settingsWindow == nil {
+            let controller = NSHostingController(rootView: SettingsRootView())
+            let window = NSWindow(contentViewController: controller)
+            window.title = "MyGestures"
+            window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+            window.setContentSize(NSSize(width: 960, height: 660))
+            window.minSize = NSSize(width: 920, height: 580)
+            window.center()
+            settingsWindow = window
         }
-        settingsWindowController?.showWindow(nil)
+        settingsWindow?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     @objc private func toggleTrail() {

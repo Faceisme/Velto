@@ -1,6 +1,7 @@
 import AppKit
 import CoreGraphics
 import Foundation
+import Observation
 
 struct StrokePoint: Codable, Hashable {
     var x: Double
@@ -162,6 +163,7 @@ extension CGEventFlags {
     }
 }
 
+@Observable
 final class GestureStore {
     static let shared = GestureStore()
 
