@@ -77,6 +77,11 @@ final class EventTapManager {
     private var windowDragUpdateScheduled = false
     private var windowMoveModifierFlags: UInt64
     private var windowResizeModifierFlags: UInt64
+    private var contentZoomModifierFlags: UInt64
+    private var contentZoomAccumulator: Double = 0
+    private var contentZoomStepScheduled = false
+    private var contentZoomLastDispatchTime: CFTimeInterval = 0
+    private var contentZoomGeneration = 0
     private var activationObserver: NSObjectProtocol?
     private var storeObserver: NSObjectProtocol?
     private var preferences: AppPreferences
@@ -85,6 +90,9 @@ final class EventTapManager {
     private let minimumRecordedPointDistance: CGFloat = 2
     private let maximumGesturePointCount = 512
     private let safetyTimeout: TimeInterval = 8
+    private let contentZoomStepThreshold: Double = 1
+    private let contentZoomMaxBufferedSteps: Double = 4
+    private let contentZoomMinimumStepInterval: TimeInterval = 0.055
     private let syntheticMarker: Int64 = 0x4D474C524550
 
     init(store: GestureStore = .shared) {
@@ -92,6 +100,7 @@ final class EventTapManager {
         preferences = store.preferences
         windowMoveModifierFlags = preferences.windowMoveModifierFlags
         windowResizeModifierFlags = preferences.windowResizeModifierFlags
+        contentZoomModifierFlags = preferences.contentZoomModifierFlags
         stateQueue.setSpecific(key: stateQueueKey, value: ())
         lastFrontmostApplication = NSWorkspace.shared.frontmostApplication
         activationObserver = NSWorkspace.shared.notificationCenter.addObserver(
@@ -119,7 +128,11 @@ final class EventTapManager {
             let preferences = store.preferences
             self.updateWindowControlModifierSnapshot(from: preferences)
             self.stateQueue.async {
+                let previousContentZoomModifier = self.preferences.contentZoomModifierFlags
                 self.preferences = preferences
+                if previousContentZoomModifier != preferences.contentZoomModifierFlags {
+                    self.resetContentZoomSmoothing()
+                }
             }
         }
     }
@@ -149,6 +162,7 @@ final class EventTapManager {
             | eventMask(for: .rightMouseDragged)
             | eventMask(for: .rightMouseUp)
             | eventMask(for: .mouseMoved)
+            | eventMask(for: .scrollWheel)
             | eventMask(for: .flagsChanged)
             | eventMask(for: .keyDown)
 
@@ -245,6 +259,14 @@ final class EventTapManager {
         guard isRightMouseEvent(type) else {
             if type == .keyDown,
                event.getIntegerValueField(.eventSourceUserData) == ShortcutSynthesizer.syntheticEventMarker {
+                return Unmanaged.passUnretained(event)
+            }
+            if type == .scrollWheel,
+               ModifierFormatter.normalizedRawValue(from: event.flags) == 0 {
+                return Unmanaged.passUnretained(event)
+            }
+            if type == .scrollWheel,
+               !contentZoomModifierMatchesSnapshot(for: event.flags) {
                 return Unmanaged.passUnretained(event)
             }
             if type == .mouseMoved,
@@ -387,11 +409,19 @@ final class EventTapManager {
             return Unmanaged.passUnretained(event)
         }
 
+        if type == .scrollWheel {
+            return handleContentZoomScrollLocked(event: event)
+        }
+
         if type == .keyDown {
             return handleWindowShortcutLocked(event: event)
         }
 
         if type == .flagsChanged {
+            if !contentZoomModifierMatches(for: event.flags) {
+                resetContentZoomSmoothing()
+            }
+
             if let mode = windowDragMode(for: event.flags) {
                 prewarmWindowDragLookup(mode: mode, at: event.location)
             } else {
@@ -423,7 +453,24 @@ final class EventTapManager {
         windowControlLock.lock()
         windowMoveModifierFlags = preferences.windowMoveModifierFlags
         windowResizeModifierFlags = preferences.windowResizeModifierFlags
+        contentZoomModifierFlags = preferences.contentZoomModifierFlags
         windowControlLock.unlock()
+    }
+
+    private func contentZoomModifierMatchesSnapshot(for flags: CGEventFlags) -> Bool {
+        let rawValue = ModifierFormatter.normalizedRawValue(from: flags)
+
+        windowControlLock.lock()
+        let zoomFlags = contentZoomModifierFlags
+        windowControlLock.unlock()
+
+        return zoomFlags != 0 && rawValue == zoomFlags
+    }
+
+    private func contentZoomModifierMatches(for flags: CGEventFlags) -> Bool {
+        let rawValue = ModifierFormatter.normalizedRawValue(from: flags)
+        let zoomFlags = preferences.contentZoomModifierFlags
+        return zoomFlags != 0 && rawValue == zoomFlags
     }
 
     private func windowDragModeSnapshot(for flags: CGEventFlags) -> WindowDragMode? {
@@ -449,6 +496,92 @@ final class EventTapManager {
             GestureTargetController.maximizeWindowUnderPointer(at: point)
         }
         return nil
+    }
+
+    private func handleContentZoomScrollLocked(event: CGEvent) -> Unmanaged<CGEvent>? {
+        let rawValue = ModifierFormatter.normalizedRawValue(from: event.flags)
+        guard preferences.contentZoomModifierFlags != 0,
+              rawValue == preferences.contentZoomModifierFlags else {
+            return Unmanaged.passUnretained(event)
+        }
+
+        let deltaY = event.getIntegerValueField(.scrollWheelEventDeltaAxis1)
+        guard deltaY != 0 else {
+            return nil
+        }
+
+        enqueueContentZoom(delta: Double(deltaY))
+        return nil
+    }
+
+    private func enqueueContentZoom(delta: Double) {
+        if contentZoomAccumulator != 0, (delta > 0) != (contentZoomAccumulator > 0) {
+            contentZoomAccumulator = 0
+        }
+
+        contentZoomAccumulator += delta
+        contentZoomAccumulator = min(
+            max(contentZoomAccumulator, -contentZoomMaxBufferedSteps),
+            contentZoomMaxBufferedSteps
+        )
+        scheduleContentZoomStep()
+    }
+
+    private func scheduleContentZoomStep(after delay: TimeInterval = 0) {
+        guard !contentZoomStepScheduled else {
+            return
+        }
+
+        contentZoomStepScheduled = true
+        let generation = contentZoomGeneration
+        stateQueue.asyncAfter(deadline: .now() + delay) { [weak self] in
+            self?.flushContentZoomStep(generation: generation)
+        }
+    }
+
+    private func flushContentZoomStep(generation: Int) {
+        guard generation == contentZoomGeneration else {
+            return
+        }
+
+        contentZoomStepScheduled = false
+
+        guard abs(contentZoomAccumulator) >= contentZoomStepThreshold else {
+            return
+        }
+
+        let now = CACurrentMediaTime()
+        let remainingInterval = contentZoomMinimumStepInterval - (now - contentZoomLastDispatchTime)
+        if remainingInterval > 0 {
+            scheduleContentZoomStep(after: remainingInterval)
+            return
+        }
+
+        let direction = contentZoomAccumulator > 0 ? 1.0 : -1.0
+        contentZoomAccumulator -= direction * contentZoomStepThreshold
+        contentZoomLastDispatchTime = CACurrentMediaTime()
+
+        sendContentZoomStep(zoomIn: direction > 0)
+
+        if abs(contentZoomAccumulator) >= contentZoomStepThreshold {
+            scheduleContentZoomStep(after: contentZoomMinimumStepInterval)
+        }
+    }
+
+    private func resetContentZoomSmoothing() {
+        contentZoomAccumulator = 0
+        contentZoomStepScheduled = false
+        contentZoomGeneration += 1
+    }
+
+    private func sendContentZoomStep(zoomIn: Bool) {
+        let keyCode = zoomIn ? VirtualKeyCode.equal : VirtualKeyCode.minus
+        DispatchQueue.global(qos: .userInteractive).async {
+            ShortcutSynthesizer.sendKey(
+                keyCode: keyCode,
+                modifierFlags: CGEventFlags.maskCommand.storedRawValue
+            )
+        }
     }
 
     private func enqueueWindowDragUpdate(mode: WindowDragMode, at location: CGPoint) {
@@ -932,6 +1065,7 @@ final class EventTapManager {
 
     private func isWindowControlEvent(_ type: CGEventType) -> Bool {
         type == .mouseMoved ||
+            type == .scrollWheel ||
             type == .flagsChanged ||
             type == .keyDown
     }

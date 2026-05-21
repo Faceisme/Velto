@@ -60,6 +60,7 @@ struct AppPreferences: Codable, Equatable {
     var gestureTargetPolicy: GestureTargetPolicy
     var windowMoveModifierFlags: UInt64
     var windowResizeModifierFlags: UInt64
+    var contentZoomModifierFlags: UInt64
     var windowMaximizeShortcut: Shortcut?
 
     init(
@@ -71,6 +72,7 @@ struct AppPreferences: Codable, Equatable {
         gestureTargetPolicy: GestureTargetPolicy,
         windowMoveModifierFlags: UInt64,
         windowResizeModifierFlags: UInt64,
+        contentZoomModifierFlags: UInt64,
         windowMaximizeShortcut: Shortcut?
     ) {
         self.gesturesEnabled = gesturesEnabled
@@ -81,6 +83,7 @@ struct AppPreferences: Codable, Equatable {
         self.gestureTargetPolicy = gestureTargetPolicy
         self.windowMoveModifierFlags = windowMoveModifierFlags
         self.windowResizeModifierFlags = windowResizeModifierFlags
+        self.contentZoomModifierFlags = contentZoomModifierFlags
         self.windowMaximizeShortcut = windowMaximizeShortcut
     }
 
@@ -94,6 +97,7 @@ struct AppPreferences: Codable, Equatable {
         gestureTargetPolicy = try container.decodeIfPresent(GestureTargetPolicy.self, forKey: .gestureTargetPolicy) ?? Self.defaults.gestureTargetPolicy
         windowMoveModifierFlags = try container.decodeIfPresent(UInt64.self, forKey: .windowMoveModifierFlags) ?? Self.defaults.windowMoveModifierFlags
         windowResizeModifierFlags = try container.decodeIfPresent(UInt64.self, forKey: .windowResizeModifierFlags) ?? Self.defaults.windowResizeModifierFlags
+        contentZoomModifierFlags = try container.decodeIfPresent(UInt64.self, forKey: .contentZoomModifierFlags) ?? Self.defaults.contentZoomModifierFlags
         windowMaximizeShortcut = try container.decodeIfPresent(Shortcut.self, forKey: .windowMaximizeShortcut) ?? Self.defaults.windowMaximizeShortcut
     }
 
@@ -106,6 +110,7 @@ struct AppPreferences: Codable, Equatable {
         gestureTargetPolicy: .windowUnderPointer,
         windowMoveModifierFlags: 0,
         windowResizeModifierFlags: 0,
+        contentZoomModifierFlags: 0,
         windowMaximizeShortcut: nil
     )
 }
@@ -151,6 +156,8 @@ extension Notification.Name {
 
 enum VirtualKeyCode {
     static let escape: UInt16 = 53
+    static let equal: UInt16 = 24
+    static let minus: UInt16 = 27
     static let w: UInt16 = 13
     static let t: UInt16 = 17
     static let leftBracket: UInt16 = 33

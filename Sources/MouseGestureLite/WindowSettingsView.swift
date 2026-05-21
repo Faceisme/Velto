@@ -40,6 +40,26 @@ struct WindowSettingsView: View {
                 }
 
                 Section {
+                    LabeledContent("滚轮缩放修饰键") {
+                        HStack(spacing: 8) {
+                            ModifierRecorderRepresentable(modifierFlagsRawValue: Binding(
+                                get: { store.preferences.contentZoomModifierFlags },
+                                set: { v in store.updatePreferences { $0.contentZoomModifierFlags = v } }
+                            ))
+                            .frame(width: 200, height: 38)
+                            Button("清除") {
+                                store.updatePreferences { $0.contentZoomModifierFlags = 0 }
+                            }
+                            .buttonStyle(.borderless)
+                        }
+                    }
+                } header: {
+                    Text("内容缩放")
+                } footer: {
+                    Text("按住修饰键滚动鼠标滚轮，对网页、图片等内容发送通用缩放快捷键。")
+                }
+
+                Section {
                     LabeledContent("最大化快捷键") {
                         HStack(spacing: 8) {
                             ShortcutRecorderRepresentable(shortcut: Binding(
