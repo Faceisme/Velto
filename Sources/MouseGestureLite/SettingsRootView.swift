@@ -1,32 +1,57 @@
 import SwiftUI
 
+enum MGPage: String, CaseIterable, Identifiable, Hashable {
+    case gestures, window, general
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .gestures: "鼠标手势"
+        case .window: "窗口管理"
+        case .general: "通用设置"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .gestures: "cursorarrow.motionlines"
+        case .window: "macwindow"
+        case .general: "gearshape"
+        }
+    }
+}
+
 struct SettingsRootView: View {
-    @State private var selectedTab = 0
+    @State private var page: MGPage? = .gestures
+    private let store = GestureStore.shared
 
     var body: some View {
-        GlassEffectContainer(spacing: 12) {
-            VStack(spacing: 0) {
-                // Tab 控件放进内容区，避免 TabView 在 titlebar 留白
-                Picker("", selection: $selectedTab) {
-                    Text("鼠标手势功能").tag(0)
-                    Text("窗口管理相关功能").tag(1)
-                }
-                .pickerStyle(.segmented)
-                .frame(width: 340)
-                .padding(.vertical, 8)
-                .padding(.horizontal, 14)
-                .liquidGlassPanel(cornerRadius: 18, interactive: true)
-                .padding(.vertical, 10)
-
-                Divider()
-
-                if selectedTab == 0 {
-                    GestureSettingsView()
-                } else {
-                    WindowSettingsView()
-                }
+        NavigationSplitView {
+            SidebarView(page: $page)
+                .navigationSplitViewColumnWidth(240)
+        } detail: {
+            content
+        }
+        .frame(minWidth: 1100, idealWidth: 1180, minHeight: 720, idealHeight: 760)
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                ToolbarStatusIndicator(
+                    listening: store.preferences.gesturesEnabled
+                )
             }
-            .frame(minWidth: 920, idealWidth: 960, minHeight: 580, idealHeight: 660)
+        }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        switch page ?? .gestures {
+        case .gestures:
+            GesturesPage()
+        case .window:
+            WindowManagementPage()
+        case .general:
+            GeneralSettingsPage()
         }
     }
 }

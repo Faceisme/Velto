@@ -144,10 +144,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if settingsWindow == nil {
             let controller = NSHostingController(rootView: SettingsRootView())
             let window = NSWindow(contentViewController: controller)
-            window.title = "MyGestures"
-            window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
-            window.setContentSize(NSSize(width: 960, height: 660))
-            window.minSize = NSSize(width: 920, height: 580)
+            window.title = ""
+            window.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
+            window.titlebarAppearsTransparent = true
+            window.titleVisibility = .hidden
+            window.setContentSize(NSSize(width: 1180, height: 760))
+            window.minSize = NSSize(width: 1100, height: 720)
             window.center()
             settingsWindow = window
         }
