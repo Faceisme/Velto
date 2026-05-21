@@ -222,8 +222,11 @@ struct GestureSettingsView: View {
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 6)
-            .background(.background)
+            .liquidGlassPanel(cornerRadius: 14, interactive: true)
+            .padding(6)
         }
+        .liquidGlassPanel(cornerRadius: 18)
+        .padding(8)
     }
 
     // MARK: - Gesture Editor
@@ -307,7 +310,9 @@ struct GestureSettingsView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
-        .background(.background)
+        .liquidGlassPanel(cornerRadius: 20, interactive: true)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
     }
 
     // MARK: - Helpers
