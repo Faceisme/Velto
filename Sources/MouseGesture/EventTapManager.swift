@@ -3,119 +3,66 @@ import ApplicationServices
 import CoreGraphics
 import Foundation
 
+/// Owns the global CGEventTap, the dedicated tap-callback thread, and the four
+/// sub-controllers that act on events:
+/// - `GestureEngine`        right-click gesture state machine
+/// - `WindowDragController` modifier+drag move/resize
+/// - `ContentZoomController` modifier+scroll content zoom
+/// - `WindowShortcutController` shortcut-triggered window actions
+///
+/// The tap callback runs on a private high-QoS thread+runloop. State that's
+/// only touched in the callback (gesture state machine, drag session) lives
+/// inside the sub-controllers on that thread — no cross-thread sync per
+/// event. The few fields read from the callback that are also written by the
+/// main-thread preferences observer (modifier snapshots) use short NSLocks.
 private let mouseGestureEventTapCallback: CGEventTapCallBack = { proxy, type, event, userInfo in
-    guard let userInfo else {
-        return Unmanaged.passUnretained(event)
-    }
-
+    guard let userInfo else { return Unmanaged.passUnretained(event) }
     let manager = Unmanaged<EventTapManager>.fromOpaque(userInfo).takeUnretainedValue()
     return manager.handle(proxy: proxy, type: type, event: event)
 }
 
 final class EventTapManager {
-    var onStatusChange: ((String) -> Void)?
-    var onGestureMatch: ((GestureMatch?) -> Void)?
-
-    private enum InputState: String {
-        case idle = "空闲"
-        case pending = "等待判断"
-        case gesturing = "手势中"
-        case cleanupAwaitingUp = "保险重置，等待松开"
+    var onStatusChange: ((String) -> Void)? {
+        didSet { gestureEngine.onStatusChange = onStatusChange }
     }
-
-    private enum WindowDragMode {
-        case move
-        case resize
-    }
-
-    private enum ResizeEdge {
-        case min
-        case max
-    }
-
-    private struct WindowDragSession {
-        var mode: WindowDragMode
-        var window: AXUIElement
-        var startPointer: CGPoint
-        var startDragPointer: CGPoint
-        var usesConvertedDragPointer: Bool
-        var startFrame: CGRect
-        var screenFrame: CGRect
-        var horizontalEdge: ResizeEdge
-        var verticalEdge: ResizeEdge
-    }
-
-    private struct WindowDragUpdate {
-        var mode: WindowDragMode
-        var location: CGPoint
+    var onGestureMatch: ((GestureMatch?) -> Void)? {
+        didSet { gestureEngine.onGestureMatch = onGestureMatch }
     }
 
     private let store: GestureStore
-    private let recognizer = GestureRecognizer()
-    private let overlay = GestureOverlayController()
-    private let stateQueue = DispatchQueue(label: "com.face.mygestures.eventtap.state", qos: .userInteractive)
-    private let stateQueueKey = DispatchSpecificKey<Void>()
-    private let windowControlQueue = DispatchQueue(label: "com.face.mygestures.window-control", qos: .userInteractive)
-    private let windowControlLock = NSLock()
+    private let gestureEngine: GestureEngine
+    private let windowDragController = WindowDragController()
+    private let contentZoomController = ContentZoomController()
+    private let windowShortcutController = WindowShortcutController()
 
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
     private var tapThread: Thread?
     private var tapRunLoop: CFRunLoop?
 
-    private var state: InputState = .idle
-    private var points: [CGPoint] = []
-    private var displayPoints: [CGPoint] = []
-    private var startPoint = CGPoint.zero
-    private var lastPoint = CGPoint.zero
-    private var gestureTimeoutToken: UUID?
-    private var safetyToken: UUID?
-    private var frontmostApplicationAtGestureStart: NSRunningApplication?
-    private var lastFrontmostApplication: NSRunningApplication?
-    private var windowDragSession: WindowDragSession?
-    private var pendingWindowDragUpdate: WindowDragUpdate?
-    private var windowDragUpdateScheduled = false
-    private var windowMoveModifierFlags: UInt64
-    private var windowResizeModifierFlags: UInt64
-    private var contentZoomModifierFlags: UInt64
-    private var contentZoomAccumulator: Double = 0
-    private var contentZoomStepScheduled = false
-    private var contentZoomLastDispatchTime: CFTimeInterval = 0
-    private var contentZoomGeneration = 0
     private var activationObserver: NSObjectProtocol?
     private var storeObserver: NSObjectProtocol?
-    private var preferences: AppPreferences
-
-    private let movementThreshold: CGFloat = 10
-    private let minimumRecordedPointDistance: CGFloat = 2
-    private let maximumGesturePointCount = 512
-    private let safetyTimeout: TimeInterval = 8
-    private let contentZoomStepThreshold: Double = 1
-    private let contentZoomMaxBufferedSteps: Double = 4
-    private let contentZoomMinimumStepInterval: TimeInterval = 0.055
-    private let syntheticMarker: Int64 = 0x4D474C524550
 
     init(store: GestureStore = .shared) {
         self.store = store
-        preferences = store.preferences
-        windowMoveModifierFlags = preferences.windowMoveModifierFlags
-        windowResizeModifierFlags = preferences.windowResizeModifierFlags
-        contentZoomModifierFlags = preferences.contentZoomModifierFlags
-        stateQueue.setSpecific(key: stateQueueKey, value: ())
-        lastFrontmostApplication = NSWorkspace.shared.frontmostApplication
+        self.gestureEngine = GestureEngine(
+            preferences: store.preferences,
+            gestures: store.gestures,
+            gesturesVersion: store.gesturesVersion
+        )
+        applyPreferenceSnapshots(store.preferences)
+
         activationObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification,
             object: nil,
             queue: .main
         ) { [weak self] notification in
             guard let self,
-                  let application = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else {
+                  let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else {
                 return
             }
-            self.stateQueue.async {
-                if self.state == .idle {
-                    self.lastFrontmostApplication = application
-                }
+            self.performOnTapThread { [weak self] in
+                self?.gestureEngine.updateLastFrontmostApplication(app)
             }
         }
 
@@ -126,13 +73,12 @@ final class EventTapManager {
         ) { [weak self] _ in
             guard let self else { return }
             let preferences = store.preferences
-            self.updateWindowControlModifierSnapshot(from: preferences)
-            self.stateQueue.async {
-                let previousContentZoomModifier = self.preferences.contentZoomModifierFlags
-                self.preferences = preferences
-                if previousContentZoomModifier != preferences.contentZoomModifierFlags {
-                    self.resetContentZoomSmoothing()
-                }
+            let gestures = store.gestures
+            let version = store.gesturesVersion
+            self.applyPreferenceSnapshots(preferences)
+            self.performOnTapThread { [weak self] in
+                self?.gestureEngine.updatePreferences(preferences)
+                self?.gestureEngine.updateGestures(gestures, version: version)
             }
         }
     }
@@ -147,10 +93,10 @@ final class EventTapManager {
         stop()
     }
 
+    // MARK: - Lifecycle
+
     func start() -> Bool {
-        guard eventTap == nil else {
-            return true
-        }
+        guard eventTap == nil else { return true }
 
         guard PermissionManager.isAccessibilityTrusted else {
             onStatusChange?("需要辅助功能权限")
@@ -189,903 +135,170 @@ final class EventTapManager {
         runLoopSource = source
         let ready = DispatchSemaphore(value: 0)
         let thread = Thread { [weak self] in
-            let runLoop = CFRunLoopGetCurrent()
-            if let self {
-                self.syncState {
-                    self.tapRunLoop = runLoop
-                }
+            guard let runLoop = CFRunLoopGetCurrent() else {
+                ready.signal()
+                return
             }
             CFRunLoopAddSource(runLoop, source, .commonModes)
+            if let self {
+                self.tapRunLoop = runLoop
+                self.gestureEngine.attach(runLoop: runLoop)
+            }
             ready.signal()
             CFRunLoopRun()
             CFRunLoopRemoveSource(runLoop, source, .commonModes)
         }
         thread.name = "com.face.mygestures.eventtap"
-        thread.qualityOfService = .userInteractive
+        thread.qualityOfService = QualityOfService.userInteractive
         tapThread = thread
         thread.start()
         ready.wait()
 
         CGEvent.tapEnable(tap: tap, enable: true)
-        prewarmWindowControlCaches()
-        onStatusChange?("监听中（主动拦截）")
+        prewarmCaches()
+        onStatusChange?("监听中(主动拦截)")
         return true
     }
 
     func stop() {
-        let (runLoop, tap, source) = syncState {
-            state = .idle
-            gestureTimeoutToken = nil
-            safetyToken = nil
-            points = []
-            displayPoints = []
-            frontmostApplicationAtGestureStart = nil
-            resetWindowDragSession()
-            startPoint = .zero
-            lastPoint = .zero
-            let runLoop = tapRunLoop
-            let tap = eventTap
-            let source = runLoopSource
-            tapRunLoop = nil
-            eventTap = nil
-            runLoopSource = nil
-            hideOverlay()
-            return (runLoop, tap, source)
+        let runLoop = tapRunLoop
+        let tap = eventTap
+        let source = runLoopSource
+
+        if runLoop != nil {
+            performOnTapThread { [weak self] in
+                self?.gestureEngine.detach()
+            }
         }
 
+        tapRunLoop = nil
+        eventTap = nil
+        runLoopSource = nil
         tapThread = nil
 
         if let tap {
             CGEvent.tapEnable(tap: tap, enable: false)
             CFMachPortInvalidate(tap)
         }
-
         if let source {
             CFRunLoopSourceInvalidate(source)
         }
-
         if let runLoop {
             CFRunLoopStop(runLoop)
         }
     }
 
+    // MARK: - Event dispatch (tap thread)
+
     func handle(proxy: CGEventTapProxy, type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-            return syncState {
-                handleLocked(proxy: proxy, type: type, event: event)
-            }
-        }
-
-        guard isRightMouseEvent(type) else {
-            if type == .keyDown,
-               event.getIntegerValueField(.eventSourceUserData) == ShortcutSynthesizer.syntheticEventMarker {
-                return Unmanaged.passUnretained(event)
-            }
-            if type == .scrollWheel,
-               ModifierFormatter.normalizedRawValue(from: event.flags) == 0 {
-                return Unmanaged.passUnretained(event)
-            }
-            if type == .scrollWheel,
-               !contentZoomModifierMatchesSnapshot(for: event.flags) {
-                return Unmanaged.passUnretained(event)
-            }
-            if type == .mouseMoved,
-               ModifierFormatter.normalizedRawValue(from: event.flags) == 0 {
-                return Unmanaged.passUnretained(event)
-            }
-            if type == .mouseMoved,
-               windowDragModeSnapshot(for: event.flags) == nil {
-                return Unmanaged.passUnretained(event)
-            }
-            if isWindowControlEvent(type) {
-                return syncState {
-                    handleWindowControlLocked(type: type, event: event)
-                }
-            }
-            return Unmanaged.passUnretained(event)
-        }
-
-        if event.getIntegerValueField(.eventSourceUserData) == syntheticMarker {
-            return Unmanaged.passUnretained(event)
-        }
-
-        return syncState {
-            handleLocked(proxy: proxy, type: type, event: event)
-        }
-    }
-
-    private func handleLocked(proxy: CGEventTapProxy, type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
-        if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-            resetTracking()
             if let eventTap {
                 CGEvent.tapEnable(tap: eventTap, enable: true)
             }
-            onStatusChange?("监听中（tap 已重启）")
+            onStatusChange?("监听中(tap 已重启)")
             return nil
         }
 
-        guard isRightMouseEvent(type) else {
-            return Unmanaged.passUnretained(event)
-        }
-
-        let location = event.location
+        // Compute the normalized modifier flags exactly once for all
+        // downstream checks. This is the hot path; everything else is gated
+        // on event type.
+        let raw = ModifierFormatter.normalizedRawValue(from: event.flags)
 
         switch type {
         case .rightMouseDown:
-            return handleRightMouseDown(at: location)
+            if event.getIntegerValueField(.eventSourceUserData) == gestureEngine.rightClickSyntheticMarker {
+                return Unmanaged.passUnretained(event)
+            }
+            _ = gestureEngine.handleRightMouseDown(at: event.location)
+            return nil
+
         case .rightMouseDragged:
-            return handleRightMouseDragged(at: location, event: event)
+            if event.getIntegerValueField(.eventSourceUserData) == gestureEngine.rightClickSyntheticMarker {
+                return Unmanaged.passUnretained(event)
+            }
+            return gestureEngine.handleRightMouseDragged(at: event.location)
+                ? nil
+                : Unmanaged.passUnretained(event)
+
         case .rightMouseUp:
-            return handleRightMouseUp(at: location, event: event)
+            if event.getIntegerValueField(.eventSourceUserData) == gestureEngine.rightClickSyntheticMarker {
+                return Unmanaged.passUnretained(event)
+            }
+            return gestureEngine.handleRightMouseUp(at: event.location)
+                ? nil
+                : Unmanaged.passUnretained(event)
+
+        case .mouseMoved:
+            guard !gestureEngine.isHandlingRightMouse else {
+                return Unmanaged.passUnretained(event)
+            }
+            if raw == 0 { return Unmanaged.passUnretained(event) }
+            guard let mode = windowDragController.dragMode(forNormalizedFlags: raw) else {
+                return Unmanaged.passUnretained(event)
+            }
+            windowDragController.handleMouseMoved(at: event.location, mode: mode)
+            return Unmanaged.passUnretained(event)
+
+        case .scrollWheel:
+            guard !gestureEngine.isHandlingRightMouse else {
+                return Unmanaged.passUnretained(event)
+            }
+            if raw == 0 { return Unmanaged.passUnretained(event) }
+            return contentZoomController.handleScrollWheel(event: event, normalizedFlags: raw)
+                ? nil
+                : Unmanaged.passUnretained(event)
+
+        case .flagsChanged:
+            guard !gestureEngine.isHandlingRightMouse else {
+                return Unmanaged.passUnretained(event)
+            }
+            contentZoomController.handleFlagsChanged(normalizedFlags: raw)
+            windowDragController.handleFlagsChanged(event: event, normalizedFlags: raw)
+            return Unmanaged.passUnretained(event)
+
+        case .keyDown:
+            if event.getIntegerValueField(.eventSourceUserData) == ShortcutSynthesizer.syntheticEventMarker {
+                return Unmanaged.passUnretained(event)
+            }
+            guard !gestureEngine.isHandlingRightMouse else {
+                return Unmanaged.passUnretained(event)
+            }
+            return windowShortcutController.handleKeyDown(event: event, normalizedFlags: raw)
+                ? nil
+                : Unmanaged.passUnretained(event)
+
         default:
             return Unmanaged.passUnretained(event)
         }
     }
 
-    private func handleRightMouseDown(at location: CGPoint) -> Unmanaged<CGEvent>? {
-        if state != .idle {
-            resetTracking()
-        }
+    // MARK: - Cross-thread helpers
 
-        state = .pending
-        frontmostApplicationAtGestureStart = lastFrontmostApplication ?? NSWorkspace.shared.frontmostApplication
-        startPoint = location
-        lastPoint = location
-        points = [location]
-        displayPoints = [DisplayCoordinateConverter.eventLocationToOverlayPoint(location)]
-        armSafetyTimer()
-        return nil
+    /// Schedule `work` to run on the tap thread's runloop. Used by main-thread
+    /// observers that need to mutate engine state safely. If the tap thread
+    /// isn't running yet (start hasn't been called), the work is dropped.
+    private func performOnTapThread(_ work: @escaping () -> Void) {
+        guard let runLoop = tapRunLoop else { return }
+        CFRunLoopPerformBlock(runLoop, CFRunLoopMode.commonModes.rawValue, work)
+        CFRunLoopWakeUp(runLoop)
     }
 
-    private func handleRightMouseDragged(at location: CGPoint, event: CGEvent) -> Unmanaged<CGEvent>? {
-        switch state {
-        case .pending:
-            _ = appendPoint(location)
-
-            let moved = distance(startPoint, location)
-            if moved >= movementThreshold {
-                state = .gesturing
-                armGestureTimeoutTimer()
-                if preferences.showTrail {
-                    showOverlay(points: displayPoints)
-                }
-            }
-            return nil
-
-        case .gesturing:
-            let didAppendPoint = appendPoint(location)
-            if didAppendPoint {
-                armGestureTimeoutTimer()
-            }
-            if didAppendPoint, preferences.showTrail {
-                updateOverlay(points: displayPoints)
-            }
-            return nil
-
-        case .cleanupAwaitingUp:
-            lastPoint = location
-            return nil
-
-        case .idle:
-            return Unmanaged.passUnretained(event)
-        }
+    private func applyPreferenceSnapshots(_ preferences: AppPreferences) {
+        windowDragController.updateModifierFlags(
+            move: preferences.windowMoveModifierFlags,
+            resize: preferences.windowResizeModifierFlags
+        )
+        contentZoomController.updateModifierFlag(preferences.contentZoomModifierFlags)
+        windowShortcutController.updateShortcut(preferences.windowMaximizeShortcut)
     }
 
-    private func handleRightMouseUp(at location: CGPoint, event: CGEvent) -> Unmanaged<CGEvent>? {
-        switch state {
-        case .pending:
-            let point = startPoint
-            resetTracking()
-            replayRightClickAsync(at: point)
-            return nil
-
-        case .gesturing:
-            _ = appendPoint(location)
-            let capturedPoints = points
-            let capturedTargetPoint = startPoint
-            let capturedFrontmostApplication = frontmostApplicationAtGestureStart
-            resetTracking()
-
-            DispatchQueue.main.async { [weak self] in
-                self?.runGesture(
-                    points: capturedPoints,
-                    targetPoint: capturedTargetPoint,
-                    frontmostApplicationAtGestureStart: capturedFrontmostApplication
-                )
-            }
-            return nil
-
-        case .cleanupAwaitingUp:
-            resetTracking()
-            return nil
-
-        case .idle:
-            return Unmanaged.passUnretained(event)
-        }
-    }
-
-    private func handleWindowControlLocked(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
-        if state != .idle {
-            return Unmanaged.passUnretained(event)
-        }
-
-        if type == .scrollWheel {
-            return handleContentZoomScrollLocked(event: event)
-        }
-
-        if type == .keyDown {
-            return handleWindowShortcutLocked(event: event)
-        }
-
-        if type == .flagsChanged {
-            if !contentZoomModifierMatches(for: event.flags) {
-                resetContentZoomSmoothing()
-            }
-
-            if let mode = windowDragMode(for: event.flags) {
-                prewarmWindowDragLookup(mode: mode, at: event.location)
-            } else {
-                resetWindowDragSession()
-            }
-            return Unmanaged.passUnretained(event)
-        }
-
-        guard let mode = windowDragMode(for: event.flags) else {
-            resetWindowDragSession()
-            return Unmanaged.passUnretained(event)
-        }
-
-        guard type == .mouseMoved else {
-            return Unmanaged.passUnretained(event)
-        }
-
-        enqueueWindowDragUpdate(mode: mode, at: event.location)
-        return Unmanaged.passUnretained(event)
-    }
-
-    private func prewarmWindowControlCaches() {
+    private func prewarmCaches() {
         DispatchQueue.global(qos: .utility).async {
             DisplayCoordinateConverter.prewarm()
         }
     }
 
-    private func updateWindowControlModifierSnapshot(from preferences: AppPreferences) {
-        windowControlLock.lock()
-        windowMoveModifierFlags = preferences.windowMoveModifierFlags
-        windowResizeModifierFlags = preferences.windowResizeModifierFlags
-        contentZoomModifierFlags = preferences.contentZoomModifierFlags
-        windowControlLock.unlock()
-    }
-
-    private func contentZoomModifierMatchesSnapshot(for flags: CGEventFlags) -> Bool {
-        let rawValue = ModifierFormatter.normalizedRawValue(from: flags)
-
-        windowControlLock.lock()
-        let zoomFlags = contentZoomModifierFlags
-        windowControlLock.unlock()
-
-        return zoomFlags != 0 && rawValue == zoomFlags
-    }
-
-    private func contentZoomModifierMatches(for flags: CGEventFlags) -> Bool {
-        let rawValue = ModifierFormatter.normalizedRawValue(from: flags)
-        let zoomFlags = preferences.contentZoomModifierFlags
-        return zoomFlags != 0 && rawValue == zoomFlags
-    }
-
-    private func windowDragModeSnapshot(for flags: CGEventFlags) -> WindowDragMode? {
-        let rawValue = ModifierFormatter.normalizedRawValue(from: flags)
-
-        windowControlLock.lock()
-        let resizeFlags = windowResizeModifierFlags
-        let moveFlags = windowMoveModifierFlags
-        windowControlLock.unlock()
-
-        return windowDragMode(rawValue: rawValue, moveFlags: moveFlags, resizeFlags: resizeFlags)
-    }
-
-    private func handleWindowShortcutLocked(event: CGEvent) -> Unmanaged<CGEvent>? {
-        guard let shortcut = preferences.windowMaximizeShortcut,
-              event.getIntegerValueField(.keyboardEventAutorepeat) == 0,
-              eventMatches(event, shortcut: shortcut) else {
-            return Unmanaged.passUnretained(event)
-        }
-
-        let point = event.location
-        DispatchQueue.global(qos: .userInteractive).async {
-            GestureTargetController.maximizeWindowUnderPointer(at: point)
-        }
-        return nil
-    }
-
-    private func handleContentZoomScrollLocked(event: CGEvent) -> Unmanaged<CGEvent>? {
-        let rawValue = ModifierFormatter.normalizedRawValue(from: event.flags)
-        guard preferences.contentZoomModifierFlags != 0,
-              rawValue == preferences.contentZoomModifierFlags else {
-            return Unmanaged.passUnretained(event)
-        }
-
-        let deltaY = event.getIntegerValueField(.scrollWheelEventDeltaAxis1)
-        guard deltaY != 0 else {
-            return nil
-        }
-
-        enqueueContentZoom(delta: Double(deltaY))
-        return nil
-    }
-
-    private func enqueueContentZoom(delta: Double) {
-        if contentZoomAccumulator != 0, (delta > 0) != (contentZoomAccumulator > 0) {
-            contentZoomAccumulator = 0
-        }
-
-        contentZoomAccumulator += delta
-        contentZoomAccumulator = min(
-            max(contentZoomAccumulator, -contentZoomMaxBufferedSteps),
-            contentZoomMaxBufferedSteps
-        )
-        scheduleContentZoomStep()
-    }
-
-    private func scheduleContentZoomStep(after delay: TimeInterval = 0) {
-        guard !contentZoomStepScheduled else {
-            return
-        }
-
-        contentZoomStepScheduled = true
-        let generation = contentZoomGeneration
-        stateQueue.asyncAfter(deadline: .now() + delay) { [weak self] in
-            self?.flushContentZoomStep(generation: generation)
-        }
-    }
-
-    private func flushContentZoomStep(generation: Int) {
-        guard generation == contentZoomGeneration else {
-            return
-        }
-
-        contentZoomStepScheduled = false
-
-        guard abs(contentZoomAccumulator) >= contentZoomStepThreshold else {
-            return
-        }
-
-        let now = CACurrentMediaTime()
-        let remainingInterval = contentZoomMinimumStepInterval - (now - contentZoomLastDispatchTime)
-        if remainingInterval > 0 {
-            scheduleContentZoomStep(after: remainingInterval)
-            return
-        }
-
-        let direction = contentZoomAccumulator > 0 ? 1.0 : -1.0
-        contentZoomAccumulator -= direction * contentZoomStepThreshold
-        contentZoomLastDispatchTime = CACurrentMediaTime()
-
-        sendContentZoomStep(zoomIn: direction > 0)
-
-        if abs(contentZoomAccumulator) >= contentZoomStepThreshold {
-            scheduleContentZoomStep(after: contentZoomMinimumStepInterval)
-        }
-    }
-
-    private func resetContentZoomSmoothing() {
-        contentZoomAccumulator = 0
-        contentZoomStepScheduled = false
-        contentZoomGeneration += 1
-    }
-
-    private func sendContentZoomStep(zoomIn: Bool) {
-        let keyCode = zoomIn ? VirtualKeyCode.equal : VirtualKeyCode.minus
-        DispatchQueue.global(qos: .userInteractive).async {
-            ShortcutSynthesizer.sendKey(
-                keyCode: keyCode,
-                modifierFlags: CGEventFlags.maskCommand.storedRawValue
-            )
-        }
-    }
-
-    private func enqueueWindowDragUpdate(mode: WindowDragMode, at location: CGPoint) {
-        windowControlLock.lock()
-        pendingWindowDragUpdate = WindowDragUpdate(mode: mode, location: location)
-        let shouldSchedule = !windowDragUpdateScheduled
-        if shouldSchedule {
-            windowDragUpdateScheduled = true
-        }
-        windowControlLock.unlock()
-
-        guard shouldSchedule else {
-            return
-        }
-
-        windowControlQueue.async { [weak self] in
-            self?.flushWindowDragUpdates()
-        }
-    }
-
-    private func flushWindowDragUpdates() {
-        windowControlLock.lock()
-        guard let update = pendingWindowDragUpdate else {
-            windowDragUpdateScheduled = false
-            windowControlLock.unlock()
-            return
-        }
-        pendingWindowDragUpdate = nil
-        windowControlLock.unlock()
-
-        _ = updateWindowDrag(mode: update.mode, at: update.location)
-
-        windowControlLock.lock()
-        let shouldScheduleNextFlush = pendingWindowDragUpdate != nil
-        if !shouldScheduleNextFlush {
-            windowDragUpdateScheduled = false
-        }
-        windowControlLock.unlock()
-
-        guard shouldScheduleNextFlush else {
-            return
-        }
-
-        windowControlQueue.async { [weak self] in
-            self?.flushWindowDragUpdates()
-        }
-    }
-
-    private func resetWindowDragSession() {
-        windowControlLock.lock()
-        pendingWindowDragUpdate = nil
-        windowDragUpdateScheduled = false
-        windowControlLock.unlock()
-
-        windowControlQueue.async { [weak self] in
-            self?.windowDragSession = nil
-        }
-    }
-
-    private func prewarmWindowDragLookup(mode: WindowDragMode, at location: CGPoint) {
-        windowControlQueue.async { [weak self] in
-            guard let self else { return }
-            _ = self.beginWindowDrag(mode: mode, at: location)
-        }
-    }
-
-    private func updateWindowDrag(mode: WindowDragMode, at location: CGPoint) -> Bool {
-        if windowDragSession?.mode != mode {
-            windowDragSession = beginWindowDrag(mode: mode, at: location)
-        }
-
-        guard let session = windowDragSession else {
-            return false
-        }
-
-        let currentPointer = windowDragPoint(
-            from: location,
-            usesConvertedPointer: session.usesConvertedDragPointer
-        )
-        let dx = currentPointer.x - session.startDragPointer.x
-        let dy = currentPointer.y - session.startDragPointer.y
-
-        switch session.mode {
-        case .move:
-            let nextOrigin = CGPoint(
-                x: session.startFrame.origin.x + dx,
-                y: session.startFrame.origin.y + dy
-            )
-            return GestureTargetController.setPosition(nextOrigin, ofWindow: session.window)
-
-        case .resize:
-            let nextFrame = resizedFrame(from: session, dx: dx, dy: dy)
-            return GestureTargetController.setFrame(nextFrame, ofWindow: session.window)
-        }
-    }
-
-    private func beginWindowDrag(mode: WindowDragMode, at location: CGPoint) -> WindowDragSession? {
-        guard let window = GestureTargetController.windowUnderPointer(at: location),
-              let frame = GestureTargetController.frame(ofWindow: window) else {
-            return nil
-        }
-
-        let pointer = location
-        let dragPoint = initialWindowDragPoint(for: location, in: frame)
-        let screenFrame = DisplayCoordinateConverter.visibleAccessibilityFrame(containingEventLocation: pointer)
-        return WindowDragSession(
-            mode: mode,
-            window: window,
-            startPointer: pointer,
-            startDragPointer: dragPoint.point,
-            usesConvertedDragPointer: dragPoint.usesConvertedPointer,
-            startFrame: frame,
-            screenFrame: screenFrame,
-            horizontalEdge: dragPoint.point.x < frame.midX ? .min : .max,
-            verticalEdge: dragPoint.point.y < frame.midY ? .min : .max
-        )
-    }
-
-    private func initialWindowDragPoint(
-        for location: CGPoint,
-        in frame: CGRect
-    ) -> (point: CGPoint, usesConvertedPointer: Bool) {
-        if frame.contains(location) {
-            return (location, false)
-        }
-
-        let convertedPoint = DisplayCoordinateConverter.eventLocationToAccessibilityPoint(location)
-        if frame.contains(convertedPoint) {
-            return (convertedPoint, true)
-        }
-
-        let rawDistance = distance(from: location, to: frame)
-        let convertedDistance = distance(from: convertedPoint, to: frame)
-        return rawDistance <= convertedDistance
-            ? (location, false)
-            : (convertedPoint, true)
-    }
-
-    private func windowDragPoint(
-        from location: CGPoint,
-        usesConvertedPointer: Bool
-    ) -> CGPoint {
-        usesConvertedPointer
-            ? DisplayCoordinateConverter.eventLocationToAccessibilityPoint(location)
-            : location
-    }
-
-    private func distance(from point: CGPoint, to rect: CGRect) -> CGFloat {
-        let clampedX = min(max(point.x, rect.minX), rect.maxX)
-        let clampedY = min(max(point.y, rect.minY), rect.maxY)
-        return hypot(point.x - clampedX, point.y - clampedY)
-    }
-
-    private func resizedFrame(from session: WindowDragSession, dx: CGFloat, dy: CGFloat) -> CGRect {
-        let minimumSize = CGSize(width: 160, height: 120)
-        var origin = session.startFrame.origin
-        var size = session.startFrame.size
-
-        switch session.horizontalEdge {
-        case .min:
-            let newWidth = session.startFrame.width - dx
-            if newWidth < minimumSize.width {
-                origin.x = session.startFrame.maxX - minimumSize.width
-                size.width = minimumSize.width
-            } else {
-                origin.x = session.startFrame.origin.x + dx
-                size.width = newWidth
-            }
-        case .max:
-            size.width = max(minimumSize.width, session.startFrame.width + dx)
-        }
-
-        switch session.verticalEdge {
-        case .min:
-            let newHeight = session.startFrame.height - dy
-            if newHeight < minimumSize.height {
-                origin.y = session.startFrame.maxY - minimumSize.height
-                size.height = minimumSize.height
-            } else {
-                origin.y = session.startFrame.origin.y + dy
-                size.height = newHeight
-            }
-        case .max:
-            size.height = max(minimumSize.height, session.startFrame.height + dy)
-        }
-
-        var result = CGRect(origin: origin, size: size)
-        let screenFrame = session.screenFrame
-        guard !screenFrame.isEmpty else {
-            return result
-        }
-
-        if result.maxX > screenFrame.maxX {
-            if session.horizontalEdge == .max {
-                result.size.width = screenFrame.maxX - result.origin.x
-            } else {
-                result.origin.x = screenFrame.maxX - result.size.width
-            }
-        }
-
-        if result.minX < screenFrame.minX {
-            result.origin.x = screenFrame.minX
-            if session.horizontalEdge == .min {
-                result.size.width = session.startFrame.maxX - screenFrame.minX
-            }
-        }
-
-        if result.maxY > screenFrame.maxY {
-            if session.verticalEdge == .max {
-                result.size.height = screenFrame.maxY - result.origin.y
-            } else {
-                result.origin.y = screenFrame.maxY - result.size.height
-            }
-        }
-
-        if result.minY < screenFrame.minY {
-            result.origin.y = screenFrame.minY
-            if session.verticalEdge == .min {
-                result.size.height = session.startFrame.maxY - screenFrame.minY
-            }
-        }
-
-        result.size.width = max(result.size.width, minimumSize.width)
-        result.size.height = max(result.size.height, minimumSize.height)
-        return result
-    }
-
-    private func windowDragMode(for flags: CGEventFlags) -> WindowDragMode? {
-        let rawValue = ModifierFormatter.normalizedRawValue(from: flags)
-        return windowDragMode(
-            rawValue: rawValue,
-            moveFlags: preferences.windowMoveModifierFlags,
-            resizeFlags: preferences.windowResizeModifierFlags
-        )
-    }
-
-    private func windowDragMode(rawValue: UInt64, moveFlags: UInt64, resizeFlags: UInt64) -> WindowDragMode? {
-        if resizeFlags != 0, rawValue == resizeFlags {
-            return .resize
-        }
-
-        if moveFlags != 0, rawValue == moveFlags {
-            return .move
-        }
-
-        return nil
-    }
-
-    private func runGesture(
-        points: [CGPoint],
-        targetPoint: CGPoint,
-        frontmostApplicationAtGestureStart: NSRunningApplication?
-    ) {
-        let threshold = CGFloat(store.preferences.recognitionThreshold)
-        let best = recognizer.bestCandidate(points: points, commands: store.gestures)
-        let match = best.flatMap { candidate in
-            candidate.distance <= threshold ? candidate : nil
-        }
-
-        onGestureMatch?(match)
-
-        if let match {
-            guard let shortcut = match.command.shortcut else {
-                return
-            }
-
-            resolveTargetAndExecute(
-                shortcut: shortcut,
-                targetPoint: targetPoint,
-                frontmostApplicationAtGestureStart: frontmostApplicationAtGestureStart
-            )
-        }
-    }
-
-    private func resolveTargetAndExecute(
-        shortcut: Shortcut,
-        targetPoint: CGPoint,
-        frontmostApplicationAtGestureStart: NSRunningApplication?
-    ) {
-        let policy = store.preferences.gestureTargetPolicy
-
-        switch policy {
-        case .activeWindow:
-            let target = GestureTargetController.executionTarget(
-                at: targetPoint,
-                policy: policy,
-                frontmostApplicationAtGestureStart: frontmostApplicationAtGestureStart
-            )
-            executeMatchedGesture(
-                shortcut: shortcut,
-                target: target,
-                frontmostApplicationAtGestureStart: frontmostApplicationAtGestureStart
-            )
-
-        case .windowUnderPointer:
-            DispatchQueue.global(qos: .userInteractive).async { [weak self] in
-                let target = GestureTargetController.executionTarget(
-                    at: targetPoint,
-                    policy: policy,
-                    frontmostApplicationAtGestureStart: nil
-                )
-
-                DispatchQueue.main.async { [weak self] in
-                    self?.executeMatchedGesture(
-                        shortcut: shortcut,
-                        target: target,
-                        frontmostApplicationAtGestureStart: frontmostApplicationAtGestureStart
-                    )
-                }
-            }
-        }
-    }
-
-    private func executeMatchedGesture(
-        shortcut: Shortcut,
-        target: GestureExecutionTarget,
-        frontmostApplicationAtGestureStart: NSRunningApplication?
-    ) {
-        GestureTargetController.prepareForExecution(target)
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + target.deliveryDelay) {
-            if target.restoresOriginalFrontmostApplication {
-                GestureTargetController.restoreFrontmostApplication(frontmostApplicationAtGestureStart)
-            }
-
-            if GestureTargetController.performDirectWindowCloseIfAvailable(for: target, shortcut: shortcut) {
-                return
-            }
-
-            ShortcutSynthesizer.send(shortcut)
-
-            if target.restoresOriginalFrontmostApplication {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
-                    GestureTargetController.restoreFrontmostApplication(frontmostApplicationAtGestureStart)
-                }
-            }
-        }
-    }
-
-    private func replayRightClick(at point: CGPoint) {
-        guard let down = CGEvent(
-            mouseEventSource: nil,
-            mouseType: .rightMouseDown,
-            mouseCursorPosition: point,
-            mouseButton: .right
-        ), let up = CGEvent(
-            mouseEventSource: nil,
-            mouseType: .rightMouseUp,
-            mouseCursorPosition: point,
-            mouseButton: .right
-        ) else {
-            return
-        }
-
-        down.setIntegerValueField(.eventSourceUserData, value: syntheticMarker)
-        up.setIntegerValueField(.eventSourceUserData, value: syntheticMarker)
-
-        down.post(tap: .cgSessionEventTap)
-        up.post(tap: .cgSessionEventTap)
-    }
-
-    private func replayRightClickAsync(at point: CGPoint) {
-        DispatchQueue.global(qos: .userInteractive).async { [weak self] in
-            self?.replayRightClick(at: point)
-        }
-    }
-
-    @discardableResult
-    private func appendPoint(_ point: CGPoint) -> Bool {
-        lastPoint = point
-        guard let previousPoint = points.last else {
-            points = [point]
-            displayPoints = [DisplayCoordinateConverter.eventLocationToOverlayPoint(point)]
-            return true
-        }
-
-        guard distance(previousPoint, point) >= minimumRecordedPointDistance else {
-            return false
-        }
-
-        let displayPoint = DisplayCoordinateConverter.eventLocationToOverlayPoint(point)
-        if points.count >= maximumGesturePointCount {
-            points[points.count - 1] = point
-            displayPoints[displayPoints.count - 1] = displayPoint
-        } else {
-            points.append(point)
-            displayPoints.append(displayPoint)
-        }
-        return true
-    }
-
-    private func resetTracking() {
-        state = .idle
-        clearTrackingState()
-    }
-
-    private func clearTrackingState() {
-        gestureTimeoutToken = nil
-        safetyToken = nil
-        points = []
-        displayPoints = []
-        frontmostApplicationAtGestureStart = nil
-        resetWindowDragSession()
-        startPoint = .zero
-        lastPoint = .zero
-        hideOverlay()
-    }
-
-    private func cancelGestureAndWaitForRightMouseUp() {
-        state = .cleanupAwaitingUp
-        gestureTimeoutToken = nil
-        safetyToken = nil
-        points = []
-        displayPoints = []
-        frontmostApplicationAtGestureStart = nil
-        resetWindowDragSession()
-        hideOverlay()
-    }
-
-    private func armSafetyTimer() {
-        let token = UUID()
-        safetyToken = token
-        let timeout = max(safetyTimeout, preferences.gestureTimeoutSeconds + 2)
-
-        stateQueue.asyncAfter(deadline: .now() + timeout) { [weak self] in
-            guard let self,
-                  self.safetyToken == token,
-                  self.state != .idle else {
-                return
-            }
-
-            self.cancelGestureAndWaitForRightMouseUp()
-        }
-    }
-
-    private func armGestureTimeoutTimer() {
-        let token = UUID()
-        gestureTimeoutToken = token
-        let timeout = max(0.5, preferences.gestureTimeoutSeconds)
-
-        stateQueue.asyncAfter(deadline: .now() + timeout) { [weak self] in
-            guard let self,
-                  self.gestureTimeoutToken == token,
-                  self.state == .gesturing else {
-                return
-            }
-
-            self.cancelGestureAndWaitForRightMouseUp()
-            DispatchQueue.main.async { [weak self] in
-                self?.onGestureMatch?(nil)
-                self?.onStatusChange?("本次手势超时，已取消")
-            }
-        }
-    }
-
-    private func showOverlay(points: [CGPoint]) {
-        overlay.show(points: points)
-    }
-
-    private func updateOverlay(points: [CGPoint]) {
-        overlay.update(points: points)
-    }
-
-    private func hideOverlay() {
-        overlay.hide()
-    }
-
-    private func syncState<T>(_ work: () -> T) -> T {
-        if DispatchQueue.getSpecific(key: stateQueueKey) != nil {
-            return work()
-        }
-
-        return stateQueue.sync {
-            work()
-        }
-    }
-
-    private func isRightMouseEvent(_ type: CGEventType) -> Bool {
-        type == .rightMouseDown || type == .rightMouseDragged || type == .rightMouseUp
-    }
-
-    private func isWindowControlEvent(_ type: CGEventType) -> Bool {
-        type == .mouseMoved ||
-            type == .scrollWheel ||
-            type == .flagsChanged ||
-            type == .keyDown
-    }
-
     private func eventMask(for type: CGEventType) -> CGEventMask {
         CGEventMask(1) << CGEventMask(type.rawValue)
     }
-
-    private func eventMatches(_ event: CGEvent, shortcut: Shortcut) -> Bool {
-        let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
-        guard keyCode == shortcut.keyCode else {
-            return false
-        }
-
-        let rawValue = ModifierFormatter.normalizedRawValue(from: event.flags)
-        return rawValue == shortcut.modifierFlags
-    }
-
-    private func distance(_ left: CGPoint, _ right: CGPoint) -> CGFloat {
-        hypot(left.x - right.x, left.y - right.y)
-    }
-
 }

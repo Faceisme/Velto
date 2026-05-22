@@ -205,6 +205,10 @@ final class GestureStore {
 
     private(set) var gestures: [GestureCommand]
     private(set) var preferences: AppPreferences
+    /// Monotonically incrementing version, bumped every time `gestures` changes.
+    /// Consumers (e.g. GestureRecognizer) use this as a cheap O(1) cache key
+    /// instead of doing a deep `==` comparison on the gesture list.
+    private(set) var gesturesVersion: UInt64 = 0
 
     private init() {
         gestures = Self.load(
@@ -219,13 +223,18 @@ final class GestureStore {
             legacyKeys: [Self.legacyMyGesturesPreferencesKey, Self.legacyPreferencesKey],
             decoder: decoder
         ) ?? .defaults
+        let needsPreferencesWrite = !preferences.gesturesEnabled
         preferences.gesturesEnabled = true
         localizeBuiltInGestureNames()
-        savePreferences()
+        gesturesVersion = 1
+        if needsPreferencesWrite {
+            savePreferences()
+        }
     }
 
     func updateGestures(_ update: (inout [GestureCommand]) -> Void) {
         update(&gestures)
+        gesturesVersion &+= 1
         saveGestures()
         notifyChanged(reason: .gestures)
     }
@@ -263,6 +272,7 @@ final class GestureStore {
         preferences = backup.preferences
         preferences.gesturesEnabled = true
         localizeBuiltInGestureNames()
+        gesturesVersion &+= 1
         saveGestures()
         savePreferences()
         notifyChanged(reason: .backupImport)
@@ -412,6 +422,7 @@ final class GestureStore {
         }
 
         if changed {
+            gesturesVersion &+= 1
             saveGestures()
         }
     }

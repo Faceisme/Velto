@@ -67,7 +67,7 @@ enum GestureTargetController {
         }
 
         let rawApp = NSRunningApplication(processIdentifier: pid)
-        let app = foregroundApplication(for: rawApp) ?? rawApp
+        let app = AppQuirks.foregroundApplication(for: rawApp) ?? rawApp
         app?.activate(options: [.activateAllWindows])
 
         if let window = target.window {
@@ -139,32 +139,32 @@ enum GestureTargetController {
         }
 
         let rawApp = NSRunningApplication(processIdentifier: pid)
-        let app = foregroundApplication(for: rawApp) ?? rawApp
-        let isWeChatFamily = isWeChat(rawApp) || isWeChat(app)
+        let app = AppQuirks.foregroundApplication(for: rawApp) ?? rawApp
+        let policy = AppQuirks.policy(rawApp: rawApp, foregroundApp: app)
 
         return GestureExecutionTarget(
             policy: .windowUnderPointer,
             pid: pid,
             restoresOriginalFrontmostApplication: false,
-            deliveryDelay: isWeChatFamily ? 0.12 : 0.08,
+            deliveryDelay: policy.deliveryDelay,
             window: window,
-            prefersDirectWindowClose: isWeChatFamily
+            prefersDirectWindowClose: policy.prefersDirectWindowClose
         )
     }
 
     private static func target(from candidate: WindowCandidate) -> GestureExecutionTarget {
         let rawApp = NSRunningApplication(processIdentifier: candidate.pid)
-        let app = foregroundApplication(for: rawApp) ?? rawApp
-        let isWeChatFamily = isWeChat(rawApp) || isWeChat(app) || isWeChatText(candidate.ownerName)
+        let app = AppQuirks.foregroundApplication(for: rawApp) ?? rawApp
+        let policy = AppQuirks.policy(rawApp: rawApp, foregroundApp: app, ownerName: candidate.ownerName)
         let window = axWindow(matching: candidate)
 
         return GestureExecutionTarget(
             policy: .windowUnderPointer,
             pid: candidate.pid,
             restoresOriginalFrontmostApplication: false,
-            deliveryDelay: isWeChatFamily ? 0.12 : 0.08,
+            deliveryDelay: policy.deliveryDelay,
             window: window,
-            prefersDirectWindowClose: isWeChatFamily
+            prefersDirectWindowClose: policy.prefersDirectWindowClose
         )
     }
 
@@ -396,21 +396,6 @@ enum GestureTargetController {
             + abs(left.height - right.height)
     }
 
-    private static func foregroundApplication(for application: NSRunningApplication?) -> NSRunningApplication? {
-        guard let application,
-              let bundleIdentifier = application.bundleIdentifier else {
-            return application
-        }
-
-        if isWeChatBundleIdentifier(bundleIdentifier),
-           bundleIdentifier != "com.tencent.xinWeChat",
-           let mainWeChat = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == "com.tencent.xinWeChat" }) {
-            return mainWeChat
-        }
-
-        return application
-    }
-
     private static func windowElement(containing element: AXUIElement) -> AXUIElement? {
         if role(of: element) == kAXWindowRole {
             return element
@@ -452,30 +437,6 @@ enum GestureTargetController {
         let flags = CGEventFlags(rawValue: CGEventFlags.RawValue(shortcut.modifierFlags))
         let shortcutFlags: CGEventFlags = [.maskCommand, .maskAlternate, .maskControl, .maskShift, .maskSecondaryFn]
         return shortcut.keyCode == VirtualKeyCode.w && flags.intersection(shortcutFlags) == .maskCommand
-    }
-
-    private static func isWeChat(_ application: NSRunningApplication?) -> Bool {
-        guard let application else {
-            return false
-        }
-
-        if let bundleIdentifier = application.bundleIdentifier,
-           isWeChatBundleIdentifier(bundleIdentifier) {
-            return true
-        }
-
-        let name = application.localizedName ?? ""
-        return isWeChatText(name)
-    }
-
-    private static func isWeChatBundleIdentifier(_ bundleIdentifier: String) -> Bool {
-        bundleIdentifier.localizedCaseInsensitiveContains("wechat")
-            || bundleIdentifier.localizedCaseInsensitiveContains("xinwechat")
-    }
-
-    private static func isWeChatText(_ text: String) -> Bool {
-        text.localizedCaseInsensitiveContains("微信")
-            || text.localizedCaseInsensitiveContains("wechat")
     }
 
     private static func fallbackTarget() -> GestureExecutionTarget {

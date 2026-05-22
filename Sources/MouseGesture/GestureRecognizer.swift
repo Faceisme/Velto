@@ -14,11 +14,13 @@ final class GestureRecognizer {
 
     private let sampleCount = 64
     private let minimumPathLength: CGFloat = 24
-    private var cachedCommands: [GestureCommand]?
+    /// Last `GestureStore.gesturesVersion` the cache was built against.
+    /// `nil` means cache is empty / invalidated.
+    private var cachedVersion: UInt64?
     private var cachedTemplates: [NormalizedTemplate] = []
 
-    func bestMatch(points: [CGPoint], commands: [GestureCommand], threshold: CGFloat) -> GestureMatch? {
-        guard let best = bestCandidate(points: points, commands: commands) else {
+    func bestMatch(points: [CGPoint], commands: [GestureCommand], version: UInt64, threshold: CGFloat) -> GestureMatch? {
+        guard let best = bestCandidate(points: points, commands: commands, version: version) else {
             return nil
         }
 
@@ -29,7 +31,7 @@ final class GestureRecognizer {
         return best
     }
 
-    func bestCandidate(points: [CGPoint], commands: [GestureCommand]) -> GestureMatch? {
+    func bestCandidate(points: [CGPoint], commands: [GestureCommand], version: UInt64) -> GestureMatch? {
         let candidatePathLength = pathLength(points)
         guard candidatePathLength >= minimumPathLength,
               let candidate = normalize(points, knownPathLength: candidatePathLength) else {
@@ -38,7 +40,7 @@ final class GestureRecognizer {
 
         var best: GestureMatch?
 
-        for template in normalizedTemplates(for: commands) {
+        for template in normalizedTemplates(for: commands, version: version) {
             let distance = averageDistance(candidate, template.points)
             if best == nil || distance < best!.distance {
                 best = GestureMatch(command: template.command, distance: distance)
@@ -65,8 +67,8 @@ final class GestureRecognizer {
         return translateToOrigin(scaled)
     }
 
-    private func normalizedTemplates(for commands: [GestureCommand]) -> [NormalizedTemplate] {
-        if cachedCommands == commands {
+    private func normalizedTemplates(for commands: [GestureCommand], version: UInt64) -> [NormalizedTemplate] {
+        if cachedVersion == version {
             return cachedTemplates
         }
 
@@ -79,7 +81,7 @@ final class GestureRecognizer {
             }
         }
 
-        cachedCommands = commands
+        cachedVersion = version
         cachedTemplates = templates
         return templates
     }
