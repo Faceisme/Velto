@@ -69,11 +69,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if store.preferences.showMenuBarIcon {
             if statusItem == nil {
                 statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-                if let image = NSImage(systemSymbolName: "scribble.variable", accessibilityDescription: "MyGestures") {
+                if let image = NSImage(systemSymbolName: "scribble.variable", accessibilityDescription: "VibeGestures") {
                     image.isTemplate = true
                     statusItem?.button?.image = image
                 } else {
-                    statusItem?.button?.title = "MyGestures"
+                    statusItem?.button?.title = "VibeGestures"
                 }
             }
             rebuildStatusMenu()

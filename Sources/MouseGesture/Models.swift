@@ -115,7 +115,7 @@ struct AppPreferences: Codable, Equatable {
     )
 }
 
-struct MyGesturesBackupFile: Codable {
+struct VibeGesturesBackupFile: Codable {
     static let currentFormatVersion = 1
 
     var formatVersion: Int
@@ -129,7 +129,7 @@ struct MyGesturesBackupFile: Codable {
         preferences: AppPreferences
     ) {
         formatVersion = Self.currentFormatVersion
-        appName = "MyGestures"
+        appName = "VibeGestures"
         exportedAt = Date()
         self.gestures = gestures
         self.preferences = preferences
@@ -151,7 +151,7 @@ enum GestureBackupError: LocalizedError {
 }
 
 extension Notification.Name {
-    static let gestureStoreDidChange = Notification.Name("MyGestures.gestureStoreDidChange")
+    static let gestureStoreDidChange = Notification.Name("VibeGestures.gestureStoreDidChange")
 }
 
 enum GestureStoreChangeReason: String {
@@ -189,8 +189,8 @@ extension CGEventFlags {
 final class GestureStore {
     static let shared = GestureStore()
 
-    private let gesturesKey = "MyGestures.gestures"
-    private let preferencesKey = "MyGestures.preferences"
+    private let gesturesKey = "VibeGestures.gestures"
+    private let preferencesKey = "VibeGestures.preferences"
     static let changeReasonUserInfoKey = "reason"
     private static let legacyBundleIdentifiers = [
         "com.local.MyGestures",
@@ -237,7 +237,7 @@ final class GestureStore {
     }
 
     func exportBackupData() throws -> Data {
-        let backup = MyGesturesBackupFile(
+        let backup = VibeGesturesBackupFile(
             gestures: gestures,
             preferences: preferences
         )
@@ -251,8 +251,8 @@ final class GestureStore {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
 
-        let backup = try decoder.decode(MyGesturesBackupFile.self, from: data)
-        guard backup.formatVersion <= MyGesturesBackupFile.currentFormatVersion else {
+        let backup = try decoder.decode(VibeGesturesBackupFile.self, from: data)
+        guard backup.formatVersion <= VibeGesturesBackupFile.currentFormatVersion else {
             throw GestureBackupError.unsupportedVersion(backup.formatVersion)
         }
         guard !backup.gestures.isEmpty else {

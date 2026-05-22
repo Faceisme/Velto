@@ -3,17 +3,17 @@
 import PackageDescription
 
 let package = Package(
-    name: "MyGestures",
+    name: "VibeGestures",
     platforms: [
         .macOS(.v26)
     ],
     products: [
-        .executable(name: "MyGestures", targets: ["MyGestures"])
+        .executable(name: "VibeGestures", targets: ["VibeGestures"])
     ],
     targets: [
         .executableTarget(
-            name: "MyGestures",
-            path: "Sources/MouseGestureLite"
+            name: "VibeGestures",
+            path: "Sources/MouseGesture"
         )
     ],
     swiftLanguageModes: [.v5]
