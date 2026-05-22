@@ -24,7 +24,6 @@ struct GesturesPage: View {
             HStack(spacing: 0) {
                 listColumn
                     .frame(width: 340)
-                    .background(Color(NSColor.textBackgroundColor).opacity(0.4))
                 Divider()
                 detailColumn
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -72,9 +71,9 @@ struct GesturesPage: View {
                         .tag(gesture.id as UUID?)
                         .listRowSeparator(.hidden)
                         .listRowBackground(
-                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            RoundedRectangle(cornerRadius: 7, style: .continuous)
                                 .fill(gesture.id == selectedID ? Color.mgAccent : Color.clear)
-                                .padding(.horizontal, 4)
+                                .padding(.horizontal, 8)
                                 .padding(.vertical, 1)
                         )
                 }
@@ -169,7 +168,10 @@ struct GesturesPage: View {
     private func updateSelectedDraft(_ update: (inout GestureCommand) -> Void) {
         guard let id = selectedID,
               let idx = draftGestures.firstIndex(where: { $0.id == id }) else { return }
-        update(&draftGestures[idx])
+        var modified = draftGestures[idx]
+        update(&modified)
+        guard modified != draftGestures[idx] else { return }
+        draftGestures[idx] = modified
         statusMessage = ""
     }
 
