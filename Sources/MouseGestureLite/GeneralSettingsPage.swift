@@ -107,11 +107,17 @@ struct GeneralSettingsPage: View {
 
                 // Section: data & permissions
                 section(title: "数据与权限") {
+                    Text("配置文件会包含鼠标手势、窗口管理快捷键、识别参数和菜单栏偏好；开机自动启动属于系统登录项，不随配置导入导出。")
+                        .font(.mgMeta)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.vertical, 4)
+
                     HStack(spacing: 10) {
-                        Button("导入配置") { importConfiguration() }.buttonStyle(.mgGhost)
-                        Button("导出配置") { exportConfiguration() }.buttonStyle(.mgGhost)
+                        Button("导入配置") { importConfiguration() }.buttonStyle(.glass)
+                        Button("导出配置") { exportConfiguration() }.buttonStyle(.glass)
                         Spacer()
-                        Button("打开权限设置") { PermissionManager.openPrivacySettings() }.buttonStyle(.mgGhost)
+                        Button("打开权限设置") { PermissionManager.openPrivacySettings() }.buttonStyle(.glass)
                     }
                     .padding(.vertical, 4)
 
@@ -127,14 +133,14 @@ struct GeneralSettingsPage: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .confirmationDialog(
-            "导入配置会覆盖当前手势",
+            "导入配置会覆盖当前全部配置",
             isPresented: $showingImportConfirm,
             titleVisibility: .visible
         ) {
             Button("导入", role: .destructive) { performImport() }
             Button("取消", role: .cancel) {}
         } message: {
-            Text("建议先导出当前配置作为备份。")
+            Text("会覆盖鼠标手势、窗口管理和通用偏好。建议先导出当前配置作为备份。")
         }
         .alert("操作失败", isPresented: $showingError) {
             Button("好") {}

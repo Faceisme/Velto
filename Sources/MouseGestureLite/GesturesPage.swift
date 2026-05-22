@@ -35,6 +35,15 @@ struct GesturesPage: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear(perform: loadDraftIfNeeded)
+        .onReceive(NotificationCenter.default.publisher(for: .gestureStoreDidChange)) { notification in
+            guard notification.object as? GestureStore === store else { return }
+            switch notification.gestureStoreChangeReason {
+            case .gestures, .backupImport:
+                reloadFromStore(silent: true)
+            default:
+                break
+            }
+        }
     }
 
     // MARK: - List column
@@ -52,7 +61,7 @@ struct GesturesPage: View {
                 Button(action: addGesture) {
                     Label("新建", systemImage: "plus")
                 }
-                .buttonStyle(.mgPrimary)
+                .buttonStyle(.glassProminent)
             }
             .padding(.horizontal, 18)
             .padding(.top, 16)
@@ -64,7 +73,7 @@ struct GesturesPage: View {
                         .listRowSeparator(.hidden)
                         .listRowBackground(
                             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                .fill(gesture.id == selectedID ? Color.primary.opacity(0.06) : Color.clear)
+                                .fill(gesture.id == selectedID ? Color.mgAccent : Color.clear)
                                 .padding(.horizontal, 4)
                                 .padding(.vertical, 1)
                         )
@@ -72,6 +81,9 @@ struct GesturesPage: View {
             }
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
+            .transaction { transaction in
+                transaction.animation = nil
+            }
         }
         .onChange(of: selectedID) { _, _ in
             if let g = selected { syncEditor(from: g) }
@@ -92,7 +104,6 @@ struct GesturesPage: View {
                     updateDraft: updateSelectedDraft
                 )
                 .padding(24)
-                .id(g.id)
             }
         } else {
             ContentUnavailableView(
@@ -125,12 +136,12 @@ struct GesturesPage: View {
 
             Spacer()
 
-            Button("丢弃更改", action: reloadFromStore)
-                .buttonStyle(.mgGhost)
+            Button("丢弃更改") { reloadFromStore() }
+                .buttonStyle(.glass)
                 .disabled(!hasUnsavedChanges)
 
             Button("保存", action: saveChanges)
-                .buttonStyle(.mgPrimary)
+                .buttonStyle(.glassProminent)
                 .disabled(!hasUnsavedChanges)
                 .keyboardShortcut(.return)
         }
@@ -194,13 +205,20 @@ struct GesturesPage: View {
         statusMessage = "已保存。"
     }
 
-    private func reloadFromStore() {
+    private func reloadFromStore(silent: Bool = false) {
         draftGestures = store.gestures
-        if let id = selectedID, !draftGestures.contains(where: { $0.id == id }) {
+        if selectedID == nil {
+            selectedID = draftGestures.first?.id
+        } else if let id = selectedID, !draftGestures.contains(where: { $0.id == id }) {
             selectedID = draftGestures.first?.id
         }
-        if let g = selected { syncEditor(from: g) }
-        statusMessage = "已丢弃未保存更改。"
+        if let g = selected {
+            syncEditor(from: g)
+        } else {
+            editingName = ""
+            shortcut = nil
+        }
+        statusMessage = silent ? "" : "已丢弃未保存更改。"
     }
 }
 
@@ -215,11 +233,11 @@ private struct GestureRow: View {
             // Trail thumbnail
             ZStack {
                 RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .fill(selected ? Color.white : Color.white.opacity(0.6))
+                    .fill(selected ? Color.white.opacity(0.22) : Color.white.opacity(0.6))
                     .overlay(
                         RoundedRectangle(cornerRadius: 9, style: .continuous)
                             .strokeBorder(
-                                selected ? Color.mgAccent.opacity(0.4) : Color.mgBorder,
+                                selected ? Color.white.opacity(0.30) : Color.mgBorder,
                                 lineWidth: 1
                             )
                     )
@@ -229,7 +247,7 @@ private struct GestureRow: View {
                     GestureTrailView(
                         template: template,
                         stroke: 3,
-                        colors: selected ? [.mgAccent, .mgAccentEnd] : [Color.mgText3, Color.mgText2],
+                        colors: selected ? [.white.opacity(0.90), .white] : [Color.mgText3, Color.mgText2],
                         showStartDot: false,
                         showEndArrow: true
                     )
@@ -237,27 +255,27 @@ private struct GestureRow: View {
                 } else {
                     Image(systemName: "questionmark")
                         .font(.system(size: 11))
-                        .foregroundStyle(Color.mgText3)
+                        .foregroundStyle(selected ? Color.white.opacity(0.75) : Color.mgText3)
                 }
             }
 
             VStack(alignment: .leading, spacing: 1) {
                 Text(gesture.name)
                     .font(.mgBodyStrong)
-                    .foregroundStyle(Color.mgText1)
+                    .foregroundStyle(selected ? Color.white : Color.mgText1)
                 Text("\(gesture.templates.count) 样本")
                     .font(.mgMeta)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(selected ? Color.white.opacity(0.72) : Color.mgText3)
             }
 
             Spacer()
 
             if let sc = gesture.shortcut {
-                Kbd(keys: sc.kbdKeys, size: .sm, muted: true)
+                Kbd(keys: sc.kbdKeys, size: .sm, muted: true, inverted: selected)
             } else {
                 Text("未设置")
                     .font(.mgMeta)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(selected ? Color.white.opacity(0.72) : Color.mgText3)
             }
         }
         .padding(.vertical, 4)
@@ -297,22 +315,7 @@ private struct DetailPanel: View {
                     Button(role: .destructive, action: onDelete) {
                         Label("删除", systemImage: "trash")
                     }
-                    .buttonStyle(.mgGhost)
-                }
-            }
-
-            // Recorded trail preview
-            VStack(alignment: .leading, spacing: 8) {
-                MGSectionLabel(text: "录制的轨迹")
-                if gesture.templates.isEmpty {
-                    emptyTrailPlaceholder
-                } else {
-                    GesturePreviewCard(
-                        templates: gesture.templates,
-                        sampleCount: gesture.templates.count,
-                        height: 200
-                    )
-                    .glassSurface(.thin, radius: MGRadius.card)
+                    .buttonStyle(.glass)
                 }
             }
 
@@ -334,13 +337,13 @@ private struct DetailPanel: View {
                             if !g.templates.isEmpty { g.templates.removeLast() }
                         }
                     }
-                    .buttonStyle(.mgGhost)
+                    .buttonStyle(.glass)
                     .disabled(gesture.templates.isEmpty)
 
                     Button("清空样本") {
                         updateDraft { $0.templates.removeAll() }
                     }
-                    .buttonStyle(.mgGhost)
+                    .buttonStyle(.glass)
                     .disabled(gesture.templates.isEmpty)
                     Spacer()
                 }
@@ -363,20 +366,5 @@ private struct DetailPanel: View {
                     }
             }
         }
-    }
-
-    private var emptyTrailPlaceholder: some View {
-        VStack(spacing: 8) {
-            Image(systemName: "scribble.variable")
-                .font(.system(size: 24))
-                .foregroundStyle(Color.mgText3)
-            Text("还没有录制样本")
-                .font(.mgBody)
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity)
-        .frame(height: 200)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: MGRadius.card, style: .continuous))
-        .glassEdge(radius: MGRadius.card)
     }
 }

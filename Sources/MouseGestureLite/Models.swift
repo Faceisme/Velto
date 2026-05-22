@@ -154,6 +154,21 @@ extension Notification.Name {
     static let gestureStoreDidChange = Notification.Name("MyGestures.gestureStoreDidChange")
 }
 
+enum GestureStoreChangeReason: String {
+    case gestures
+    case preferences
+    case backupImport
+}
+
+extension Notification {
+    var gestureStoreChangeReason: GestureStoreChangeReason? {
+        guard let rawValue = userInfo?[GestureStore.changeReasonUserInfoKey] as? String else {
+            return nil
+        }
+        return GestureStoreChangeReason(rawValue: rawValue)
+    }
+}
+
 enum VirtualKeyCode {
     static let escape: UInt16 = 53
     static let equal: UInt16 = 24
@@ -176,6 +191,7 @@ final class GestureStore {
 
     private let gesturesKey = "MyGestures.gestures"
     private let preferencesKey = "MyGestures.preferences"
+    static let changeReasonUserInfoKey = "reason"
     private static let legacyBundleIdentifiers = [
         "com.local.MyGestures",
         "com.local.MouseGestureLite"
@@ -211,13 +227,13 @@ final class GestureStore {
     func updateGestures(_ update: (inout [GestureCommand]) -> Void) {
         update(&gestures)
         saveGestures()
-        notifyChanged()
+        notifyChanged(reason: .gestures)
     }
 
     func updatePreferences(_ update: (inout AppPreferences) -> Void) {
         update(&preferences)
         savePreferences()
-        notifyChanged()
+        notifyChanged(reason: .preferences)
     }
 
     func exportBackupData() throws -> Data {
@@ -249,7 +265,7 @@ final class GestureStore {
         localizeBuiltInGestureNames()
         saveGestures()
         savePreferences()
-        notifyChanged()
+        notifyChanged(reason: .backupImport)
     }
 
     private func saveGestures() {
@@ -264,8 +280,12 @@ final class GestureStore {
         }
     }
 
-    private func notifyChanged() {
-        NotificationCenter.default.post(name: .gestureStoreDidChange, object: self)
+    private func notifyChanged(reason: GestureStoreChangeReason) {
+        NotificationCenter.default.post(
+            name: .gestureStoreDidChange,
+            object: self,
+            userInfo: [Self.changeReasonUserInfoKey: reason.rawValue]
+        )
     }
 
     private static func load<T: Decodable>(

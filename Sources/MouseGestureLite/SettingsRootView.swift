@@ -36,9 +36,8 @@ struct SettingsRootView: View {
         .frame(minWidth: 1100, idealWidth: 1180, minHeight: 720, idealHeight: 760)
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
-                ToolbarStatusIndicator(
-                    listening: store.preferences.gesturesEnabled
-                )
+                ToolbarStatusIndicator(listening: store.preferences.gesturesEnabled)
+                    .allowsHitTesting(false)
             }
         }
     }

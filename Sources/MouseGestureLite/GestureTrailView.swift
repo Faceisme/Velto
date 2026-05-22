@@ -144,15 +144,28 @@ struct GesturePreviewCard: View {
             .opacity(0.5)
 
             // ghost samples (older templates, faded)
-            ForEach(Array(templates.dropLast().enumerated()), id: \.offset) { _, template in
-                GestureTrailView(
-                    template: template,
-                    stroke: 2,
-                    colors: [Color.mgText3, Color.mgText3],
-                    showStartDot: false,
-                    showEndArrow: false
+            Canvas { ctx, size in
+                let inset = height * 0.10
+                let drawSize = CGSize(
+                    width: max(size.width - inset * 2, 1),
+                    height: max(size.height - inset * 2, 1)
                 )
-                .padding(height * 0.10)
+
+                for template in templates.dropLast() {
+                    let points = GestureTrailView.normalize(template, into: drawSize, padding: 0)
+                    guard points.count >= 2 else { continue }
+
+                    var path = Path()
+                    path.move(to: CGPoint(x: points[0].x + inset, y: points[0].y + inset))
+                    for point in points.dropFirst() {
+                        path.addLine(to: CGPoint(x: point.x + inset, y: point.y + inset))
+                    }
+                    ctx.stroke(
+                        path,
+                        with: .color(Color.mgText3.opacity(0.45)),
+                        style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round)
+                    )
+                }
             }
 
             // primary sample (the most recent)

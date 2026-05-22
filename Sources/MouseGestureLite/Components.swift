@@ -22,24 +22,34 @@ struct Kbd: View {
     let keys: [String]
     var size: KbdSize = .md
     var muted: Bool = false
+    var inverted: Bool = false
 
     var body: some View {
+        let foreground = inverted ? Color.white : Color.mgText1
+        let keyBackground = inverted
+            ? Color.white.opacity(0.20)
+            : (muted ? Color.black.opacity(0.04) : Color.white)
+        let keyBorder = inverted
+            ? Color.white.opacity(0.24)
+            : Color.black.opacity(muted ? 0.06 : 0.08)
+        let shadow = Color.black.opacity(muted || inverted ? 0 : 0.04)
+
         HStack(spacing: size.gap) {
             ForEach(keys, id: \.self) { k in
                 Text(k)
                     .font(size.font)
-                    .foregroundStyle(Color.mgText1)
+                    .foregroundStyle(foreground)
                     .frame(minWidth: size.height, minHeight: size.height)
                     .padding(.horizontal, size.hPad)
                     .background(
-                        muted ? Color.black.opacity(0.04) : Color.white,
+                        keyBackground,
                         in: RoundedRectangle(cornerRadius: size.radius, style: .continuous)
                     )
                     .overlay(
                         RoundedRectangle(cornerRadius: size.radius, style: .continuous)
-                            .strokeBorder(Color.black.opacity(muted ? 0.06 : 0.08), lineWidth: 0.5)
+                            .strokeBorder(keyBorder, lineWidth: 0.5)
                     )
-                    .shadow(color: .black.opacity(muted ? 0 : 0.04), radius: 0, x: 0, y: 1)
+                    .shadow(color: shadow, radius: 0, x: 0, y: 1)
             }
         }
     }
@@ -86,28 +96,25 @@ struct ToolbarStatusIndicator: View {
     var listening: Bool
 
     var body: some View {
+        let dotColor = listening ? Color.green : Color.orange
+        let textColor = listening
+            ? Color(red: 31/255, green: 138/255, blue: 76/255)
+            : Color(red: 180/255, green: 100/255, blue: 0/255)
+
         HStack(spacing: 6) {
             Circle()
-                .fill(listening ? Color.green : Color.orange)
+                .fill(dotColor)
                 .frame(width: 7, height: 7)
             Text(listening ? "监听中" : "已暂停")
                 .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(listening
-                    ? Color(red: 31/255, green: 138/255, blue: 76/255)
-                    : Color(red: 180/255, green: 100/255, blue: 0/255))
+                .foregroundStyle(textColor)
+                .lineLimit(1)
                 .fixedSize(horizontal: true, vertical: false)
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 5)
-        .background(
-            Capsule()
-                .fill((listening ? Color.green : Color.orange).opacity(0.15))
-        )
-        .overlay(
-            Capsule()
-                .strokeBorder((listening ? Color.green : Color.orange).opacity(0.25), lineWidth: 0.5)
-        )
-        .fixedSize()
+        .frame(height: 28, alignment: .center)
+        .glassEffect(.regular, in: Capsule())
+        .fixedSize(horizontal: true, vertical: true)
     }
 }
 

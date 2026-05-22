@@ -62,6 +62,19 @@ struct WindowManagementPage: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear(perform: loadDraftIfNeeded)
+        .onReceive(NotificationCenter.default.publisher(for: .gestureStoreDidChange)) { notification in
+            guard notification.object as? GestureStore === store else { return }
+            switch notification.gestureStoreChangeReason {
+            case .backupImport:
+                reloadFromStore(silent: true)
+            case .preferences:
+                if !hasUnsavedChanges {
+                    reloadFromStore(silent: true)
+                }
+            default:
+                break
+            }
+        }
     }
 
     // MARK: - Header
@@ -102,11 +115,11 @@ struct WindowManagementPage: View {
             Spacer()
 
             Button("丢弃更改") { reloadFromStore() }
-                .buttonStyle(.mgGhost)
+                .buttonStyle(.glass)
                 .disabled(!hasUnsavedChanges)
 
             Button("保存", action: saveChanges)
-                .buttonStyle(.mgPrimary)
+                .buttonStyle(.glassProminent)
                 .disabled(!hasUnsavedChanges)
                 .keyboardShortcut(.return)
         }
@@ -157,13 +170,7 @@ private struct KeybindCardRow<Trailing: View>: View {
                 .font(.system(size: 16, weight: .medium))
                 .foregroundStyle(Color.mgAccent)
                 .frame(width: 38, height: 38)
-                .background(
-                    LinearGradient(
-                        colors: [Color.mgAccent.opacity(0.12), Color.mgAccent.opacity(0.06)],
-                        startPoint: .topLeading, endPoint: .bottomTrailing
-                    ),
-                    in: RoundedRectangle(cornerRadius: 10, style: .continuous)
-                )
+                .background(.quaternary, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(title).font(.mgBodyStrong)

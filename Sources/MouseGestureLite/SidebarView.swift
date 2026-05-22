@@ -24,6 +24,11 @@ struct SidebarView: View {
             StatusCard().padding(10)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .overlay(alignment: .trailing) {
+            Rectangle()
+                .fill(Color.primary.opacity(0.08))
+                .frame(width: 1)
+        }
     }
 
     private func sectionLabel(_ text: String) -> some View {
@@ -43,27 +48,25 @@ struct SidebarView: View {
                 Image(systemName: p.icon)
                     .font(.system(size: 13, weight: .medium))
                     .frame(width: 18, alignment: .center)
-                    .foregroundStyle(page == p ? Color.mgAccent : Color.mgText2)
+                    .foregroundStyle(page == p ? .white : Color.mgText2)
                 Text(p.label)
                     .font(.system(size: 13, weight: page == p ? .semibold : .regular))
-                    .foregroundStyle(page == p ? Color.mgAccent : Color.mgText1)
+                    .foregroundStyle(page == p ? .white : Color.mgText1)
                 Spacer()
                 if let b = badge, b > 0 {
                     Text("\(b)")
                         .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(page == p ? Color.mgAccent : .secondary)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 1)
-                        .background(.quaternary, in: Capsule())
+                        .background(page == p ? Color.white.opacity(0.86) : Color.primary.opacity(0.08), in: Capsule())
                 }
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 7)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(page == p ? Color.mgAccent.opacity(0.12) : Color.clear)
-            )
+            .background(page == p ? Color.mgAccent : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
