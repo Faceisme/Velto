@@ -88,36 +88,6 @@ extension Shortcut {
     }
 }
 
-// MARK: - Toolbar status indicator
-// Self-contained capsule with explicit padding + fixedSize so the toolbar
-// can't squish it. .fixedSize() forces the view to size to its content.
-
-struct ToolbarStatusIndicator: View {
-    var listening: Bool
-
-    var body: some View {
-        let dotColor = listening ? Color.green : Color.orange
-        let textColor = listening
-            ? Color(red: 31/255, green: 138/255, blue: 76/255)
-            : Color(red: 180/255, green: 100/255, blue: 0/255)
-
-        HStack(spacing: 6) {
-            Circle()
-                .fill(dotColor)
-                .frame(width: 7, height: 7)
-            Text(listening ? "监听中" : "已暂停")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(textColor)
-                .lineLimit(1)
-                .fixedSize(horizontal: true, vertical: false)
-        }
-        .padding(.horizontal, 12)
-        .frame(height: 28, alignment: .center)
-        .glassEffect(.regular, in: Capsule())
-        .fixedSize(horizontal: true, vertical: true)
-    }
-}
-
 // MARK: - Status pill (for in-content use, has its own background)
 
 struct StatusPill: View {

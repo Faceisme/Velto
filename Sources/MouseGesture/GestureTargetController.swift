@@ -157,10 +157,15 @@ enum GestureTargetController {
         let app = AppQuirks.foregroundApplication(for: rawApp) ?? rawApp
         let policy = AppQuirks.policy(rawApp: rawApp, foregroundApp: app, ownerName: candidate.ownerName)
         let window = axWindow(matching: candidate)
+            ?? app.flatMap { foregroundApp in
+                guard foregroundApp.processIdentifier != candidate.pid else { return nil }
+                return axWindow(matching: candidate, pid: foregroundApp.processIdentifier)
+            }
+        let pid = window.flatMap(processIdentifier(for:)) ?? candidate.pid
 
         return GestureExecutionTarget(
             policy: .windowUnderPointer,
-            pid: candidate.pid,
+            pid: pid,
             restoresOriginalFrontmostApplication: false,
             deliveryDelay: policy.deliveryDelay,
             window: window,
@@ -275,8 +280,8 @@ enum GestureTargetController {
         return pid
     }
 
-    private static func axWindow(matching candidate: WindowCandidate) -> AXUIElement? {
-        let app = AXUIElementCreateApplication(candidate.pid)
+    private static func axWindow(matching candidate: WindowCandidate, pid: pid_t? = nil) -> AXUIElement? {
+        let app = AXUIElementCreateApplication(pid ?? candidate.pid)
         guard let windows = axElementArrayAttribute(kAXWindowsAttribute, of: app) else {
             return nil
         }

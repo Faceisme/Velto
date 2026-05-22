@@ -7,6 +7,12 @@ import Foundation
 /// Keep this isolated from GestureTargetController so the targeting code stays
 /// generic and new "weird" apps can be added without touching core logic.
 enum AppQuirks {
+    private static let weChatMainBundleIdentifiers: Set<String> = [
+        "com.tencent.xinWeChat",
+        "com.tencent.WeChat",
+        "com.tencent.wechat"
+    ]
+
     /// Policy applied to a target app right before we deliver its shortcut.
     struct DeliveryPolicy {
         /// Extra delay (seconds) inserted between focusing the target and posting the key event.
@@ -46,9 +52,9 @@ enum AppQuirks {
         }
 
         if isWeChatBundleIdentifier(bundleIdentifier),
-           bundleIdentifier != "com.tencent.xinWeChat",
-           let main = NSWorkspace.shared.runningApplications.first(where: {
-               $0.bundleIdentifier == "com.tencent.xinWeChat"
+           !weChatMainBundleIdentifiers.contains(bundleIdentifier),
+           let main = NSWorkspace.shared.runningApplications.first(where: { app in
+               app.bundleIdentifier.map(weChatMainBundleIdentifiers.contains) ?? false
            }) {
             return main
         }
@@ -69,7 +75,7 @@ enum AppQuirks {
         return isWeChatText(application.localizedName ?? "")
     }
 
-    private static func isWeChatBundleIdentifier(_ bundleIdentifier: String) -> Bool {
+    static func isWeChatBundleIdentifier(_ bundleIdentifier: String) -> Bool {
         bundleIdentifier.localizedCaseInsensitiveContains("wechat")
             || bundleIdentifier.localizedCaseInsensitiveContains("xinwechat")
     }

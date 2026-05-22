@@ -24,7 +24,6 @@ enum MGPage: String, CaseIterable, Identifiable, Hashable {
 
 struct SettingsRootView: View {
     @State private var page: MGPage? = .gestures
-    private let store = GestureStore.shared
 
     var body: some View {
         NavigationSplitView {
@@ -34,12 +33,6 @@ struct SettingsRootView: View {
             content
         }
         .frame(minWidth: 1100, idealWidth: 1180, minHeight: 720, idealHeight: 760)
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                ToolbarStatusIndicator(listening: store.preferences.gesturesEnabled)
-                    .allowsHitTesting(false)
-            }
-        }
     }
 
     @ViewBuilder
