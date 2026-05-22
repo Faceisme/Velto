@@ -9,14 +9,11 @@ struct GesturesPage: View {
     @State private var editingName = ""
     @State private var shortcut: Shortcut?
     @State private var statusMessage = ""
+    @State private var hasUnsavedChanges = false
 
     var selected: GestureCommand? {
         guard let id = selectedID else { return nil }
         return draftGestures.first { $0.id == id }
-    }
-
-    var hasUnsavedChanges: Bool {
-        draftGestures != store.gestures
     }
 
     var body: some View {
@@ -24,6 +21,7 @@ struct GesturesPage: View {
             HStack(spacing: 0) {
                 listColumn
                     .frame(width: 340)
+                    .clipped()
                 Divider()
                 detailColumn
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -65,27 +63,30 @@ struct GesturesPage: View {
             .padding(.horizontal, 18)
             .padding(.top, 16)
 
-            List(selection: $selectedID) {
-                ForEach(draftGestures) { gesture in
-                    GestureRow(gesture: gesture, selected: gesture.id == selectedID)
-                        .tag(gesture.id as UUID?)
-                        .listRowSeparator(.hidden)
-                        .listRowBackground(
-                            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                                .fill(gesture.id == selectedID ? Color.mgAccent : Color.clear)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 1)
-                        )
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    ForEach(draftGestures) { gesture in
+                        let isSelected = gesture.id == selectedID
+                        GestureRow(gesture: gesture, selected: isSelected)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(
+                                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                    .fill(isSelected ? Color.mgAccent : Color.clear)
+                            )
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                selectGesture(gesture.id)
+                            }
+                    }
                 }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
             }
-            .listStyle(.plain)
-            .scrollContentBackground(.hidden)
             .transaction { transaction in
                 transaction.animation = nil
             }
-        }
-        .onChange(of: selectedID) { _, _ in
-            if let g = selected { syncEditor(from: g) }
         }
     }
 
@@ -154,6 +155,7 @@ struct GesturesPage: View {
         guard !didLoad else { return }
         didLoad = true
         draftGestures = store.gestures
+        hasUnsavedChanges = false
         if selectedID == nil, let first = draftGestures.first {
             selectedID = first.id
         }
@@ -172,6 +174,7 @@ struct GesturesPage: View {
         update(&modified)
         guard modified != draftGestures[idx] else { return }
         draftGestures[idx] = modified
+        hasUnsavedChanges = true
         statusMessage = ""
     }
 
@@ -180,6 +183,7 @@ struct GesturesPage: View {
         draftGestures.append(new)
         selectedID = new.id
         syncEditor(from: new)
+        hasUnsavedChanges = true
         statusMessage = ""
     }
 
@@ -192,6 +196,8 @@ struct GesturesPage: View {
         draftGestures.remove(at: idx)
         selectedID = nextID
         if let g = selected { syncEditor(from: g) }
+        hasUnsavedChanges = true
+        statusMessage = ""
     }
 
     private func saveChanges() {
@@ -204,11 +210,13 @@ struct GesturesPage: View {
         }
         store.updateGestures { $0 = normalized }
         draftGestures = normalized
+        hasUnsavedChanges = false
         statusMessage = "已保存。"
     }
 
     private func reloadFromStore(silent: Bool = false) {
         draftGestures = store.gestures
+        hasUnsavedChanges = false
         if selectedID == nil {
             selectedID = draftGestures.first?.id
         } else if let id = selectedID, !draftGestures.contains(where: { $0.id == id }) {
@@ -221,6 +229,14 @@ struct GesturesPage: View {
             shortcut = nil
         }
         statusMessage = silent ? "" : "已丢弃未保存更改。"
+    }
+
+    private func selectGesture(_ id: UUID) {
+        guard selectedID != id else { return }
+        selectedID = id
+        if let g = draftGestures.first(where: { $0.id == id }) {
+            syncEditor(from: g)
+        }
     }
 }
 
@@ -246,12 +262,9 @@ private struct GestureRow: View {
                     .frame(width: 36, height: 36)
 
                 if let template = gesture.templates.last {
-                    GestureTrailView(
+                    GestureThumbnailView(
                         template: template,
-                        stroke: 3,
-                        colors: selected ? [.white.opacity(0.90), .white] : [Color.mgText3, Color.mgText2],
-                        showStartDot: false,
-                        showEndArrow: true
+                        color: selected ? .white.opacity(0.92) : Color.mgText2
                     )
                     .frame(width: 26, height: 26)
                 } else {
@@ -281,6 +294,43 @@ private struct GestureRow: View {
             }
         }
         .padding(.vertical, 4)
+    }
+}
+
+private struct GestureThumbnailView: View {
+    let template: [StrokePoint]
+    let color: Color
+
+    var body: some View {
+        Canvas { context, size in
+            let points = GestureTrailView.normalize(template, into: size, padding: 3)
+            guard points.count >= 2 else { return }
+
+            var path = Path()
+            path.move(to: points[0])
+            for point in points.dropFirst() {
+                path.addLine(to: point)
+            }
+            context.stroke(
+                path,
+                with: .color(color),
+                style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round)
+            )
+
+            let previous = points[points.count - 2]
+            let current = points[points.count - 1]
+            let angle = atan2(current.y - previous.y, current.x - previous.x)
+            var arrow = Path()
+            arrow.move(to: current)
+            arrow.addLine(to: CGPoint(x: current.x - 6, y: current.y - 4))
+            arrow.addLine(to: CGPoint(x: current.x - 3, y: current.y))
+            arrow.addLine(to: CGPoint(x: current.x - 6, y: current.y + 4))
+            arrow.closeSubpath()
+            context.translateBy(x: current.x, y: current.y)
+            context.rotate(by: .radians(angle))
+            context.translateBy(x: -current.x, y: -current.y)
+            context.fill(arrow, with: .color(color))
+        }
     }
 }
 
