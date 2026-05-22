@@ -24,11 +24,6 @@ struct SidebarView: View {
             StatusCard().padding(10)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .overlay(alignment: .trailing) {
-            Rectangle()
-                .fill(Color.primary.opacity(0.08))
-                .frame(width: 1)
-        }
     }
 
     private func sectionLabel(_ text: String) -> some View {
@@ -66,7 +61,7 @@ struct SidebarView: View {
             .padding(.vertical, 7)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(page == p ? Color.mgAccent : Color.clear,
-                        in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        in: RoundedRectangle(cornerRadius: 6, style: .continuous))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
