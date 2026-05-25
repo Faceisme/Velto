@@ -13,6 +13,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var isListenerRunning = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        configureMainMenu()
+
         if inputSubsystemEnabled {
             configureInputSubsystem()
         } else {
@@ -27,6 +29,61 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
 
         configureStatusItem()
+    }
+
+    /// `.accessory` 应用默认没有主菜单 → ⌘W / ⌘Q / 文本编辑快捷键全部失效。
+    /// 这里挂上一份最小主菜单,只为让 key equivalent 路由生效;菜单本身在
+    /// 菜单栏不可见(accessory 策略决定),用户感知到的就是"快捷键能用了"。
+    private func configureMainMenu() {
+        let mainMenu = NSMenu()
+        let appName = ProcessInfo.processInfo.processName
+
+        // App 菜单
+        let appMenuItem = NSMenuItem()
+        let appMenu = NSMenu()
+        appMenu.addItem(
+            NSMenuItem(
+                title: "关于 \(appName)",
+                action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)),
+                keyEquivalent: ""
+            )
+        )
+        appMenu.addItem(.separator())
+        appMenu.addItem(
+            NSMenuItem(title: "隐藏 \(appName)", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+        )
+        appMenu.addItem(.separator())
+        appMenu.addItem(
+            NSMenuItem(title: "退出 \(appName)", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        )
+        appMenuItem.submenu = appMenu
+        mainMenu.addItem(appMenuItem)
+
+        // 文件 — ⌘W 关闭窗口
+        let fileMenuItem = NSMenuItem()
+        let fileMenu = NSMenu(title: "文件")
+        fileMenu.addItem(
+            NSMenuItem(title: "关闭窗口", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        )
+        fileMenuItem.submenu = fileMenu
+        mainMenu.addItem(fileMenuItem)
+
+        // 编辑 — 让 TextField 里的剪切/拷贝/粘贴/全选/撤销正常工作
+        let editMenuItem = NSMenuItem()
+        let editMenu = NSMenu(title: "编辑")
+        editMenu.addItem(NSMenuItem(title: "撤销", action: Selector(("undo:")), keyEquivalent: "z"))
+        let redoItem = NSMenuItem(title: "重做", action: Selector(("redo:")), keyEquivalent: "z")
+        redoItem.keyEquivalentModifierMask = [.command, .shift]
+        editMenu.addItem(redoItem)
+        editMenu.addItem(.separator())
+        editMenu.addItem(NSMenuItem(title: "剪切", action: #selector(NSText.cut(_:)), keyEquivalent: "x"))
+        editMenu.addItem(NSMenuItem(title: "拷贝", action: #selector(NSText.copy(_:)), keyEquivalent: "c"))
+        editMenu.addItem(NSMenuItem(title: "粘贴", action: #selector(NSText.paste(_:)), keyEquivalent: "v"))
+        editMenu.addItem(NSMenuItem(title: "全选", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a"))
+        editMenuItem.submenu = editMenu
+        mainMenu.addItem(editMenuItem)
+
+        NSApp.mainMenu = mainMenu
     }
 
     private func configureInputSubsystem() {
@@ -148,6 +205,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             window.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
             window.titlebarAppearsTransparent = true
             window.titleVisibility = .hidden
+            // 关闭后不要被 AppKit 释放,这样 ⌘W / 红点关闭后还能再次打开同一窗口。
+            window.isReleasedWhenClosed = false
             window.setContentSize(NSSize(width: 1180, height: 760))
             window.minSize = NSSize(width: 1100, height: 720)
             window.center()
