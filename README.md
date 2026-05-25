@@ -105,20 +105,34 @@ Resources/
   Info.plist
   VibeGestures.icns
 Sources/MouseGesture/
+  main.swift
   AppDelegate.swift
+  AppQuirks.swift
+  ContentZoomController.swift
+  DisplayCoordinateConverter.swift
   EventTapManager.swift
+  GestureEngine.swift
   GestureRecognizer.swift
-  GestureCaptureView.swift
-  GestureOverlayController.swift
   GestureTargetController.swift
+  GestureOverlayController.swift
+  GestureCaptureView.swift
   LoginItemManager.swift
   Models.swift
+  ModifierFormatter.swift
   PermissionManager.swift
-  SettingsWindowController.swift
-  ShortcutRecorderView.swift
   ShortcutSynthesizer.swift
+  WindowDragController.swift
+  WindowShortcutController.swift
+  # 设置窗口 UI (v2)
+  DesignSystem.swift
+  Components.swift
+  GestureTrailView.swift
+  RecorderViews.swift
+  SettingsRootView.swift
+  SidebarView.swift
+  GesturesPage.swift
   WindowManagementPage.swift
-  main.swift
+  GeneralSettingsPage.swift
 scripts/
   build-app.sh
 ```
@@ -126,12 +140,13 @@ scripts/
 核心模块：
 
 - `EventTapManager`：监听右键手势、窗口移动/缩放修饰键、滚轮缩放修饰键，并调度对应动作。
+- `GestureEngine`：手势状态机，跟踪一次右键 stroke 的开始/结束并交给 `GestureRecognizer`。
 - `GestureRecognizer`：根据录入样本识别鼠标手势。
 - `GestureTargetController`：定位鼠标下方窗口或活动窗口，并向目标应用发送快捷键。
 - `ShortcutSynthesizer`：合成并发送快捷键事件。
 - `GestureOverlayController`：绘制可选的手势轨迹反馈。
-- `WindowManagementPage`：管理窗口移动、缩放、最大化和滚轮缩放设置。
-- `SettingsWindowController`：管理设置窗口生命周期。
+- `WindowDragController` / `WindowShortcutController` / `ContentZoomController`：分别负责按修饰键拖动窗口、最大化快捷键、滚轮缩放。
+- 设置窗口：`SettingsRootView` + `SidebarView` + `GesturesPage` / `WindowManagementPage` / `GeneralSettingsPage`，共享 `DesignSystem.swift` 里的设计 token 和 `Components.swift`、`GestureTrailView.swift`、`RecorderViews.swift` 里的视觉组件。
 
 ## 注意事项
 

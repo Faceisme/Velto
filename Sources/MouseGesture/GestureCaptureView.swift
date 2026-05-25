@@ -1,51 +1,33 @@
 import AppKit
 import Foundation
+import SwiftUI
 
+/// Transparent NSView that captures a single left-button mouse stroke and
+/// reports the points to its host. The view draws nothing chrome-related —
+/// the surrounding `GesturePreviewCard` provides the background, dotted grid,
+/// and rendering of already-saved samples. While the user is drawing we paint
+/// just the live stroke on top in the accent color, so they can see the path
+/// take shape; when they release we emit the points and clear the in-progress
+/// stroke.
 final class GestureCaptureView: NSView {
     var onStrokeFinished: (([CGPoint]) -> Void)?
 
-    private var savedTemplates: [[CGPoint]] = [] {
-        didSet {
-            needsDisplay = true
-        }
-    }
-
     private var points: [CGPoint] = [] {
-        didSet {
-            invalidateForPointChange(from: oldValue, to: points)
-        }
+        didSet { invalidateForPointChange(from: oldValue, to: points) }
     }
 
-    override var acceptsFirstResponder: Bool {
-        true
-    }
-
-    override var isFlipped: Bool {
-        true
-    }
+    override var acceptsFirstResponder: Bool { true }
+    override var isFlipped: Bool { true }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
-        layer?.cornerRadius = 8
-        layer?.borderWidth = 1
-        layer?.borderColor = NSColor.separatorColor.cgColor
-        layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
+        // 完全透明 — 让 SwiftUI 层(GesturePreviewCard)负责所有装饰。
+        layer?.backgroundColor = NSColor.clear.cgColor
     }
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
-    }
-
-    func clear() {
-        points = []
-    }
-
-    func showTemplates(_ templates: [[StrokePoint]]) {
-        savedTemplates = templates.map { template in
-            template.map(\.cgPoint)
-        }
-        points = []
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -59,8 +41,10 @@ final class GestureCaptureView: NSView {
 
     override func mouseUp(with event: NSEvent) {
         points.append(convert(event.locationInWindow, from: nil))
-        if points.count >= 2 {
-            onStrokeFinished?(points)
+        let finished = points
+        points = []
+        if finished.count >= 2 {
+            onStrokeFinished?(finished)
         }
     }
 
@@ -85,103 +69,28 @@ final class GestureCaptureView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
-
-        let paragraph = NSMutableParagraphStyle()
-        paragraph.alignment = .center
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 13),
-            .foregroundColor: NSColor.secondaryLabelColor,
-            .paragraphStyle: paragraph
-        ]
-        if points.isEmpty {
-            if savedTemplates.isEmpty {
-                "在这里画一个手势样本".draw(
-                    in: bounds.insetBy(dx: 16, dy: bounds.height / 2 - 10),
-                    withAttributes: attributes
-                )
-            } else {
-                drawSavedTemplates()
-            }
-            return
-        }
-
-        "松开鼠标保存这个样本".draw(
-            in: bounds.insetBy(dx: 16, dy: bounds.height / 2 - 10),
-            withAttributes: attributes
-        )
-
-        drawPath(points, color: .systemTeal, lineWidth: 4, normalizeToBounds: false)
-    }
-
-    private func drawSavedTemplates() {
-        for (index, template) in savedTemplates.enumerated() where template.count >= 2 {
-            let isLast = index == savedTemplates.count - 1
-            drawPath(
-                template,
-                color: isLast ? .systemTeal : .tertiaryLabelColor,
-                lineWidth: isLast ? 4 : 2,
-                normalizeToBounds: true
-            )
-        }
-    }
-
-    private func drawPath(
-        _ rawPoints: [CGPoint],
-        color: NSColor,
-        lineWidth: CGFloat,
-        normalizeToBounds: Bool
-    ) {
-        let drawablePoints = normalizeToBounds ? normalized(rawPoints) : rawPoints
-        guard drawablePoints.count >= 2 else {
-            return
-        }
+        guard points.count >= 2 else { return }
 
         let path = NSBezierPath()
-        path.move(to: drawablePoints[0])
-        for point in drawablePoints.dropFirst() {
-            path.line(to: point)
-        }
+        path.move(to: points[0])
+        for point in points.dropFirst() { path.line(to: point) }
 
-        color.setStroke()
-        path.lineWidth = lineWidth
+        NSColor.systemBlue.setStroke()
+        path.lineWidth = 4
         path.lineCapStyle = .round
         path.lineJoinStyle = .round
         path.stroke()
     }
+}
 
-    private func normalized(_ rawPoints: [CGPoint]) -> [CGPoint] {
-        guard rawPoints.count >= 2 else {
-            return rawPoints
-        }
+// MARK: - SwiftUI bridge
 
-        var minX = rawPoints[0].x
-        var maxX = rawPoints[0].x
-        var minY = rawPoints[0].y
-        var maxY = rawPoints[0].y
+struct GestureCaptureRepresentable: NSViewRepresentable {
+    var onStrokeFinished: ([CGPoint]) -> Void
 
-        for point in rawPoints.dropFirst() {
-            minX = min(minX, point.x)
-            maxX = max(maxX, point.x)
-            minY = min(minY, point.y)
-            maxY = max(maxY, point.y)
-        }
+    func makeNSView(context: Context) -> GestureCaptureView { GestureCaptureView() }
 
-        let width = max(maxX - minX, 1)
-        let height = max(maxY - minY, 1)
-        let drawRect = bounds.insetBy(dx: 34, dy: 34)
-        let scale = min(drawRect.width / width, drawRect.height / height)
-        let scaledWidth = width * scale
-        let scaledHeight = height * scale
-        let origin = CGPoint(
-            x: drawRect.minX + (drawRect.width - scaledWidth) / 2,
-            y: drawRect.minY + (drawRect.height - scaledHeight) / 2
-        )
-
-        return rawPoints.map { point in
-            CGPoint(
-                x: origin.x + (point.x - minX) * scale,
-                y: origin.y + (point.y - minY) * scale
-            )
-        }
+    func updateNSView(_ view: GestureCaptureView, context: Context) {
+        view.onStrokeFinished = onStrokeFinished
     }
 }

@@ -398,25 +398,18 @@ private struct GestureDetailPanel: View {
     // 大白卡片:画布 + 撤销/清空 + 提示
     private var captureCard: some View {
         VStack(alignment: .leading, spacing: 14) {
-            ZStack {
-                GesturePreviewCard(
-                    templates: gesture.templates,
-                    sampleCount: gesture.templates.count,
-                    height: 220
-                )
-                // 实际录制:把现有 GestureCaptureRepresentable 透明覆盖在上面
-                GestureCaptureRepresentable(
-                    templates: [],   // 不让 AppKit 视图再画一遍,避免重叠
-                    onStrokeFinished: { points in
-                        updateDraft { $0.templates.append(points.map(StrokePoint.init)) }
-                    }
-                )
-                .frame(height: 220)
-                .opacity(0.001)      // 不显示其内容,只透传事件
-                .allowsHitTesting(true)
+            // GesturePreviewCard 提供网格 / 已保存样本 / 玻璃药丸 / 提示;
+            // GestureCaptureRepresentable 是透明 NSView,只负责截获鼠标事件并
+            // 实时画出正在录制的笔迹。
+            GesturePreviewCard(
+                templates: gesture.templates,
+                sampleCount: gesture.templates.count,
+                height: 220
+            ) {
+                GestureCaptureRepresentable { points in
+                    updateDraft { $0.templates.append(points.map(StrokePoint.init)) }
+                }
             }
-            .frame(height: 220)
-            .clipShape(RoundedRectangle(cornerRadius: MGRadius.cardSm, style: .continuous))
 
             HStack(spacing: 8) {
                 Button("撤销上一个") {

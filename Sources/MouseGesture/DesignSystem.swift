@@ -26,32 +26,11 @@ extension Color {
     static let mgHair       = Color(red: 15/255, green: 30/255, blue: 60/255).opacity(0.06)
     static let mgHairStrong = Color(red: 15/255, green: 30/255, blue: 60/255).opacity(0.10)
 
-    // Aliases kept for backward compatibility with files we didn't rewrite
-    static let mgBorder       = mgHair
-    static let mgBorderStrong = mgHairStrong
-
-    // Gradient helpers
-    static var mgAccentGradient: LinearGradient {
-        LinearGradient(colors: [.mgAccent, .mgAccentEnd],
-                       startPoint: .topLeading, endPoint: .bottomTrailing)
-    }
-
+    // Gradient helper for the primary blue button.
     static var mgPrimaryButtonGradient: LinearGradient {
         LinearGradient(colors: [.mgAccent, .mgAccentDeep],
                        startPoint: .top, endPoint: .bottom)
     }
-}
-
-// MARK: - Spacing (4 / 6 / 8 / 10 / 12 / 14 / 16 / 20 / 22 / 28)
-
-enum MGSpacing {
-    static let xs: CGFloat = 4
-    static let sm: CGFloat = 6
-    static let md: CGFloat = 8
-    static let lg: CGFloat = 10
-    static let xl: CGFloat = 12
-    static let xxl: CGFloat = 16
-    static let xxxl: CGFloat = 22
 }
 
 // MARK: - Radius (concentric)
@@ -81,12 +60,6 @@ extension Font {
     static let mgSubLabel  = Font.system(size: 11.5, weight: .semibold) // 11.5/600
     static let mgMeta      = Font.system(size: 11.5, weight: .regular)  // 11.5/400
     static let mgTag       = Font.system(size: 11, weight: .bold)       // 11/700 大写英文 tag
-
-    // Legacy aliases (used by AppDelegate menu / status etc.)
-    static let mgTitleL      = mgPageTitle
-    static let mgBodyStrong  = mgLabelStrong
-    static let mgCaption     = mgButtonSm
-    static let mgLabelTiny   = mgSubLabel
 }
 
 // MARK: - Section / group label
