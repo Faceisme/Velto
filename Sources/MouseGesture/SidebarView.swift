@@ -1,85 +1,144 @@
 import SwiftUI
 
+// MARK: - SidebarView (v2)
+//
+// 220px wide. 背景 #ECECEE.
+//  - 两个分组:"功能" / "偏好"
+//  - SidebarItem: 圆角 8 / 内 7×10 / 选中 #0A84FF 白字 / badge 22% 白透明底
+//  - 底部贴住一张 StatusCard
+
 struct SidebarView: View {
     @Binding var page: MGPage?
     private let store = GestureStore.shared
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            sectionLabel("功能")
-                .padding(.horizontal, 16)
-                .padding(.top, 16)
-                .padding(.bottom, 6)
-            navRow(.gestures, badge: store.gestures.count)
-            navRow(.window)
+            // 顶部留出标题栏空间(transparent titlebar)
+            Spacer().frame(height: 40)
 
-            sectionLabel("偏好")
-                .padding(.horizontal, 16)
-                .padding(.top, 18)
-                .padding(.bottom, 6)
-            navRow(.general)
+            SidebarGroup(title: "功能") {
+                SidebarItem(
+                    icon: MGPage.gestures.icon,
+                    label: MGPage.gestures.label,
+                    badge: store.gestures.count,
+                    active: page == .gestures
+                ) { page = .gestures }
+
+                SidebarItem(
+                    icon: MGPage.window.icon,
+                    label: MGPage.window.label,
+                    badge: nil,
+                    active: page == .window
+                ) { page = .window }
+            }
+
+            Spacer().frame(height: 14)
+
+            SidebarGroup(title: "偏好") {
+                SidebarItem(
+                    icon: MGPage.general.icon,
+                    label: MGPage.general.label,
+                    badge: nil,
+                    active: page == .general
+                ) { page = .general }
+            }
 
             Spacer()
 
-            StatusCard().padding(10)
+            StatusCard()
         }
+        .padding(.horizontal, 12)
+        .padding(.bottom, 12)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(Color.mgSidebar)
     }
+}
 
-    private func sectionLabel(_ text: String) -> some View {
-        Text(text)
-            .font(.system(size: 11, weight: .semibold))
-            .foregroundStyle(.tertiary)
-            .textCase(.uppercase)
-            .tracking(0.6)
+// MARK: - SidebarGroup
+
+private struct SidebarGroup<Content: View>: View {
+    let title: String
+    @ViewBuilder var content: () -> Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(title)
+                .font(.mgSubLabel)
+                .foregroundStyle(Color.mgText3)
+                .padding(.horizontal, 10)
+                .padding(.top, 8)
+                .padding(.bottom, 6)
+            content()
+        }
     }
+}
 
-    @ViewBuilder
-    private func navRow(_ p: MGPage, badge: Int? = nil) -> some View {
-        Button {
-            page = p
-        } label: {
+// MARK: - SidebarItem
+
+private struct SidebarItem: View {
+    let icon: String
+    let label: String
+    let badge: Int?
+    let active: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
             HStack(spacing: 10) {
-                Image(systemName: p.icon)
+                Image(systemName: icon)
                     .font(.system(size: 13, weight: .medium))
-                    .frame(width: 18, alignment: .center)
-                    .foregroundStyle(page == p ? .white : Color.mgText2)
-                Text(p.label)
-                    .font(.system(size: 13, weight: page == p ? .semibold : .regular))
-                    .foregroundStyle(page == p ? .white : Color.mgText1)
-                Spacer()
-                if let b = badge, b > 0 {
-                    Text("\(b)")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(page == p ? Color.mgAccent : .secondary)
-                        .padding(.horizontal, 6)
+                    .frame(width: 16, height: 16)
+                    .foregroundStyle(active ? Color.white : Color.mgText2)
+
+                Text(label)
+                    .font(.system(size: 13, weight: active ? .semibold : .medium))
+                    .foregroundStyle(active ? Color.white : Color.mgText1)
+
+                Spacer(minLength: 0)
+
+                if let badge, badge > 0 {
+                    Text("\(badge)")
+                        .font(.system(size: 11, weight: .semibold))
+                        .monospacedDigit()
+                        .foregroundStyle(active ? Color.white : Color.mgText2)
+                        .padding(.horizontal, 7)
                         .padding(.vertical, 1)
-                        .background(page == p ? Color.white.opacity(0.86) : Color.primary.opacity(0.08), in: Capsule())
+                        .background(
+                            Capsule()
+                                .fill(active
+                                      ? Color.white.opacity(0.22)
+                                      : Color(red: 15/255, green: 30/255, blue: 60/255).opacity(0.06))
+                        )
                 }
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 7)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(page == p ? Color.mgAccent : Color.clear,
-                        in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(active ? Color.mgAccent : .clear)
+            )
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 1)
+        .animation(.easeOut(duration: 0.12), value: active)
     }
 }
 
-// MARK: - Status card (bottom of sidebar)
+// MARK: - StatusCard (sidebar 底部)
+//
+// 白底卡 + 圆角 10
+// 顶行:"手势监听" + 绿色 Toggle
+// 底行:6pt 绿色圆点(带 3pt 光晕) + 11.5pt 灰色 "正在监听右键手势"
 
 struct StatusCard: View {
     private let store = GestureStore.shared
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
                 Text("手势监听")
-                    .font(.mgBodyStrong)
+                    .font(.mgLabelStrong)
                     .foregroundStyle(Color.mgText1)
                 Spacer()
                 Toggle("", isOn: Binding(
@@ -88,20 +147,38 @@ struct StatusCard: View {
                 ))
                 .labelsHidden()
                 .toggleStyle(.switch)
-                .controlSize(.small)
-                .tint(.green)
+                .controlSize(.mini)
+                .tint(.mgGreen)
             }
 
             HStack(spacing: 6) {
-                Circle()
-                    .fill(store.preferences.gesturesEnabled ? Color.green : Color.orange)
-                    .frame(width: 6, height: 6)
+                ZStack {
+                    Circle()
+                        .fill(store.preferences.gesturesEnabled
+                              ? Color.mgGreen.opacity(0.18)
+                              : Color.orange.opacity(0.18))
+                        .frame(width: 12, height: 12)
+                    Circle()
+                        .fill(store.preferences.gesturesEnabled ? Color.mgGreen : .orange)
+                        .frame(width: 6, height: 6)
+                }
                 Text(store.preferences.gesturesEnabled ? "正在监听右键手势" : "已暂停")
                     .font(.mgMeta)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color.mgText2)
             }
         }
-        .padding(12)
-        .liquidGlassCard(radius: MGRadius.card)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.mgCard)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(Color.mgHair, lineWidth: 0.5)
+        )
+        .shadow(color: Color(red: 15/255, green: 30/255, blue: 60/255).opacity(0.04),
+                radius: 1, x: 0, y: 1)
     }
 }

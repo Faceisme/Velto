@@ -2,8 +2,17 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
+// MARK: - GeneralSettingsPage (v2)
+//
+// PageHeader + 3 个 GroupCard:
+//   行为:4 个 Toggle 行
+//   识别参数:Stepper + Segmented
+//   数据与权限:说明文字 + 导入/导出/打开权限设置 按钮
+// 这一页没有 BottomToolbar(所有变更直接落到 store)。
+
 struct GeneralSettingsPage: View {
     private let store = GestureStore.shared
+
     @State private var showingImportConfirm = false
     @State private var showingError = false
     @State private var errorMessage = ""
@@ -12,126 +21,171 @@ struct GeneralSettingsPage: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                // Header
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("GENERAL")
-                        .font(.mgLabelTiny)
-                        .tracking(0.5)
-                        .foregroundStyle(.tertiary)
-                    Text("通用设置")
-                        .font(.mgTitleL)
-                    Text("调整应用行为、识别参数和数据备份。")
-                        .font(.mgBody)
-                        .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 22) {
+                PageHeader(
+                    tag: "General",
+                    title: "通用设置",
+                    subtitle: "调整应用行为、识别参数和数据备份。"
+                )
+
+                // 行为
+                VStack(alignment: .leading, spacing: 0) {
+                    MGSectionLabel(text: "行为")
+                    GroupCard {
+                        VStack(spacing: 0) {
+                            GroupRow(label: "启用手势监听") {
+                                Toggle("", isOn: Binding(
+                                    get: { store.preferences.gesturesEnabled },
+                                    set: { v in store.updatePreferences { $0.gesturesEnabled = v } }
+                                ))
+                                .labelsHidden()
+                                .toggleStyle(.switch)
+                                .controlSize(.small)
+                                .tint(.mgAccent)
+                            }
+                            GroupRow(label: "开机自动启动", showDivider: true) {
+                                Toggle("", isOn: Binding(
+                                    get: { LoginItemManager.isEnabled },
+                                    set: { enabled in
+                                        do {
+                                            try LoginItemManager.setEnabled(enabled)
+                                            statusMessage = "已更新开机启动设置。"
+                                        } catch {
+                                            statusMessage = "无法更新开机启动:\(error.localizedDescription)"
+                                        }
+                                    }
+                                ))
+                                .labelsHidden()
+                                .toggleStyle(.switch)
+                                .controlSize(.small)
+                                .tint(.mgAccent)
+                            }
+                            GroupRow(label: "显示菜单栏图标", showDivider: true) {
+                                Toggle("", isOn: Binding(
+                                    get: { store.preferences.showMenuBarIcon },
+                                    set: { v in store.updatePreferences { $0.showMenuBarIcon = v } }
+                                ))
+                                .labelsHidden()
+                                .toggleStyle(.switch)
+                                .controlSize(.small)
+                                .tint(.mgAccent)
+                            }
+                            GroupRow(label: "绘制时显示轨迹", showDivider: true) {
+                                Toggle("", isOn: Binding(
+                                    get: { store.preferences.showTrail },
+                                    set: { v in store.updatePreferences { $0.showTrail = v } }
+                                ))
+                                .labelsHidden()
+                                .toggleStyle(.switch)
+                                .controlSize(.small)
+                                .tint(.mgAccent)
+                            }
+                        }
+                    }
                 }
 
-                // Section: behavior
-                section(title: "行为") {
-                    settingsRow("启用手势监听") {
-                        Toggle("", isOn: Binding(
-                            get: { store.preferences.gesturesEnabled },
-                            set: { v in store.updatePreferences { $0.gesturesEnabled = v } }
-                        ))
-                        .labelsHidden()
-                        .toggleStyle(.switch)
-                        .controlSize(.small)
-                    }
-                    settingsRow("开机自动启动") {
-                        Toggle("", isOn: Binding(
-                            get: { LoginItemManager.isEnabled },
-                            set: { enabled in
-                                do {
-                                    try LoginItemManager.setEnabled(enabled)
-                                    statusMessage = "已更新开机启动设置。"
-                                } catch {
-                                    statusMessage = "无法更新开机启动：\(error.localizedDescription)"
+                // 识别参数
+                VStack(alignment: .leading, spacing: 0) {
+                    MGSectionLabel(text: "识别参数")
+                    GroupCard {
+                        VStack(spacing: 0) {
+                            GroupRow(
+                                label: "手势超时时长",
+                                sub: "超时未完成的手势会被丢弃"
+                            ) {
+                                HStack(spacing: 6) {
+                                    MGStepperField(
+                                        value: Binding(
+                                            get: { store.preferences.gestureTimeoutSeconds },
+                                            set: { v in store.updatePreferences { $0.gestureTimeoutSeconds = min(max(v, 0.5), 10) } }
+                                        ),
+                                        range: 0.5...10.0,
+                                        step: 0.5
+                                    )
+                                    Text("秒")
+                                        .font(.mgBody)
+                                        .foregroundStyle(Color.mgText2)
                                 }
                             }
-                        ))
-                        .labelsHidden()
-                        .toggleStyle(.switch)
-                        .controlSize(.small)
-                    }
-                    settingsRow("显示菜单栏图标") {
-                        Toggle("", isOn: Binding(
-                            get: { store.preferences.showMenuBarIcon },
-                            set: { v in store.updatePreferences { $0.showMenuBarIcon = v } }
-                        ))
-                        .labelsHidden()
-                        .toggleStyle(.switch)
-                        .controlSize(.small)
-                    }
-                    settingsRow("绘制时显示轨迹") {
-                        Toggle("", isOn: Binding(
-                            get: { store.preferences.showTrail },
-                            set: { v in store.updatePreferences { $0.showTrail = v } }
-                        ))
-                        .labelsHidden()
-                        .toggleStyle(.switch)
-                        .controlSize(.small)
+                            GroupRow(label: "手势作用目标", showDivider: true) {
+                                Picker("", selection: Binding(
+                                    get: { store.preferences.gestureTargetPolicy },
+                                    set: { v in store.updatePreferences { $0.gestureTargetPolicy = v } }
+                                )) {
+                                    Text("鼠标指针下方").tag(GestureTargetPolicy.windowUnderPointer)
+                                    Text("活动窗口").tag(GestureTargetPolicy.activeWindow)
+                                }
+                                .pickerStyle(.segmented)
+                                .labelsHidden()
+                                .frame(width: 220)
+                            }
+                        }
                     }
                 }
 
-                // Section: recognition
-                section(title: "识别参数") {
-                    settingsRow("手势超时时长") {
-                        HStack(spacing: 4) {
-                            TextField("", value: Binding(
-                                get: { store.preferences.gestureTimeoutSeconds },
-                                set: { v in store.updatePreferences { $0.gestureTimeoutSeconds = min(max(v, 0.5), 10) } }
-                            ), format: .number)
-                            .frame(width: 52)
-                            .multilineTextAlignment(.trailing)
-                            Stepper("", value: Binding(
-                                get: { store.preferences.gestureTimeoutSeconds },
-                                set: { v in store.updatePreferences { $0.gestureTimeoutSeconds = min(max(v, 0.5), 10) } }
-                            ), in: 0.5...10, step: 0.5)
-                            .labelsHidden()
-                            Text("秒").foregroundStyle(.secondary)
+                // 数据与权限
+                VStack(alignment: .leading, spacing: 0) {
+                    MGSectionLabel(text: "数据与权限")
+                    GroupCard(padding: EdgeInsets(top: 16, leading: 20, bottom: 16, trailing: 20)) {
+                        VStack(alignment: .leading, spacing: 14) {
+                            Text("配置文件会包含鼠标手势、窗口管理快捷键、识别参数和菜单栏偏好;开机自动启动属于系统登录项,不随配置导入导出。")
+                                .font(.system(size: 12.5))
+                                .lineSpacing(3)
+                                .foregroundStyle(Color.mgText2)
+                                .fixedSize(horizontal: false, vertical: true)
+
+                            HStack(spacing: 8) {
+                                Button {
+                                    importConfiguration()
+                                } label: {
+                                    HStack(spacing: 5) {
+                                        Image(systemName: "square.and.arrow.down")
+                                            .font(.system(size: 11, weight: .medium))
+                                        Text("导入配置")
+                                    }
+                                }
+                                .buttonStyle(MGSecondaryButtonStyle())
+
+                                Button {
+                                    exportConfiguration()
+                                } label: {
+                                    HStack(spacing: 5) {
+                                        Image(systemName: "square.and.arrow.up")
+                                            .font(.system(size: 11, weight: .medium))
+                                        Text("导出配置")
+                                    }
+                                }
+                                .buttonStyle(MGSecondaryButtonStyle())
+
+                                Spacer()
+
+                                Button {
+                                    PermissionManager.openPrivacySettings()
+                                } label: {
+                                    HStack(spacing: 4) {
+                                        Text("打开权限设置")
+                                        Image(systemName: "arrow.up.right")
+                                            .font(.system(size: 10, weight: .bold))
+                                    }
+                                }
+                                .buttonStyle(MGSecondaryButtonStyle(foreground: .mgAccent))
+                            }
+
+                            if !statusMessage.isEmpty {
+                                Text(statusMessage)
+                                    .font(.mgMeta)
+                                    .foregroundStyle(Color.mgText2)
+                            }
                         }
-                    }
-                    settingsRow("手势作用目标") {
-                        Picker("", selection: Binding(
-                            get: { store.preferences.gestureTargetPolicy },
-                            set: { v in store.updatePreferences { $0.gestureTargetPolicy = v } }
-                        )) {
-                            Text("鼠标指针下方").tag(GestureTargetPolicy.windowUnderPointer)
-                            Text("活动窗口").tag(GestureTargetPolicy.activeWindow)
-                        }
-                        .pickerStyle(.segmented)
-                        .frame(width: 240)
-                        .labelsHidden()
-                    }
-                }
-
-                // Section: data & permissions
-                section(title: "数据与权限") {
-                    Text("配置文件会包含鼠标手势、窗口管理快捷键、识别参数和菜单栏偏好；开机自动启动属于系统登录项，不随配置导入导出。")
-                        .font(.mgMeta)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(.vertical, 4)
-
-                    HStack(spacing: 10) {
-                        Button("导入配置") { importConfiguration() }.buttonStyle(.glass)
-                        Button("导出配置") { exportConfiguration() }.buttonStyle(.glass)
-                        Spacer()
-                        Button("打开权限设置") { PermissionManager.openPrivacySettings() }.buttonStyle(.glass)
-                    }
-                    .padding(.vertical, 4)
-
-                    if !statusMessage.isEmpty {
-                        Text(statusMessage)
-                            .font(.mgMeta)
-                            .foregroundStyle(.secondary)
                     }
                 }
             }
-            .padding(24)
-            .frame(maxWidth: 760, alignment: .leading)
+            .padding(.horizontal, 32)
+            .padding(.top, 28)
+            .padding(.bottom, 32)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .confirmationDialog(
             "导入配置会覆盖当前全部配置",
             isPresented: $showingImportConfirm,
@@ -147,34 +201,6 @@ struct GeneralSettingsPage: View {
         } message: {
             Text(errorMessage)
         }
-    }
-
-    // MARK: - Reusable section + row
-
-    @ViewBuilder
-    private func section<Content: View>(title: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            MGSectionLabel(text: title)
-            VStack(spacing: 0) {
-                content()
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 6)
-            .glassSurface(.thin, radius: MGRadius.card)
-        }
-    }
-
-    @ViewBuilder
-    private func settingsRow<Trailing: View>(
-        _ label: String,
-        @ViewBuilder trailing: () -> Trailing
-    ) -> some View {
-        HStack {
-            Text(label).font(.mgBody)
-            Spacer()
-            trailing()
-        }
-        .padding(.vertical, 10)
     }
 
     // MARK: - Import/export
@@ -196,7 +222,7 @@ struct GeneralSettingsPage: View {
         do {
             let data = try Data(contentsOf: url)
             try store.importBackupData(data)
-            statusMessage = "配置已导入：\(url.lastPathComponent)"
+            statusMessage = "配置已导入:\(url.lastPathComponent)"
         } catch {
             errorMessage = error.localizedDescription
             showingError = true
@@ -213,7 +239,7 @@ struct GeneralSettingsPage: View {
         do {
             let data = try store.exportBackupData()
             try data.write(to: url, options: .atomic)
-            statusMessage = "配置已导出：\(url.lastPathComponent)"
+            statusMessage = "配置已导出:\(url.lastPathComponent)"
         } catch {
             errorMessage = error.localizedDescription
             showingError = true

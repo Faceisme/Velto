@@ -1,8 +1,15 @@
 import AppKit
 import SwiftUI
 
+// MARK: - GesturesPage (v2)
+//
+// 三段布局:
+//   [SidebarView 220]  |  [List column 340 #FFF]  |  [Detail #FFF + bottom toolbar]
+// 这里只负责 List + Detail + BottomBar 三块,Sidebar 由 SettingsRootView 提供。
+
 struct GesturesPage: View {
     private let store = GestureStore.shared
+
     @State private var draftGestures: [GestureCommand] = []
     @State private var didLoad = false
     @State private var selectedID: UUID?
@@ -11,7 +18,7 @@ struct GesturesPage: View {
     @State private var statusMessage = ""
     @State private var hasUnsavedChanges = false
 
-    var selected: GestureCommand? {
+    private var selected: GestureCommand? {
         guard let id = selectedID else { return nil }
         return draftGestures.first { $0.id == id }
     }
@@ -21,135 +28,124 @@ struct GesturesPage: View {
             HStack(spacing: 0) {
                 listColumn
                     .frame(width: 340)
-                    .clipped()
-                Divider()
+                    .background(Color.mgCard)
+                    .overlay(
+                        // 0.5px 右分隔线
+                        Rectangle()
+                            .fill(Color.mgHair)
+                            .frame(width: 0.5),
+                        alignment: .trailing
+                    )
+
                 detailColumn
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color.mgCard)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            Divider()
-            saveBar
+
+            BottomToolbar(
+                hasUnsavedChanges: hasUnsavedChanges,
+                statusMessage: statusMessage,
+                onDiscard: { reloadFromStore() },
+                onSave: saveChanges
+            )
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear(perform: loadDraftIfNeeded)
-        .onReceive(NotificationCenter.default.publisher(for: .gestureStoreDidChange)) { notification in
-            guard notification.object as? GestureStore === store else { return }
-            switch notification.gestureStoreChangeReason {
+        .onReceive(NotificationCenter.default.publisher(for: .gestureStoreDidChange)) { note in
+            guard note.object as? GestureStore === store else { return }
+            switch note.gestureStoreChangeReason {
             case .gestures, .backupImport:
                 reloadFromStore(silent: true)
-            default:
-                break
+            default: break
             }
         }
     }
 
-    // MARK: - List column
+    // MARK: List column
 
     private var listColumn: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("鼠标手势").font(.mgTitleM)
+        VStack(alignment: .leading, spacing: 0) {
+            // Header
+            HStack(spacing: 8) {
+                Text("鼠标手势")
+                    .font(.mgTitleM)
+                    .foregroundStyle(Color.mgText1)
+
                 Text("\(draftGestures.count)")
                     .font(.system(size: 11, weight: .semibold))
-                    .padding(.horizontal, 7)
+                    .monospacedDigit()
+                    .foregroundStyle(Color.mgAccent)
+                    .padding(.horizontal, 8)
                     .padding(.vertical, 1)
-                    .background(.quaternary, in: Capsule())
-                Spacer()
-                Button(action: addGesture) {
-                    Label("新建", systemImage: "plus")
-                }
-                .buttonStyle(.glassProminent)
-            }
-            .padding(.horizontal, 18)
-            .padding(.top, 16)
+                    .background(Capsule().fill(Color.mgAccent.opacity(0.10)))
 
-            ScrollView {
-                LazyVStack(spacing: 0) {
-                    ForEach(draftGestures) { gesture in
-                        let isSelected = gesture.id == selectedID
-                        GestureRow(gesture: gesture, selected: isSelected)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 3)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(
-                                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                                    .fill(isSelected ? Color.mgAccent : Color.clear)
-                            )
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                selectGesture(gesture.id)
-                            }
+                Spacer()
+
+                Button(action: addGesture) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "plus")
+                            .font(.system(size: 10, weight: .bold))
+                        Text("新建")
                     }
                 }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 4)
+                .buttonStyle(MGPrimaryButtonStyle(height: 26, hPad: 12, font: .mgButtonSm))
             }
-            .transaction { transaction in
-                transaction.animation = nil
+            .padding(.horizontal, 18)
+            .padding(.top, 18)
+            .padding(.bottom, 12)
+
+            // List
+            ScrollView {
+                LazyVStack(spacing: 2) {
+                    ForEach(draftGestures) { g in
+                        GestureListItem(
+                            gesture: g,
+                            selected: g.id == selectedID,
+                            onClick: { selectGesture(g.id) }
+                        )
+                    }
+                }
+                .padding(.horizontal, 8)
+                .padding(.bottom, 8)
             }
         }
     }
 
-    // MARK: - Detail column
+    // MARK: Detail column
 
     @ViewBuilder
     private var detailColumn: some View {
         if let g = selected {
             ScrollView {
-                DetailPanel(
+                GestureDetailPanel(
                     gesture: g,
                     editingName: $editingName,
                     shortcut: $shortcut,
                     onDelete: deleteSelectedGesture,
                     updateDraft: updateSelectedDraft
                 )
-                .padding(24)
+                .padding(.horizontal, 28)
+                .padding(.top, 22)
+                .padding(.bottom, 28)
             }
         } else {
-            ContentUnavailableView(
-                "未选择手势",
-                systemImage: "hand.draw",
-                description: Text("从左侧选择一个手势进行编辑")
-            )
+            VStack(spacing: 10) {
+                Image(systemName: "hand.draw")
+                    .font(.system(size: 28, weight: .regular))
+                    .foregroundStyle(Color.mgText3)
+                Text("未选择手势")
+                    .font(.mgTitleM)
+                    .foregroundStyle(Color.mgText1)
+                Text("从左侧选择一个手势进行编辑")
+                    .font(.mgBody)
+                    .foregroundStyle(Color.mgText2)
+            }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
-    // MARK: - Save bar
-
-    private var saveBar: some View {
-        HStack(spacing: 10) {
-            if hasUnsavedChanges {
-                HStack(spacing: 6) {
-                    Circle()
-                        .fill(Color.orange)
-                        .frame(width: 6, height: 6)
-                    Text("有未保存的更改")
-                        .font(.mgMeta)
-                        .foregroundStyle(.secondary)
-                }
-            } else if !statusMessage.isEmpty {
-                Text(statusMessage)
-                    .font(.mgMeta)
-                    .foregroundStyle(.secondary)
-            }
-
-            Spacer()
-
-            Button("丢弃更改") { reloadFromStore() }
-                .buttonStyle(.glass)
-                .disabled(!hasUnsavedChanges)
-
-            Button("保存", action: saveChanges)
-                .buttonStyle(.glassProminent)
-                .disabled(!hasUnsavedChanges)
-                .keyboardShortcut(.return)
-        }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 10)
-    }
-
-    // MARK: - Helpers
+    // MARK: Lifecycle helpers
 
     private func loadDraftIfNeeded() {
         guard !didLoad else { return }
@@ -201,7 +197,6 @@ struct GesturesPage: View {
     }
 
     private func saveChanges() {
-        // Normalize names (trim, fallback to "未命名")
         let normalized = draftGestures.map { g -> GestureCommand in
             var n = g
             let trimmed = n.name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -240,103 +235,97 @@ struct GesturesPage: View {
     }
 }
 
-// MARK: - Gesture row
+// MARK: - GestureListItem
+//
+// 高 ~56pt 横向布局:
+//  - 40×40 缩略图盒子
+//  - 标签 + N 样本(子文字)
+//  - Kbd chips
+// 选中:整行 #0A84FF, 全部文字白色, 缩略图盒子 + Kbd 切到 inverted 配色
 
-private struct GestureRow: View {
+private struct GestureListItem: View {
     let gesture: GestureCommand
     let selected: Bool
+    let onClick: () -> Void
 
     var body: some View {
-        HStack(spacing: 10) {
-            // Trail thumbnail
-            ZStack {
-                RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .fill(selected ? Color.white.opacity(0.22) : Color.white.opacity(0.6))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 9, style: .continuous)
-                            .strokeBorder(
-                                selected ? Color.white.opacity(0.30) : Color.mgBorder,
-                                lineWidth: 1
-                            )
-                    )
-                    .frame(width: 36, height: 36)
+        Button(action: onClick) {
+            HStack(spacing: 12) {
+                // Thumbnail 盒子
+                ZStack {
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .fill(selected
+                              ? Color.white.opacity(0.15)
+                              : Color.mgCardAlt)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                                .strokeBorder(selected
+                                              ? Color.white.opacity(0.20)
+                                              : Color.mgHair,
+                                              lineWidth: 0.5)
+                        )
 
-                if let template = gesture.templates.last {
-                    GestureThumbnailView(
-                        template: template,
-                        color: selected ? .white.opacity(0.92) : Color.mgText2
-                    )
-                    .frame(width: 26, height: 26)
+                    if !gesture.templates.isEmpty {
+                        GestureTrailView(
+                            templates: [gesture.templates.last!],  // 缩略图只渲染最后一个样本,免噪
+                            stroke: 3,
+                            colors: selected
+                                ? [.white, Color.mgAccentSoft]
+                                : [.mgAccent, .mgAccentEnd],
+                            showStartDot: true,
+                            showEndArrow: true,
+                            maxGhosts: 0
+                        )
+                        .padding(6)
+                    } else {
+                        Image(systemName: "questionmark")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(selected
+                                             ? Color.white.opacity(0.75)
+                                             : Color.mgText3)
+                    }
+                }
+                .frame(width: 40, height: 40)
+
+                // Label + sub
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(gesture.name)
+                        .font(.mgLabelStrong)
+                        .foregroundStyle(selected ? .white : Color.mgText1)
+                        .lineLimit(1)
+                    Text("\(gesture.templates.count) 样本")
+                        .font(.mgMeta)
+                        .foregroundStyle(selected ? Color.white.opacity(0.78) : Color.mgText2)
+                }
+
+                Spacer(minLength: 4)
+
+                // Kbd chips
+                if let sc = gesture.shortcut {
+                    Kbd(keys: sc.kbdKeys, size: .sm, inverted: selected)
                 } else {
-                    Image(systemName: "questionmark")
-                        .font(.system(size: 11))
-                        .foregroundStyle(selected ? Color.white.opacity(0.75) : Color.mgText3)
+                    Text("未设置")
+                        .font(.mgMeta)
+                        .foregroundStyle(selected ? Color.white.opacity(0.7) : Color.mgText3)
                 }
             }
-
-            VStack(alignment: .leading, spacing: 1) {
-                Text(gesture.name)
-                    .font(.mgBodyStrong)
-                    .foregroundStyle(selected ? Color.white : Color.mgText1)
-                Text("\(gesture.templates.count) 样本")
-                    .font(.mgMeta)
-                    .foregroundStyle(selected ? Color.white.opacity(0.72) : Color.mgText3)
-            }
-
-            Spacer()
-
-            if let sc = gesture.shortcut {
-                Kbd(keys: sc.kbdKeys, size: .sm, muted: true, inverted: selected)
-            } else {
-                Text("未设置")
-                    .font(.mgMeta)
-                    .foregroundStyle(selected ? Color.white.opacity(0.72) : Color.mgText3)
-            }
-        }
-        .padding(.vertical, 4)
-    }
-}
-
-private struct GestureThumbnailView: View {
-    let template: [StrokePoint]
-    let color: Color
-
-    var body: some View {
-        Canvas { context, size in
-            let points = GestureTrailView.normalize(template, into: size, padding: 3)
-            guard points.count >= 2 else { return }
-
-            var path = Path()
-            path.move(to: points[0])
-            for point in points.dropFirst() {
-                path.addLine(to: point)
-            }
-            context.stroke(
-                path,
-                with: .color(color),
-                style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(selected ? Color.mgAccent : .clear)
             )
-
-            let previous = points[points.count - 2]
-            let current = points[points.count - 1]
-            let angle = atan2(current.y - previous.y, current.x - previous.x)
-            var arrow = Path()
-            arrow.move(to: current)
-            arrow.addLine(to: CGPoint(x: current.x - 6, y: current.y - 4))
-            arrow.addLine(to: CGPoint(x: current.x - 3, y: current.y))
-            arrow.addLine(to: CGPoint(x: current.x - 6, y: current.y + 4))
-            arrow.closeSubpath()
-            context.translateBy(x: current.x, y: current.y)
-            context.rotate(by: .radians(angle))
-            context.translateBy(x: -current.x, y: -current.y)
-            context.fill(arrow, with: .color(color))
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
+        .animation(.easeOut(duration: 0.12), value: selected)
     }
 }
 
-// MARK: - Detail panel
+// MARK: - Detail panel (right column)
 
-private struct DetailPanel: View {
+private struct GestureDetailPanel: View {
     let gesture: GestureCommand
     @Binding var editingName: String
     @Binding var shortcut: Shortcut?
@@ -344,79 +333,192 @@ private struct DetailPanel: View {
     var updateDraft: ((inout GestureCommand) -> Void) -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            // Header
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(alignment: .center) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("GESTURE")
-                            .font(.mgLabelTiny)
-                            .tracking(0.5)
-                            .foregroundStyle(.tertiary)
-                        TextField("手势名称", text: $editingName)
-                            .textFieldStyle(.plain)
-                            .font(.mgTitleL)
-                            .onChange(of: editingName) { _, newVal in
-                                updateDraft { $0.name = newVal }
-                            }
+        VStack(alignment: .leading, spacing: 0) {
+            headerRow
+                .padding(.bottom, 22)
+
+            // 录制新样本 section
+            Text("录制新样本")
+                .font(.mgLabelStrong)
+                .foregroundStyle(Color.mgText2)
+                .padding(.bottom, 8)
+
+            captureCard
+                .padding(.bottom, 20)
+
+            // 触发的快捷键 section
+            Text("触发的快捷键")
+                .font(.mgLabelStrong)
+                .foregroundStyle(Color.mgText2)
+                .padding(.bottom, 8)
+
+            shortcutCard
+        }
+    }
+
+    // Header: GESTURE tag + 大标题 + Kbd + 删除
+    private var headerRow: some View {
+        HStack(alignment: .top, spacing: 12) {
+            VStack(alignment: .leading, spacing: 0) {
+                Text("GESTURE")
+                    .font(.mgTag)
+                    .tracking(1.5)
+                    .foregroundStyle(Color.mgText3)
+                    .padding(.bottom, 6)
+
+                TextField("手势名称", text: $editingName)
+                    .textFieldStyle(.plain)
+                    .font(.mgPageTitle)
+                    .tracking(-0.4)
+                    .foregroundStyle(Color.mgText1)
+                    .onChange(of: editingName) { _, newVal in
+                        updateDraft { $0.name = newVal }
                     }
-                    Spacer(minLength: 12)
-                    if let sc = gesture.shortcut {
-                        Kbd(keys: sc.kbdKeys, size: .md)
-                    }
-                    Button(role: .destructive, action: onDelete) {
-                        Label("删除", systemImage: "trash")
-                    }
-                    .buttonStyle(.glass)
-                }
             }
 
-            // Capture canvas (paint a new sample)
-            VStack(alignment: .leading, spacing: 8) {
-                MGSectionLabel(text: "录制新样本")
-                GestureCaptureRepresentable(
+            Spacer(minLength: 12)
+
+            if let sc = gesture.shortcut {
+                Kbd(keys: sc.kbdKeys, size: .lg)
+                    .padding(.top, 4)
+            }
+
+            Button(action: onDelete) {
+                HStack(spacing: 5) {
+                    Image(systemName: "trash")
+                        .font(.system(size: 12, weight: .medium))
+                    Text("删除")
+                }
+            }
+            .buttonStyle(MGDestructiveButtonStyle())
+            .padding(.top, 4)
+        }
+    }
+
+    // 大白卡片:画布 + 撤销/清空 + 提示
+    private var captureCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            ZStack {
+                GesturePreviewCard(
                     templates: gesture.templates,
+                    sampleCount: gesture.templates.count,
+                    height: 220
+                )
+                // 实际录制:把现有 GestureCaptureRepresentable 透明覆盖在上面
+                GestureCaptureRepresentable(
+                    templates: [],   // 不让 AppKit 视图再画一遍,避免重叠
                     onStrokeFinished: { points in
                         updateDraft { $0.templates.append(points.map(StrokePoint.init)) }
                     }
                 )
-                .frame(height: 200)
-                .clipShape(RoundedRectangle(cornerRadius: MGRadius.card, style: .continuous))
-
-                HStack(spacing: 8) {
-                    Button("撤销上一个") {
-                        updateDraft { g in
-                            if !g.templates.isEmpty { g.templates.removeLast() }
-                        }
-                    }
-                    .buttonStyle(.glass)
-                    .disabled(gesture.templates.isEmpty)
-
-                    Button("清空样本") {
-                        updateDraft { $0.templates.removeAll() }
-                    }
-                    .buttonStyle(.glass)
-                    .disabled(gesture.templates.isEmpty)
-                    Spacer()
-                }
-                Text("建议同一手势录制 2–3 个样本，识别会更稳。")
-                    .font(.mgMeta)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .fixedSize(horizontal: false, vertical: true)
+                .frame(height: 220)
+                .opacity(0.001)      // 不显示其内容,只透传事件
+                .allowsHitTesting(true)
             }
+            .frame(height: 220)
+            .clipShape(RoundedRectangle(cornerRadius: MGRadius.cardSm, style: .continuous))
 
-            // Shortcut
-            VStack(alignment: .leading, spacing: 8) {
-                MGSectionLabel(text: "触发的快捷键")
-                ShortcutRecorderRepresentable(shortcut: $shortcut)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 44)
-                    .clipShape(RoundedRectangle(cornerRadius: MGRadius.control, style: .continuous))
-                    .onChange(of: shortcut) { _, newVal in
-                        updateDraft { $0.shortcut = newVal }
+            HStack(spacing: 8) {
+                Button("撤销上一个") {
+                    updateDraft { g in
+                        if !g.templates.isEmpty { g.templates.removeLast() }
                     }
+                }
+                .buttonStyle(MGSecondaryButtonStyle())
+                .disabled(gesture.templates.isEmpty)
+
+                Button("清空样本") {
+                    updateDraft { $0.templates.removeAll() }
+                }
+                .buttonStyle(MGSecondaryButtonStyle())
+                .disabled(gesture.templates.isEmpty)
+
+                Spacer()
+
+                Text("建议同一手势录制 2–3 个样本,识别会更稳。")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Color.mgText2)
             }
         }
+        .padding(16)
+        .mgCard(radius: MGRadius.cardLg)
+    }
+
+    // 触发的快捷键卡片
+    private var shortcutCard: some View {
+        HStack(spacing: 12) {
+            ShortcutRecorderField(
+                shortcut: $shortcut,
+                placeholder: "未设置 · 点击录制",
+                fillWidth: true
+            )
+            .onChange(of: shortcut) { _, newVal in
+                updateDraft { $0.shortcut = newVal }
+            }
+
+            if shortcut != nil {
+                Button("清除") {
+                    shortcut = nil
+                }
+                .buttonStyle(MGPlainButtonStyle())
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 12)
+        .frame(minHeight: 56)
+        .mgCard(radius: MGRadius.card)
+    }
+}
+
+// MARK: - BottomToolbar
+//
+// 52pt 高, 白底, 顶部 0.5px 分隔线, 右对齐:
+//   [丢弃更改]  [保存]
+
+struct BottomToolbar: View {
+    let hasUnsavedChanges: Bool
+    let statusMessage: String
+    let onDiscard: () -> Void
+    let onSave: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Rectangle()
+                .fill(Color.mgHair)
+                .frame(height: 0.5)
+
+            HStack(spacing: 10) {
+                if hasUnsavedChanges {
+                    HStack(spacing: 6) {
+                        Circle()
+                            .fill(Color.orange)
+                            .frame(width: 6, height: 6)
+                        Text("有未保存的更改")
+                            .font(.mgMeta)
+                            .foregroundStyle(Color.mgText2)
+                    }
+                } else if !statusMessage.isEmpty {
+                    Text(statusMessage)
+                        .font(.mgMeta)
+                        .foregroundStyle(Color.mgText2)
+                }
+
+                Spacer()
+
+                Button("丢弃更改", action: onDiscard)
+                    .buttonStyle(MGPlainButtonStyle())
+                    .disabled(!hasUnsavedChanges)
+                    .opacity(hasUnsavedChanges ? 1 : 0.45)
+
+                Button("保存", action: onSave)
+                    .buttonStyle(MGPrimaryButtonStyle())
+                    .keyboardShortcut(.return)
+                    .disabled(!hasUnsavedChanges)
+                    .opacity(hasUnsavedChanges ? 1 : 0.55)
+            }
+            .padding(.horizontal, 20)
+            .frame(height: 52)
+        }
+        .background(Color.mgCard)
     }
 }
