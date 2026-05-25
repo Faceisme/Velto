@@ -15,11 +15,11 @@ final class WindowDragController {
         case resize
     }
 
-    private enum ResizeEdge {
-        case min
-        case max
-    }
-
+    /// Resize anchors at the window's top-left corner; the right and bottom
+    /// edges follow cursor motion. This keeps cursor direction mapped 1:1 to
+    /// size change (left = shrink width, right = grow width, etc.) even when
+    /// the window is pinned against a screen edge — picking the "nearest edge"
+    /// would get stuck the moment that edge hits the screen boundary.
     private struct DragSession {
         var mode: DragMode
         var window: AXUIElement
@@ -28,8 +28,6 @@ final class WindowDragController {
         var usesConvertedDragPointer: Bool
         var startFrame: CGRect
         var screenFrame: CGRect
-        var horizontalEdge: ResizeEdge
-        var verticalEdge: ResizeEdge
     }
 
     private struct PendingUpdate {
@@ -164,7 +162,7 @@ final class WindowDragController {
 
         case .resize:
             let nextFrame = resizedFrame(from: session, dx: dx, dy: dy)
-            return GestureTargetController.setFrame(nextFrame, ofWindow: session.window)
+            return GestureTargetController.setSize(nextFrame.size, ofWindow: session.window)
         }
     }
 
@@ -184,9 +182,7 @@ final class WindowDragController {
             startDragPointer: dragPoint.point,
             usesConvertedDragPointer: dragPoint.usesConvertedPointer,
             startFrame: frame,
-            screenFrame: screenFrame,
-            horizontalEdge: dragPoint.point.x < frame.midX ? .min : .max,
-            verticalEdge: dragPoint.point.y < frame.midY ? .min : .max
+            screenFrame: screenFrame
         )
     }
 
@@ -222,73 +218,26 @@ final class WindowDragController {
 
     private func resizedFrame(from session: DragSession, dx: CGFloat, dy: CGFloat) -> CGRect {
         let minimumSize = CGSize(width: 160, height: 120)
-        var origin = session.startFrame.origin
-        var size = session.startFrame.size
+        let origin = session.startFrame.origin
+        var size = CGSize(
+            width: max(minimumSize.width, session.startFrame.width + dx),
+            height: max(minimumSize.height, session.startFrame.height + dy)
+        )
 
-        switch session.horizontalEdge {
-        case .min:
-            let newWidth = session.startFrame.width - dx
-            if newWidth < minimumSize.width {
-                origin.x = session.startFrame.maxX - minimumSize.width
-                size.width = minimumSize.width
-            } else {
-                origin.x = session.startFrame.origin.x + dx
-                size.width = newWidth
-            }
-        case .max:
-            size.width = max(minimumSize.width, session.startFrame.width + dx)
-        }
-
-        switch session.verticalEdge {
-        case .min:
-            let newHeight = session.startFrame.height - dy
-            if newHeight < minimumSize.height {
-                origin.y = session.startFrame.maxY - minimumSize.height
-                size.height = minimumSize.height
-            } else {
-                origin.y = session.startFrame.origin.y + dy
-                size.height = newHeight
-            }
-        case .max:
-            size.height = max(minimumSize.height, session.startFrame.height + dy)
-        }
-
-        var result = CGRect(origin: origin, size: size)
         let screenFrame = session.screenFrame
-        guard !screenFrame.isEmpty else { return result }
-
-        if result.maxX > screenFrame.maxX {
-            if session.horizontalEdge == .max {
-                result.size.width = screenFrame.maxX - result.origin.x
-            } else {
-                result.origin.x = screenFrame.maxX - result.size.width
+        if !screenFrame.isEmpty {
+            let maxWidth = screenFrame.maxX - origin.x
+            if maxWidth > 0 {
+                size.width = min(size.width, maxWidth)
+            }
+            let maxHeight = screenFrame.maxY - origin.y
+            if maxHeight > 0 {
+                size.height = min(size.height, maxHeight)
             }
         }
 
-        if result.minX < screenFrame.minX {
-            result.origin.x = screenFrame.minX
-            if session.horizontalEdge == .min {
-                result.size.width = session.startFrame.maxX - screenFrame.minX
-            }
-        }
-
-        if result.maxY > screenFrame.maxY {
-            if session.verticalEdge == .max {
-                result.size.height = screenFrame.maxY - result.origin.y
-            } else {
-                result.origin.y = screenFrame.maxY - result.size.height
-            }
-        }
-
-        if result.minY < screenFrame.minY {
-            result.origin.y = screenFrame.minY
-            if session.verticalEdge == .min {
-                result.size.height = session.startFrame.maxY - screenFrame.minY
-            }
-        }
-
-        result.size.width = max(result.size.width, minimumSize.width)
-        result.size.height = max(result.size.height, minimumSize.height)
-        return result
+        size.width = max(size.width, minimumSize.width)
+        size.height = max(size.height, minimumSize.height)
+        return CGRect(origin: origin, size: size)
     }
 }
