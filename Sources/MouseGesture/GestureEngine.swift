@@ -48,6 +48,7 @@ final class GestureEngine {
     private var displayPoints: [CGPoint] = []
     private var startPoint = CGPoint.zero
     private var lastPoint = CGPoint.zero
+    private var lastArmedLocation = CGPoint.zero
 
     private var frontmostApplicationAtGestureStart: NSRunningApplication?
     private var lastFrontmostApplication: NSRunningApplication?
@@ -59,6 +60,7 @@ final class GestureEngine {
 
     private let movementThreshold: CGFloat = 10
     private let minimumRecordedPointDistance: CGFloat = 2
+    private let timeoutRearmDistance: CGFloat = 8
     private let maximumGesturePointCount = 512
     private let safetyTimeout: TimeInterval = 8
     private let syntheticMarker: Int64 = 0x4D474C524550
@@ -128,6 +130,7 @@ final class GestureEngine {
             if distance(startPoint, location) >= movementThreshold {
                 state = .gesturing
                 armGestureTimeoutTimer()
+                lastArmedLocation = location
                 if preferences.showTrail {
                     overlay.show(points: displayPoints)
                 }
@@ -137,7 +140,18 @@ final class GestureEngine {
         case .gesturing:
             let appended = appendPoint(location)
             if appended {
-                armGestureTimeoutTimer()
+                // Only re-arm the cancellation countdown when the cursor has
+                // actually moved a meaningful distance since the last arm.
+                // appendPoint accepts 2px movement (so the trail/recognizer
+                // get smooth data), but using that same threshold to reset the
+                // timeout means mouse tremor, micro-drift, or rapid phantom
+                // drag events (macOS sometimes emits these while we're
+                // suppressing right-mouse events) keep the countdown alive
+                // forever — the user-configured timeout never elapses.
+                if distance(lastArmedLocation, location) >= timeoutRearmDistance {
+                    armGestureTimeoutTimer()
+                    lastArmedLocation = location
+                }
                 if preferences.showTrail {
                     overlay.update(points: displayPoints)
                 }
@@ -184,7 +198,16 @@ final class GestureEngine {
             return true
 
         case .cleanupAwaitingUp:
+            let releasePoint = lastPoint
             resetTracking()
+            // The user may have moved more after cancellation while still
+            // holding the button — same logical/visual divergence accrues
+            // during the cleanup window. Resync once on release so the next
+            // mouseMoved event doesn't snap the cursor to a stale position.
+            if releasePoint != .zero {
+                CGWarpMouseCursorPosition(releasePoint)
+                CGAssociateMouseAndMouseCursorPosition(1)
+            }
             return true
 
         case .idle:
@@ -345,10 +368,13 @@ final class GestureEngine {
         frontmostApplicationAtGestureStart = nil
         startPoint = .zero
         lastPoint = .zero
+        lastArmedLocation = .zero
         overlay.hide()
     }
 
     private func cancelGestureAndWaitForRightMouseUp() {
+        let endPosition = lastPoint
+
         state = .cleanupAwaitingUp
         gestureTimeoutTimer.map { CFRunLoopTimerSetNextFireDate($0, .greatestFiniteMagnitude) }
         safetyTimer.map { CFRunLoopTimerSetNextFireDate($0, .greatestFiniteMagnitude) }
@@ -356,6 +382,19 @@ final class GestureEngine {
         displayPoints = []
         frontmostApplicationAtGestureStart = nil
         overlay.hide()
+
+        // While we were suppressing rightMouseDragged at the HID tap, the
+        // on-screen cursor (driven by HID) tracked the actual mouse but the
+        // window server's logical cursor position stayed at startPoint. The
+        // instant we let the gesture lifecycle wind down, the window server
+        // snaps the visual cursor back to that stale logical position. Warp
+        // the logical position to where the user actually is so the snap
+        // doesn't happen. Re-associate immediately to avoid the cursor freeze
+        // that CGWarpMouseCursorPosition can otherwise introduce.
+        if endPosition != .zero, endPosition != startPoint {
+            CGWarpMouseCursorPosition(endPosition)
+            CGAssociateMouseAndMouseCursorPosition(1)
+        }
     }
 
     // MARK: - Timers (CFRunLoopTimer on tap runloop)
@@ -422,7 +461,11 @@ final class GestureEngine {
         let timer = CFRunLoopTimerCreate(
             kCFAllocatorDefault,
             fireDate,
-            0,   // non-repeating; we use SetNextFireDate to re-arm
+            // CFRunLoopTimerCreate auto-invalidates the timer on first fire if
+            // interval is 0, after which CFRunLoopTimerSetNextFireDate becomes
+            // a no-op. Use a large interval so the timer stays valid; we drive
+            // all firing manually via SetNextFireDate.
+            .greatestFiniteMagnitude,
             0,
             0,
             { _, info in
