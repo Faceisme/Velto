@@ -4,8 +4,9 @@ import Foundation
 
 enum DisplayCoordinateConverter {
     private static let cacheLock = NSLock()
-    private static var cachedDesktopFrame: NSRect?
-    private static var didRegisterScreenObserver = false
+    // 通过 cacheLock 串行化,可以安全跨线程访问。
+    nonisolated(unsafe) private static var cachedDesktopFrame: NSRect?
+    nonisolated(unsafe) private static var didRegisterScreenObserver = false
 
     static func eventLocationToOverlayPoint(_ point: CGPoint) -> CGPoint {
         eventLocationToTopLeftDesktopPoint(point)

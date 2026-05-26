@@ -2,20 +2,25 @@ import AppKit
 import Foundation
 import QuartzCore
 
+/// `@MainActor` — 持有 NSWindow / NSView,所有 UI mutation 都在主线程。
+/// 公共入口 (`show` / `update` / `hide`) 标 `nonisolated` 以便从 tap 线程
+/// (`GestureEngine`) 直接调用;内部用 `Task { @MainActor }` 把工作 hop 回主线程。
+@MainActor
 final class GestureOverlayController {
     private var window: NSWindow?
     private let drawingView = GestureOverlayView()
     private let renderLock = NSLock()
     private let minimumRenderInterval: CFTimeInterval = 1.0 / 120.0
 
-    private var pendingPoints: [CGPoint]?
-    private var hasPendingRender = false
-    private var renderGeneration = 0
+    // 由 renderLock 保护,既可能在 tap 线程入口被读写,也可能在 main 上读写。
+    nonisolated(unsafe) private var pendingPoints: [CGPoint]?
+    nonisolated(unsafe) private var hasPendingRender = false
+    nonisolated(unsafe) private var renderGeneration = 0
     private var lastRenderTime: CFTimeInterval = 0
 
-    func show(points: [CGPoint]) {
+    nonisolated func show(points: [CGPoint]) {
         let generation = resetPendingRender()
-        DispatchQueue.main.async { [weak self] in
+        Task { @MainActor [weak self] in
             guard let self, self.isCurrentGeneration(generation) else { return }
             self.ensureWindow()
             self.drawingView.points = points
@@ -24,19 +29,19 @@ final class GestureOverlayController {
         }
     }
 
-    func update(points: [CGPoint]) {
+    nonisolated func update(points: [CGPoint]) {
         guard let generation = enqueueRender(points: points) else {
             return
         }
 
-        DispatchQueue.main.async { [weak self] in
+        Task { @MainActor [weak self] in
             self?.schedulePendingRender(generation: generation)
         }
     }
 
-    func hide() {
+    nonisolated func hide() {
         let generation = resetPendingRender()
-        DispatchQueue.main.async { [weak self] in
+        Task { @MainActor [weak self] in
             guard let self, self.isCurrentGeneration(generation) else { return }
             self.drawingView.points = []
             self.window?.orderOut(nil)
@@ -70,7 +75,7 @@ final class GestureOverlayController {
         self.window = window
     }
 
-    private func enqueueRender(points: [CGPoint]) -> Int? {
+    nonisolated private func enqueueRender(points: [CGPoint]) -> Int? {
         renderLock.lock()
         defer { renderLock.unlock() }
 
@@ -83,7 +88,7 @@ final class GestureOverlayController {
         return renderGeneration
     }
 
-    private func resetPendingRender() -> Int {
+    nonisolated private func resetPendingRender() -> Int {
         renderLock.lock()
         defer { renderLock.unlock() }
 
@@ -93,7 +98,7 @@ final class GestureOverlayController {
         return renderGeneration
     }
 
-    private func isCurrentGeneration(_ generation: Int) -> Bool {
+    nonisolated private func isCurrentGeneration(_ generation: Int) -> Bool {
         renderLock.lock()
         defer { renderLock.unlock() }
 
@@ -108,7 +113,9 @@ final class GestureOverlayController {
         let now = CACurrentMediaTime()
         let delay = max(0, minimumRenderInterval - (now - lastRenderTime))
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-            self?.flushPendingRender(generation: generation)
+            MainActor.assumeIsolated {
+                self?.flushPendingRender(generation: generation)
+            }
         }
     }
 
@@ -122,7 +129,7 @@ final class GestureOverlayController {
         lastRenderTime = CACurrentMediaTime()
     }
 
-    private func consumePendingPoints(generation: Int) -> [CGPoint]? {
+    nonisolated private func consumePendingPoints(generation: Int) -> [CGPoint]? {
         renderLock.lock()
         defer { renderLock.unlock() }
 

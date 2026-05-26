@@ -8,11 +8,17 @@ import QuartzCore
 ///
 /// All `handle*` entry points run on the event-tap thread; dispatch happens on
 /// a global QoS-userInteractive queue so we never block the tap callback.
-final class ContentZoomController {
+/// `@unchecked Sendable`:tap 线程入口 (`handleScrollWheel` / `handleFlagsChanged`)
+/// + 私有 `queue` 上的 mutation。所有跨线程读写都用 `lock` 或者通过 `queue`
+/// 串行化。
+final class ContentZoomController: @unchecked Sendable {
     private let lock = NSLock()
     private var zoomModifierFlags: UInt64 = 0
 
-    // Following state is touched only from `queue`.
+    // 下列字段**只能**从 `queue` 上读写——可见性靠串行 dispatch 保证,没有锁。
+    // 所有 mutation 路径 (handleScrollWheel/append/flushStep/resetSmoothing) 都
+    // 必须先 `queue.async`,否则会出现数据竞争。类整体 `@unchecked Sendable`,
+    // Swift 6 不替我们检查这些字段。
     private let queue = DispatchQueue(label: "com.face.mygestures.content-zoom", qos: .userInteractive)
     private var accumulator: Double = 0
     private var stepScheduled = false

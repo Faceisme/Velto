@@ -1,3 +1,4 @@
+import CoreGraphics
 import SwiftUI
 
 // MARK: - Kbd (keyboard cap chip)
@@ -76,28 +77,38 @@ struct Kbd: View {
 // MARK: - Shortcut → Kbd keys conversion
 
 extension Shortcut {
-    /// displayName format: modifiers (⌃⌥⇧⌘Fn) concatenated with the key name.
-    /// The key name can be multi-character ("PageDown", "Home", "F1", etc.).
+    /// 修饰键直接从结构化的 `modifierFlags` 渲染,键名后缀仍取自 `displayName`
+    /// (键名依赖键盘布局/本地化,`ShortcutFormatter` 已在录入时把它写好)。
     var kbdKeys: [String] {
+        let flags = CGEventFlags(rawValue: CGEventFlags.RawValue(modifierFlags))
         var result: [String] = []
+        if flags.contains(.maskControl)     { result.append("⌃") }
+        if flags.contains(.maskAlternate)   { result.append("⌥") }
+        if flags.contains(.maskShift)       { result.append("⇧") }
+        if flags.contains(.maskCommand)     { result.append("⌘") }
+        if flags.contains(.maskSecondaryFn) { result.append("Fn") }
+
+        let keyName = displayNameKeyPortion
+        if !keyName.isEmpty {
+            result.append(keyName)
+        }
+        return result
+    }
+
+    /// 去掉 displayName 前缀里的修饰键符号,只保留键名部分。
+    private var displayNameKeyPortion: String {
         var remaining = Substring(displayName)
         let modifierChars: Set<Character> = ["⌃", "⌥", "⇧", "⌘"]
-
         while let first = remaining.first {
             if modifierChars.contains(first) {
-                result.append(String(first))
                 remaining = remaining.dropFirst()
             } else if remaining.hasPrefix("Fn") {
-                result.append("Fn")
                 remaining = remaining.dropFirst(2)
             } else {
                 break
             }
         }
-        if !remaining.isEmpty {
-            result.append(String(remaining))
-        }
-        return result
+        return String(remaining)
     }
 }
 

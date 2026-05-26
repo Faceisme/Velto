@@ -1,11 +1,18 @@
 import CoreGraphics
 import Foundation
 
-struct GestureMatch {
+struct GestureMatch: Sendable {
     var command: GestureCommand
     var distance: CGFloat
 }
 
+/// 模板归一化 + 最近邻匹配。
+///
+/// `@MainActor`:内部 `cachedVersion` / `cachedTemplates` 没有锁保护,但 Swift 6
+/// 的隔离规则强制所有调用必须在主线程发生 — `GestureEngine.runGesture` 经
+/// `Task { @MainActor }` 进入即可。如果将来要把匹配挪到后台线程,需要给每个
+/// 调用方分配独立 recognizer,或者把缓存换成 actor。
+@MainActor
 final class GestureRecognizer {
     private struct NormalizedTemplate {
         var command: GestureCommand

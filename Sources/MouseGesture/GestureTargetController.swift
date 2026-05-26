@@ -3,7 +3,9 @@ import ApplicationServices
 import CoreGraphics
 import Foundation
 
-struct GestureExecutionTarget {
+/// `@unchecked Sendable`:`AXUIElement` 是 CFType,SDK 没标 Sendable,但本结构
+/// 都是不可变字段,实例创建后只读,跨线程传递没有竞争风险。
+struct GestureExecutionTarget: @unchecked Sendable {
     let policy: GestureTargetPolicy
     let pid: pid_t?
     let restoresOriginalFrontmostApplication: Bool
@@ -109,8 +111,28 @@ enum GestureTargetController {
 
     private static func targetUnderPointer(at point: CGPoint) -> GestureExecutionTarget {
         let candidatePoints = targetLookupPoints(for: point)
+
+        // CGWindowListCopyWindowInfo 是跨进程的全窗口枚举,本次手势内最多取一次,
+        // 各个 fallback 路径复用同一份列表。
+        var cachedWindowList: [[String: Any]]?
+        var didFetchWindowList = false
+        func candidateFromWindowList() -> WindowCandidate? {
+            if !didFetchWindowList {
+                let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+                cachedWindowList = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]]
+                didFetchWindowList = true
+            }
+            guard let list = cachedWindowList else { return nil }
+            for p in candidatePoints {
+                if let candidate = windowCandidate(in: list, at: p) {
+                    return candidate
+                }
+            }
+            return nil
+        }
+
         guard let element = firstElementAtPosition(candidatePoints) else {
-            if let candidate = windowCandidate(atAny: candidatePoints) {
+            if let candidate = candidateFromWindowList() {
                 return target(from: candidate)
             }
 
@@ -118,13 +140,13 @@ enum GestureTargetController {
         }
 
         let window = windowElement(containing: element)
-        if window == nil, let candidate = windowCandidate(atAny: candidatePoints) {
+        if window == nil, let candidate = candidateFromWindowList() {
             return target(from: candidate)
         }
 
         let pid = window.flatMap(processIdentifier(for:)) ?? processIdentifier(for: element)
         guard let pid else {
-            if let candidate = windowCandidate(atAny: candidatePoints) {
+            if let candidate = candidateFromWindowList() {
                 return target(from: candidate)
             }
 
@@ -228,21 +250,6 @@ enum GestureTargetController {
             return nil
         }
         return element
-    }
-
-    private static func windowCandidate(atAny points: [CGPoint]) -> WindowCandidate? {
-        let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
-        guard let windowList = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
-            return nil
-        }
-
-        for point in points {
-            if let candidate = windowCandidate(in: windowList, at: point) {
-                return candidate
-            }
-        }
-
-        return nil
     }
 
     private static func windowCandidate(in windowList: [[String: Any]], at point: CGPoint) -> WindowCandidate? {

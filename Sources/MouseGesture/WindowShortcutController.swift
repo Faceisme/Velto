@@ -4,7 +4,9 @@ import Foundation
 /// Currently handles the single "maximize window under pointer" shortcut, but
 /// kept as its own type so future window-related global shortcuts (move-to-half,
 /// next-screen, etc.) can slot in here without re-bloating EventTapManager.
-final class WindowShortcutController {
+/// `@unchecked Sendable`:`handleKeyDown` 在 tap 线程上,`updateShortcut`
+/// 在主线程上,内部用 `lock` 保护快照。
+final class WindowShortcutController: @unchecked Sendable {
     private let lock = NSLock()
     private var maximizeShortcut: Shortcut?
 

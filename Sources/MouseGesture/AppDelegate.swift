@@ -2,9 +2,9 @@ import AppKit
 import Foundation
 import SwiftUI
 
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let store = GestureStore.shared
-    private let inputSubsystemEnabled = true
     private var eventTapManager: EventTapManager?
     private var statusItem: NSStatusItem?
     private var settingsWindow: NSWindow?
@@ -14,12 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         configureMainMenu()
-
-        if inputSubsystemEnabled {
-            configureInputSubsystem()
-        } else {
-            lastStatus = "输入监听已禁用"
-        }
+        configureInputSubsystem()
 
         NotificationCenter.default.addObserver(
             self,
@@ -91,14 +86,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         eventTapManager = manager
 
         manager.onStatusChange = { [weak self] status in
-            DispatchQueue.main.async {
+            Task { @MainActor in
                 self?.lastStatus = status
                 self?.rebuildStatusMenu()
             }
         }
 
         manager.onGestureMatch = { [weak self] match in
-            DispatchQueue.main.async {
+            Task { @MainActor in
                 if let match {
                     self?.lastGesture = "\(match.command.name) -> \(match.command.shortcut?.displayName ?? "未设置")"
                 } else {
@@ -159,9 +154,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(NSMenuItem(title: "打开手势管理", action: #selector(openSettings), keyEquivalent: ","))
 
-        let enabledItem = NSMenuItem(title: inputSubsystemEnabled ? "启用手势监听" : "启用手势监听（暂不可用）", action: #selector(toggleGesturesEnabled), keyEquivalent: "")
+        let enabledItem = NSMenuItem(title: "启用手势监听", action: #selector(toggleGesturesEnabled), keyEquivalent: "")
         enabledItem.state = store.preferences.gesturesEnabled ? .on : .off
-        enabledItem.isEnabled = inputSubsystemEnabled
         menu.addItem(enabledItem)
 
         let targetItem = NSMenuItem(title: "手势作用目标：\(store.preferences.gestureTargetPolicy.displayName)", action: nil, keyEquivalent: "")
@@ -183,11 +177,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func storeDidChange() {
-        guard inputSubsystemEnabled else {
-            configureStatusItem()
-            return
-        }
-
         if store.preferences.gesturesEnabled && !isListenerRunning {
             startListener()
         } else if !store.preferences.gesturesEnabled && isListenerRunning {
@@ -223,12 +212,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func toggleGesturesEnabled() {
-        guard inputSubsystemEnabled else {
-            lastStatus = "输入监听已禁用"
-            rebuildStatusMenu()
-            return
-        }
-
         store.updatePreferences { preferences in
             preferences.gesturesEnabled.toggle()
         }
@@ -239,11 +222,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func restartListener() {
-        if inputSubsystemEnabled && store.preferences.gesturesEnabled {
-            stopListener()
-            lastStatus = "正在重启监听"
-            startListener()
-        }
+        guard store.preferences.gesturesEnabled else { return }
+        stopListener()
+        lastStatus = "正在重启监听"
+        startListener()
     }
 
     @objc private func quit() {
@@ -251,14 +233,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func startListener() {
-        guard inputSubsystemEnabled else {
-            lastStatus = "输入监听已禁用"
-            rebuildStatusMenu()
-            return
-        }
-        guard !isListenerRunning else {
-            return
-        }
+        guard !isListenerRunning else { return }
         isListenerRunning = eventTapManager?.start() == true
     }
 

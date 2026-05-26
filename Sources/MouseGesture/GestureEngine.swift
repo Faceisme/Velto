@@ -9,7 +9,10 @@ import Foundation
 /// Designed to be driven exclusively from the event-tap runloop thread.
 /// Timers run as `CFRunLoopTimer`s scheduled on that same runloop so we
 /// never have to cross-thread synchronize state during a gesture.
-final class GestureEngine {
+/// `@unchecked Sendable`:实例由 `EventTapManager` 持有并在 tap 线程上独占,
+/// 仅在 `runGesture` 经 `DispatchQueue.main.async` 短暂触及 recognizer 缓存
+/// (那也是单线程序列化的)。
+final class GestureEngine: @unchecked Sendable {
     /// Snapshot of preferences fields the engine actually reads. Decoupled
     /// from `AppPreferences` so the engine doesn't pull in unrelated fields.
     struct PreferencesSnapshot {
@@ -33,11 +36,13 @@ final class GestureEngine {
         case cleanupAwaitingUp
     }
 
-    var onGestureMatch: ((GestureMatch?) -> Void)?
-    var onStatusChange: ((String) -> Void)?
+    var onGestureMatch: (@Sendable (GestureMatch?) -> Void)?
+    var onStatusChange: (@Sendable (String) -> Void)?
 
-    private let recognizer = GestureRecognizer()
-    private let overlay = GestureOverlayController()
+    // `GestureRecognizer` / `GestureOverlayController` 都是 `@MainActor`,不能作为
+    // default value 在 `@unchecked Sendable` 类里求值,统一在 `init` body 里构造。
+    private let recognizer: GestureRecognizer
+    private let overlay: GestureOverlayController
 
     private var preferences: PreferencesSnapshot
     private var gestures: [GestureCommand] = []
@@ -65,11 +70,16 @@ final class GestureEngine {
     private let safetyTimeout: TimeInterval = 8
     private let syntheticMarker: Int64 = 0x4D474C524550
 
+    /// `@MainActor` — 内部要构造 `GestureRecognizer` / `GestureOverlayController`,
+    /// 两者都是 `@MainActor`。调用方 (`EventTapManager.init`) 已经在 main actor 上。
+    @MainActor
     init(preferences: AppPreferences, gestures: [GestureCommand], gesturesVersion: UInt64) {
         self.preferences = PreferencesSnapshot(from: preferences)
         self.gestures = gestures
         self.gesturesVersion = gesturesVersion
         self.lastFrontmostApplication = NSWorkspace.shared.frontmostApplication
+        self.recognizer = GestureRecognizer()
+        self.overlay = GestureOverlayController()
     }
 
     /// Called once on the tap thread right after the runloop is up.
@@ -118,7 +128,11 @@ final class GestureEngine {
         startPoint = location
         lastPoint = location
         points = [location]
-        displayPoints = [DisplayCoordinateConverter.eventLocationToOverlayPoint(location)]
+        // displayPoints 仅在 showTrail 打开时维护,关闭时省掉每次 drag 的坐标换算
+        // 和数组分配。手势进行中切换 showTrail 不会回填本次轨迹(低频边界)。
+        displayPoints = preferences.showTrail
+            ? [DisplayCoordinateConverter.eventLocationToOverlayPoint(location)]
+            : []
         armSafetyTimer()
         return true
     }
@@ -185,7 +199,7 @@ final class GestureEngine {
             let capturedPreferences = preferences
             resetTracking()
 
-            DispatchQueue.main.async { [weak self] in
+            Task { @MainActor [weak self] in
                 self?.runGesture(
                     points: capturedPoints,
                     targetPoint: capturedTargetPoint,
@@ -215,8 +229,12 @@ final class GestureEngine {
         }
     }
 
-    // MARK: - Gesture matching
+    // MARK: - Gesture matching (main actor only)
 
+    /// 匹配 + 执行链路全部在主线程上跑。`recognizer` 是 `@MainActor`,target
+    /// 解析里有可能要查 AX(同步耗时操作),通过 `Task.detached` 跑后台 + Task
+    /// `@MainActor` 回主线程发送快捷键。
+    @MainActor
     private func runGesture(
         points: [CGPoint],
         targetPoint: CGPoint,
@@ -242,6 +260,7 @@ final class GestureEngine {
         }
     }
 
+    @MainActor
     private func resolveTargetAndExecute(
         shortcut: Shortcut,
         targetPoint: CGPoint,
@@ -262,13 +281,14 @@ final class GestureEngine {
             )
 
         case .windowUnderPointer:
-            DispatchQueue.global(qos: .userInteractive).async { [weak self] in
+            // AX 查找可能阻塞,在 detached task 上跑,完成后切回主线程。
+            Task.detached(priority: .userInitiated) { [weak self] in
                 let target = GestureTargetController.executionTarget(
                     at: targetPoint,
                     policy: policy,
                     frontmostApplicationAtGestureStart: nil
                 )
-                DispatchQueue.main.async { [weak self] in
+                await MainActor.run {
                     self?.executeMatchedGesture(
                         shortcut: shortcut,
                         target: target,
@@ -279,6 +299,7 @@ final class GestureEngine {
         }
     }
 
+    @MainActor
     private func executeMatchedGesture(
         shortcut: Shortcut,
         target: GestureExecutionTarget,
@@ -286,8 +307,15 @@ final class GestureEngine {
     ) {
         GestureTargetController.prepareForExecution(target)
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + target.deliveryDelay) {
-            if target.restoresOriginalFrontmostApplication {
+        // 等目标 App 完成激活后再发送快捷键 / 关窗。两段 sleep 都跑在 main actor 上,
+        // 因为 `restoreFrontmostApplication` 走 `NSRunningApplication.activate`
+        // (`@MainActor`)。
+        let delay = target.deliveryDelay
+        let restoresOriginalFrontmostApplication = target.restoresOriginalFrontmostApplication
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(delay))
+
+            if restoresOriginalFrontmostApplication {
                 GestureTargetController.restoreFrontmostApplication(frontmostApplicationAtGestureStart)
             }
 
@@ -297,10 +325,9 @@ final class GestureEngine {
 
             ShortcutSynthesizer.send(shortcut)
 
-            if target.restoresOriginalFrontmostApplication {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
-                    GestureTargetController.restoreFrontmostApplication(frontmostApplicationAtGestureStart)
-                }
+            if restoresOriginalFrontmostApplication {
+                try? await Task.sleep(for: .milliseconds(120))
+                GestureTargetController.restoreFrontmostApplication(frontmostApplicationAtGestureStart)
             }
         }
     }
@@ -336,9 +363,12 @@ final class GestureEngine {
     @discardableResult
     private func appendPoint(_ point: CGPoint) -> Bool {
         lastPoint = point
+        let recordTrail = preferences.showTrail
         guard let previous = points.last else {
             points = [point]
-            displayPoints = [DisplayCoordinateConverter.eventLocationToOverlayPoint(point)]
+            displayPoints = recordTrail
+                ? [DisplayCoordinateConverter.eventLocationToOverlayPoint(point)]
+                : []
             return true
         }
 
@@ -346,13 +376,16 @@ final class GestureEngine {
             return false
         }
 
-        let displayPoint = DisplayCoordinateConverter.eventLocationToOverlayPoint(point)
         if points.count >= maximumGesturePointCount {
             points[points.count - 1] = point
-            displayPoints[displayPoints.count - 1] = displayPoint
+            if recordTrail, !displayPoints.isEmpty {
+                displayPoints[displayPoints.count - 1] = DisplayCoordinateConverter.eventLocationToOverlayPoint(point)
+            }
         } else {
             points.append(point)
-            displayPoints.append(displayPoint)
+            if recordTrail {
+                displayPoints.append(DisplayCoordinateConverter.eventLocationToOverlayPoint(point))
+            }
         }
         return true
     }
@@ -433,10 +466,10 @@ final class GestureEngine {
     private func fireGestureTimeoutTimer() {
         guard state == .gesturing else { return }
         cancelGestureAndWaitForRightMouseUp()
-        DispatchQueue.main.async { [weak self] in
-            self?.onGestureMatch?(nil)
-            self?.onStatusChange?("本次手势超时,已取消")
-        }
+        // callback 是 `@Sendable`,从 tap runloop 直接调用即可,
+        // 调用方 (AppDelegate) 自己把 UI 更新 hop 到 main actor。
+        onGestureMatch?(nil)
+        onStatusChange?("本次手势超时,已取消")
     }
 
     private func makeTimer(fireDate: CFAbsoluteTime, handler: @escaping () -> Void) -> CFRunLoopTimer? {

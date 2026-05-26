@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+@preconcurrency import CoreFoundation
 import CoreGraphics
 import Foundation
 
@@ -21,11 +22,17 @@ private let mouseGestureEventTapCallback: CGEventTapCallBack = { proxy, type, ev
     return manager.handle(proxy: proxy, type: type, event: event)
 }
 
-final class EventTapManager {
-    var onStatusChange: ((String) -> Void)? {
+/// 跨线程协调器:主线程 (lifecycle / preferences observer) ↔ tap 线程
+/// (CGEvent callback)。因为存在主线程拥有的字段 (eventTap/tapRunLoop) 和
+/// tap-thread callback (`handle`) 同时存在,整类标 `@unchecked Sendable`,
+/// 各字段的同步约束写在邻近注释里。
+final class EventTapManager: @unchecked Sendable {
+    /// Status callback. 从 tap 线程或主线程都可能调用,闭包自身需 `@Sendable`,
+    /// 调用方负责把对 UI 状态的修改 hop 回 main actor。
+    var onStatusChange: (@Sendable (String) -> Void)? {
         didSet { gestureEngine.onStatusChange = onStatusChange }
     }
-    var onGestureMatch: ((GestureMatch?) -> Void)? {
+    var onGestureMatch: (@Sendable (GestureMatch?) -> Void)? {
         didSet { gestureEngine.onGestureMatch = onGestureMatch }
     }
 
@@ -38,11 +45,17 @@ final class EventTapManager {
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
     private var tapThread: Thread?
+    /// 写于 tap 线程 (start 里 thread block 起步时),读于主线程 (performOnTapThread,
+    /// stop)。启动期靠 `ready.wait()` 同步可见性;`stop()` 仅在主线程调用,所有
+    /// `performOnTapThread` 调用点也都在主线程,串行化天然成立。类整体标
+    /// `@unchecked Sendable`,Swift 6 不替我们检查这个字段的可见性,如果以后
+    /// 引入从其它线程触发 `performOnTapThread` 的路径,要在这里加锁。
     private var tapRunLoop: CFRunLoop?
 
     private var activationObserver: NSObjectProtocol?
     private var storeObserver: NSObjectProtocol?
 
+    @MainActor
     init(store: GestureStore = .shared) {
         self.store = store
         self.gestureEngine = GestureEngine(
@@ -71,14 +84,17 @@ final class EventTapManager {
             object: store,
             queue: .main
         ) { [weak self] _ in
-            guard let self else { return }
-            let preferences = store.preferences
-            let gestures = store.gestures
-            let version = store.gesturesVersion
-            self.applyPreferenceSnapshots(preferences)
-            self.performOnTapThread { [weak self] in
-                self?.gestureEngine.updatePreferences(preferences)
-                self?.gestureEngine.updateGestures(gestures, version: version)
+            // queue: .main 保证回调在主线程,store 是 @MainActor。
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                let preferences = store.preferences
+                let gestures = store.gestures
+                let version = store.gesturesVersion
+                self.applyPreferenceSnapshots(preferences)
+                self.performOnTapThread { [weak self] in
+                    self?.gestureEngine.updatePreferences(preferences)
+                    self?.gestureEngine.updateGestures(gestures, version: version)
+                }
             }
         }
     }

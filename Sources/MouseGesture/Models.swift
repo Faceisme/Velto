@@ -185,13 +185,19 @@ extension CGEventFlags {
     }
 }
 
+/// 应用级配置 / 手势列表的单例。`@MainActor`:SwiftUI View / AppDelegate /
+/// EventTapManager 的 init 都在主线程上访问;tap 线程要读最新偏好走的是
+/// `EventTapManager` 内的快照副本,从不直接触及这个对象。
+@MainActor
 @Observable
 final class GestureStore {
     static let shared = GestureStore()
 
     private let gesturesKey = "VibeGestures.gestures"
     private let preferencesKey = "VibeGestures.preferences"
-    static let changeReasonUserInfoKey = "reason"
+    // `Notification` 的 userInfo 是字符串 key 的 dictionary,extension 上的
+    // accessor 必须 nonisolated 才能从任意 actor 读取。
+    nonisolated static let changeReasonUserInfoKey = "reason"
     private static let legacyBundleIdentifiers = [
         "com.local.MyGestures",
         "com.local.MouseGestureLite"

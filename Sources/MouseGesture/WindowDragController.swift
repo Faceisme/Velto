@@ -9,7 +9,9 @@ import Foundation
 /// All inbound `handle*` methods run on the event-tap thread. Actual AX writes
 /// happen on a dedicated serial queue with coalescing so we never block the
 /// tap callback waiting on a window server round trip.
-final class WindowDragController {
+/// `@unchecked Sendable`:`handle*` 入口在 tap 线程上,后续 AX 写入在私有
+/// `queue` 上串行化;modifier flags 通过 `lock` 保护。
+final class WindowDragController: @unchecked Sendable {
     enum DragMode {
         case move
         case resize
