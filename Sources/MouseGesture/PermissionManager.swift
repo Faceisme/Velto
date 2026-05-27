@@ -1,10 +1,25 @@
 import AppKit
 import ApplicationServices
+import CoreGraphics
 import Foundation
 
 enum PermissionManager {
     static var isAccessibilityTrusted: Bool {
         AXIsProcessTrusted()
+    }
+
+    /// 屏幕录制权限 —— 切换器抓窗口缩略图必需。
+    /// 注意:`CGPreflightScreenCaptureAccess()` 在 macOS 11+ 才有,Tahoe 上稳定。
+    /// 它**只查**不弹窗,弹窗用 `CGRequestScreenCaptureAccess()`(下面那个)。
+    static var isScreenRecordingTrusted: Bool {
+        CGPreflightScreenCaptureAccess()
+    }
+
+    /// 触发系统级 Screen Recording 授权弹窗。第一次调会弹,后续调返回当前状态。
+    /// 用户授权后**必须重启 app** 才生效 —— 这是 macOS 的固有限制,没法绕过。
+    @discardableResult
+    static func requestScreenRecordingPrompt() -> Bool {
+        CGRequestScreenCaptureAccess()
     }
 
     static func requestAccessibilityPrompt() {

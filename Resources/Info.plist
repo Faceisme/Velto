@@ -30,5 +30,7 @@
     <string>VibeGestures 需要辅助功能权限来监听右键手势并发送快捷键。</string>
     <key>NSInputMonitoringUsageDescription</key>
     <string>VibeGestures 需要输入监控权限来接收全局右键手势。</string>
+    <key>NSScreenCaptureUsageDescription</key>
+    <string>VibeGestures 需要屏幕录制权限来抓取窗口缩略图,在窗口切换器里显示。</string>
 </dict>
 </plist>

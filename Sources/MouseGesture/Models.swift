@@ -62,6 +62,9 @@ struct AppPreferences: Codable, Equatable {
     var windowResizeModifierFlags: UInt64
     var contentZoomModifierFlags: UInt64
     var windowMaximizeShortcut: Shortcut?
+    /// 窗口切换器的全部配置 —— 子结构定义在 Switcher/SwitcherPreferences.swift。
+    /// 嵌进来跟手势/窗口管理共享一份 JSON 持久化。
+    var switcher: SwitcherPreferences
 
     init(
         gesturesEnabled: Bool,
@@ -73,7 +76,8 @@ struct AppPreferences: Codable, Equatable {
         windowMoveModifierFlags: UInt64,
         windowResizeModifierFlags: UInt64,
         contentZoomModifierFlags: UInt64,
-        windowMaximizeShortcut: Shortcut?
+        windowMaximizeShortcut: Shortcut?,
+        switcher: SwitcherPreferences
     ) {
         self.gesturesEnabled = gesturesEnabled
         self.showTrail = showTrail
@@ -85,6 +89,7 @@ struct AppPreferences: Codable, Equatable {
         self.windowResizeModifierFlags = windowResizeModifierFlags
         self.contentZoomModifierFlags = contentZoomModifierFlags
         self.windowMaximizeShortcut = windowMaximizeShortcut
+        self.switcher = switcher
     }
 
     init(from decoder: Decoder) throws {
@@ -99,6 +104,7 @@ struct AppPreferences: Codable, Equatable {
         windowResizeModifierFlags = try container.decodeIfPresent(UInt64.self, forKey: .windowResizeModifierFlags) ?? Self.defaults.windowResizeModifierFlags
         contentZoomModifierFlags = try container.decodeIfPresent(UInt64.self, forKey: .contentZoomModifierFlags) ?? Self.defaults.contentZoomModifierFlags
         windowMaximizeShortcut = try container.decodeIfPresent(Shortcut.self, forKey: .windowMaximizeShortcut) ?? Self.defaults.windowMaximizeShortcut
+        switcher = try container.decodeIfPresent(SwitcherPreferences.self, forKey: .switcher) ?? Self.defaults.switcher
     }
 
     static let defaults = AppPreferences(
@@ -111,7 +117,8 @@ struct AppPreferences: Codable, Equatable {
         windowMoveModifierFlags: 0,
         windowResizeModifierFlags: 0,
         contentZoomModifierFlags: 0,
-        windowMaximizeShortcut: nil
+        windowMaximizeShortcut: nil,
+        switcher: .defaults
     )
 }
 

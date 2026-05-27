@@ -30,6 +30,13 @@ struct SidebarView: View {
                     badge: nil,
                     active: page == .window
                 ) { page = .window }
+
+                SidebarItem(
+                    icon: MGPage.switcher.icon,
+                    label: MGPage.switcher.label,
+                    badge: nil,
+                    active: page == .switcher
+                ) { page = .switcher }
             }
 
             Spacer().frame(height: 14)

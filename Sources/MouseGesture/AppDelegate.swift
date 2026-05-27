@@ -24,6 +24,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
 
         configureStatusItem()
+
+        // 启动切换器:WindowList 后台维护 + KeyTap 接管 Cmd+Tab + Panel UI。
+        // 失败一般是 CGEvent tap 权限缺失,需要用户开"输入监控"权限。
+        if !SwitcherController.shared.start() {
+            print("⚠️ 切换器启动失败 —— CGEvent tap 创建不成功,检查输入监控/辅助功能权限")
+        }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        stopListener()
+        // ⚠️ 必须恢复系统 Cmd+Tab —— 它是 OS 持久状态,我们不复位的话用户下次
+        // 开机系统切换器都是关的。
+        SwitcherController.shared.stop()
     }
 
     /// `.accessory` 应用默认没有主菜单 → ⌘W / ⌘Q / 文本编辑快捷键全部失效。
@@ -108,10 +121,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    func applicationWillTerminate(_ notification: Notification) {
-        stopListener()
-    }
-
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         openSettings()
         return true
@@ -136,9 +145,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func rebuildStatusMenu() {
-        guard let statusItem else {
-            return
-        }
+        guard let statusItem else { return }
 
         let menu = NSMenu()
 
@@ -152,24 +159,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(.separator())
 
-        menu.addItem(NSMenuItem(title: "打开手势管理", action: #selector(openSettings), keyEquivalent: ","))
-
-        let enabledItem = NSMenuItem(title: "启用手势监听", action: #selector(toggleGesturesEnabled), keyEquivalent: "")
-        enabledItem.state = store.preferences.gesturesEnabled ? .on : .off
-        menu.addItem(enabledItem)
-
-        let targetItem = NSMenuItem(title: "手势作用目标：\(store.preferences.gestureTargetPolicy.displayName)", action: nil, keyEquivalent: "")
-        targetItem.isEnabled = false
-        menu.addItem(targetItem)
-
-        let trailItem = NSMenuItem(title: "显示手势轨迹", action: #selector(toggleTrail), keyEquivalent: "")
-        trailItem.state = store.preferences.showTrail ? .on : .off
-        menu.addItem(trailItem)
-
-        let permissionItem = NSMenuItem(title: "打开权限设置", action: #selector(openPermissions), keyEquivalent: "")
-        menu.addItem(permissionItem)
-
+        menu.addItem(NSMenuItem(title: "偏好设置", action: #selector(openSettings), keyEquivalent: ","))
         menu.addItem(NSMenuItem(title: "重启监听", action: #selector(restartListener), keyEquivalent: "r"))
+
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "退出", action: #selector(quit), keyEquivalent: "q"))
 
@@ -203,22 +195,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         settingsWindow?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
-    }
-
-    @objc private func toggleTrail() {
-        store.updatePreferences { preferences in
-            preferences.showTrail.toggle()
-        }
-    }
-
-    @objc private func toggleGesturesEnabled() {
-        store.updatePreferences { preferences in
-            preferences.gesturesEnabled.toggle()
-        }
-    }
-
-    @objc private func openPermissions() {
-        PermissionManager.openPrivacySettings()
     }
 
     @objc private func restartListener() {

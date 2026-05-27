@@ -13,7 +13,16 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "VibeGestures",
-            path: "Sources/MouseGesture"
+            path: "Sources/MouseGesture",
+            linkerSettings: [
+                // 切换器要用 SkyLight 私有框架里的 CGS / SLPS / _AXUIElementGetWindow
+                // 等符号。@_silgen_name 让 Swift 在编译期生成对未解析符号的引用,
+                // 这里把私有框架链上,ld 才找得到。路径在所有 macOS 都是固定的:
+                //   /System/Library/PrivateFrameworks/SkyLight.framework
+                // 注意:私有框架不在默认 framework 搜索路径里,要 -F 明确指出。
+                .unsafeFlags(["-F", "/System/Library/PrivateFrameworks"]),
+                .linkedFramework("SkyLight")
+            ]
         )
     ],
     swiftLanguageModes: [.v6]

@@ -1,7 +1,7 @@
 import SwiftUI
 
 enum MGPage: String, CaseIterable, Identifiable, Hashable {
-    case gestures, window, general
+    case gestures, window, switcher, general
 
     var id: String { rawValue }
 
@@ -9,6 +9,7 @@ enum MGPage: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .gestures: "鼠标手势"
         case .window:   "窗口管理"
+        case .switcher: "窗口切换"
         case .general:  "通用设置"
         }
     }
@@ -17,6 +18,7 @@ enum MGPage: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .gestures: "cursorarrow.motionlines"
         case .window:   "macwindow"
+        case .switcher: "rectangle.on.rectangle"
         case .general:  "gearshape"
         }
     }
@@ -50,6 +52,7 @@ struct SettingsRootView: View {
         switch page ?? .gestures {
         case .gestures: GesturesPage()
         case .window:   WindowManagementPage()
+        case .switcher: SwitcherSettingsPage()
         case .general:  GeneralSettingsPage()
         }
     }
