@@ -90,22 +90,25 @@ private struct SidebarItem: View {
     let action: () -> Void
 
     var body: some View {
-        Button(action: action) {
+        Button {
+            guard !active else { return }
+            action()
+        } label: {
             HStack(spacing: 10) {
                 Image(systemName: icon)
-                    .font(.system(size: 13, weight: .medium))
-                    .frame(width: 16, height: 16)
+                    .font(.system(size: 15, weight: .medium))
+                    .frame(width: 18, height: 18)
                     .foregroundStyle(active ? Color.white : Color.mgText2)
 
                 Text(label)
-                    .font(.system(size: 13, weight: active ? .semibold : .medium))
+                    .font(.system(size: 15, weight: active ? .semibold : .medium))
                     .foregroundStyle(active ? Color.white : Color.mgText1)
 
                 Spacer(minLength: 0)
 
                 if let badge, badge > 0 {
                     Text("\(badge)")
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(.system(size: 12, weight: .semibold))
                         .monospacedDigit()
                         .foregroundStyle(active ? Color.white : Color.mgText2)
                         .padding(.horizontal, 7)
@@ -119,7 +122,7 @@ private struct SidebarItem: View {
                 }
             }
             .padding(.horizontal, 10)
-            .padding(.vertical, 7)
+            .padding(.vertical, 9)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -128,7 +131,7 @@ private struct SidebarItem: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .animation(.easeOut(duration: 0.12), value: active)
+        .transaction { $0.animation = nil }
     }
 }
 

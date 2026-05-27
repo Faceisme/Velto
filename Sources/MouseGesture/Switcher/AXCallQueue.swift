@@ -17,7 +17,7 @@ final class AXCallQueue: @unchecked Sendable {
 
     private let queue: OperationQueue = {
         let q = OperationQueue()
-        q.name = "VibeGestures.Switcher.AXCallQueue"
+        q.name = "Velto.Switcher.AXCallQueue"
         q.maxConcurrentOperationCount = 1
         q.qualityOfService = .userInitiated
         return q

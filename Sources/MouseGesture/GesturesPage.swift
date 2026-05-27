@@ -14,6 +14,7 @@ struct GesturesPage: View {
     @State private var didLoad = false
     @State private var selectedID: UUID?
     @State private var editingName = ""
+    @State private var isEditingName = false
     @State private var shortcut: Shortcut?
     @State private var statusMessage = ""
     @State private var hasUnsavedChanges = false
@@ -121,6 +122,7 @@ struct GesturesPage: View {
                 GestureDetailPanel(
                     gesture: g,
                     editingName: $editingName,
+                    isEditingName: $isEditingName,
                     shortcut: $shortcut,
                     onDelete: deleteSelectedGesture,
                     updateDraft: updateSelectedDraft
@@ -160,6 +162,7 @@ struct GesturesPage: View {
 
     private func syncEditor(from g: GestureCommand) {
         editingName = g.name
+        isEditingName = false
         shortcut = g.shortcut
     }
 
@@ -221,6 +224,7 @@ struct GesturesPage: View {
             syncEditor(from: g)
         } else {
             editingName = ""
+            isEditingName = false
             shortcut = nil
         }
         statusMessage = silent ? "" : "已丢弃未保存更改。"
@@ -319,7 +323,7 @@ private struct GestureListItem: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .animation(.easeOut(duration: 0.12), value: selected)
+        .transaction { $0.animation = nil }
     }
 }
 
@@ -328,9 +332,11 @@ private struct GestureListItem: View {
 private struct GestureDetailPanel: View {
     let gesture: GestureCommand
     @Binding var editingName: String
+    @Binding var isEditingName: Bool
     @Binding var shortcut: Shortcut?
     var onDelete: () -> Void
     var updateDraft: ((inout GestureCommand) -> Void) -> Void
+    @FocusState private var nameFieldFocused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -366,33 +372,70 @@ private struct GestureDetailPanel: View {
                     .foregroundStyle(Color.mgText3)
                     .padding(.bottom, 6)
 
-                TextField("手势名称", text: $editingName)
-                    .textFieldStyle(.plain)
-                    .font(.mgPageTitle)
-                    .tracking(-0.4)
-                    .foregroundStyle(Color.mgText1)
-                    .onChange(of: editingName) { _, newVal in
-                        updateDraft { $0.name = newVal }
-                    }
+                if isEditingName {
+                    TextField("手势名称", text: $editingName)
+                        .textFieldStyle(.plain)
+                        .font(.mgPageTitle)
+                        .tracking(-0.4)
+                        .foregroundStyle(Color.mgText1)
+                        .focused($nameFieldFocused)
+                        .onSubmit { isEditingName = false }
+                        .onChange(of: editingName) { _, newVal in
+                            updateDraft { $0.name = newVal }
+                        }
+                } else {
+                    Text(displayName)
+                        .font(.mgPageTitle)
+                        .tracking(-0.4)
+                        .foregroundStyle(Color.mgText1)
+                        .lineLimit(1)
+                        .textSelection(.disabled)
+                }
             }
 
             Spacer(minLength: 12)
 
-            if let sc = gesture.shortcut {
-                Kbd(keys: sc.kbdKeys, size: .lg)
-                    .padding(.top, 4)
-            }
-
-            Button(action: onDelete) {
-                HStack(spacing: 5) {
-                    Image(systemName: "trash")
-                        .font(.system(size: 12, weight: .medium))
-                    Text("删除")
+            HStack(alignment: .center, spacing: 8) {
+                if let sc = gesture.shortcut {
+                    Kbd(keys: sc.kbdKeys, size: .lg)
                 }
+
+                Button {
+                    isEditingName.toggle()
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: isEditingName ? "checkmark" : "pencil")
+                            .font(.system(size: 12, weight: .medium))
+                        Text(isEditingName ? "完成" : "修改")
+                    }
+                }
+                .buttonStyle(MGSecondaryButtonStyle(height: 32, hPad: 12, font: .mgBodyMedium))
+
+                Button(action: onDelete) {
+                    HStack(spacing: 5) {
+                        Image(systemName: "trash")
+                            .font(.system(size: 12, weight: .medium))
+                        Text("删除")
+                    }
+                }
+                .buttonStyle(MGDestructiveButtonStyle())
             }
-            .buttonStyle(MGDestructiveButtonStyle())
             .padding(.top, 4)
         }
+        .onChange(of: isEditingName) { _, editing in
+            if editing {
+                DispatchQueue.main.async {
+                    nameFieldFocused = true
+                }
+            } else {
+                nameFieldFocused = false
+            }
+        }
+    }
+
+    private var displayName: String {
+        let trimmed = editingName.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "未命名" : trimmed
     }
 
     // 大白卡片:画布 + 撤销/清空 + 提示

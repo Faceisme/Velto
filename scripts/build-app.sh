@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# 构建 VibeGestures.app 并部署到 /Applications/。
+# 构建 Velto.app 并部署到 /Applications/。
 #
 # 为什么默认会同步到 /Applications/:
 #   macOS Tahoe (26) 的 TCC 对位于 Dropbox / CloudStorage 路径下的 ad-hoc 签名
@@ -21,11 +21,12 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 CONFIGURATION="${CONFIGURATION:-debug}"
 CODE_SIGN_IDENTITY="${CODE_SIGN_IDENTITY:--}"
-APP_DIR="$ROOT_DIR/build/VibeGestures.app"
+APP_DIR="$ROOT_DIR/build/Velto.app"
 CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
-INSTALLED_APP="/Applications/VibeGestures.app"
+INSTALLED_APP="/Applications/Velto.app"
+LEGACY_INSTALLED_APP="/Applications/VibeGestures.app"
 BUILD_HOME="$ROOT_DIR/.build/home"
 
 # 简单的命令行参数支持 —— 现在只有 --run
@@ -45,17 +46,17 @@ export XDG_CACHE_HOME="$ROOT_DIR/.build/swiftpm-cache"
 export CLANG_MODULE_CACHE_PATH="$ROOT_DIR/.build/clang-module-cache"
 
 # ============ 1. 编译 ============
-swift build -c "$CONFIGURATION" --arch arm64 --scratch-path "$ROOT_DIR/.build" --product VibeGestures
+swift build -c "$CONFIGURATION" --arch arm64 --scratch-path "$ROOT_DIR/.build" --product Velto
 BIN_DIR="$(swift build -c "$CONFIGURATION" --arch arm64 --scratch-path "$ROOT_DIR/.build" --show-bin-path)"
 
 # ============ 2. 组装 .app bundle ============
 install -d "$MACOS_DIR" "$RESOURCES_DIR"
-cp "$BIN_DIR/VibeGestures" "$MACOS_DIR/VibeGestures"
+cp "$BIN_DIR/Velto" "$MACOS_DIR/Velto"
 cp "$ROOT_DIR/Resources/Info.plist" "$CONTENTS_DIR/Info.plist"
-if [ -f "$ROOT_DIR/Resources/VibeGestures.icns" ]; then
-    cp "$ROOT_DIR/Resources/VibeGestures.icns" "$RESOURCES_DIR/VibeGestures.icns"
+if [ -f "$ROOT_DIR/Resources/Velto.icns" ]; then
+    cp "$ROOT_DIR/Resources/Velto.icns" "$RESOURCES_DIR/Velto.icns"
 fi
-chmod +x "$MACOS_DIR/VibeGestures"
+chmod +x "$MACOS_DIR/Velto"
 
 # ============ 3. 清 xattr + 签名 build/ 副本 ============
 # Dropbox 同步会在文件上挂 com.dropbox.attrs 之类的扩展属性,
@@ -73,12 +74,13 @@ if [ "${SKIP_INSTALL:-0}" = "1" ]; then
 fi
 
 # 干掉旧实例,免得 cp 时撞文件锁
-pkill -f "$INSTALLED_APP/Contents/MacOS/VibeGestures" 2>/dev/null || true
+pkill -f "$INSTALLED_APP/Contents/MacOS/Velto" 2>/dev/null || true
+pkill -f "$LEGACY_INSTALLED_APP/Contents/MacOS/VibeGestures" 2>/dev/null || true
 # 等一下让 OS 收尾
 sleep 0.3
 
 # 全删重拷,免得旧文件残留(改名 / 删文件这类变化用 cp 增量更新可能漏)
-rm -rf "$INSTALLED_APP"
+rm -rf "$INSTALLED_APP" "$LEGACY_INSTALLED_APP"
 cp -R "$APP_DIR" "$INSTALLED_APP"
 
 if command -v codesign >/dev/null 2>&1; then
@@ -91,8 +93,8 @@ echo "$INSTALLED_APP  (also at $APP_DIR)"
 # ============ 5. --run:可选地直接启动 ============
 if [ "$DO_RUN" = "1" ]; then
     echo "启动中..."
-    "$INSTALLED_APP/Contents/MacOS/VibeGestures" &
+    "$INSTALLED_APP/Contents/MacOS/Velto" &
     disown 2>/dev/null || true
     sleep 0.5
-    echo "进程已启动 (pid: $(pgrep -f "$INSTALLED_APP/Contents/MacOS/VibeGestures" | head -1))"
+    echo "进程已启动 (pid: $(pgrep -f "$INSTALLED_APP/Contents/MacOS/Velto" | head -1))"
 fi

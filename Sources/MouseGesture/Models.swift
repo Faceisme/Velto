@@ -136,7 +136,7 @@ struct VibeGesturesBackupFile: Codable {
         preferences: AppPreferences
     ) {
         formatVersion = Self.currentFormatVersion
-        appName = "VibeGestures"
+        appName = "Velto"
         exportedAt = Date()
         self.gestures = gestures
         self.preferences = preferences

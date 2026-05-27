@@ -1,6 +1,6 @@
-# VibeGestures
+# Velto
 
-VibeGestures 是一个面向 Apple Silicon Mac 的轻量级鼠标手势和窗口控制工具。它的核心目标是用尽量少的交互完成高频操作：按住鼠标右键画手势执行快捷键，按住修饰键拖动窗口，或按住修饰键滚动鼠标滚轮缩放页面内容。
+Velto 是一个面向 Apple Silicon Mac 的轻量级鼠标手势和窗口控制工具。它的核心目标是用尽量少的交互完成高频操作：按住鼠标右键画手势执行快捷键，按住修饰键拖动窗口，或按住修饰键滚动鼠标滚轮缩放页面内容。
 
 项目最初是为了替代没有 Apple Silicon 原生版本的鼠标手势工具。当前版本只保留个人高频使用的功能，界面使用 macOS 26 的原生 Liquid Glass 风格。
 
@@ -60,19 +60,19 @@ scripts/build-app.sh
 构建产物：
 
 ```text
-build/VibeGestures.app
+build/Velto.app
 ```
 
 运行：
 
 ```bash
-open build/VibeGestures.app
+open build/Velto.app
 ```
 
 长期自用时，建议把构建好的 App 放到固定位置，例如：
 
 ```text
-/Applications/VibeGestures.app
+/Applications/Velto.app
 ```
 
 然后针对这个固定路径完成辅助功能授权和开机启动设置。
@@ -103,7 +103,7 @@ open build/VibeGestures.app
 Package.swift
 Resources/
   Info.plist
-  VibeGestures.icns
+  Velto.icns
 Sources/MouseGesture/
   main.swift
   AppDelegate.swift
@@ -161,7 +161,7 @@ scripts/
 如果测试中需要立刻退出：
 
 ```bash
-pkill -x VibeGestures
+pkill -x Velto
 ```
 
 从旧版本升级时，如果旧进程还在运行，也可以执行：

@@ -3,16 +3,16 @@
 import PackageDescription
 
 let package = Package(
-    name: "VibeGestures",
+    name: "Velto",
     platforms: [
         .macOS(.v26)
     ],
     products: [
-        .executable(name: "VibeGestures", targets: ["VibeGestures"])
+        .executable(name: "Velto", targets: ["Velto"])
     ],
     targets: [
         .executableTarget(
-            name: "VibeGestures",
+            name: "Velto",
             path: "Sources/MouseGesture",
             linkerSettings: [
                 // 切换器要用 SkyLight 私有框架里的 CGS / SLPS / _AXUIElementGetWindow

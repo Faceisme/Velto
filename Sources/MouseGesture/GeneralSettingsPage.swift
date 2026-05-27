@@ -207,7 +207,7 @@ struct GeneralSettingsPage: View {
 
     private func importConfiguration() {
         let panel = NSOpenPanel()
-        panel.title = "导入 VibeGestures 配置"
+        panel.title = "导入 Velto 配置"
         panel.allowedContentTypes = [.json]
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
@@ -231,8 +231,8 @@ struct GeneralSettingsPage: View {
 
     private func exportConfiguration() {
         let panel = NSSavePanel()
-        panel.title = "导出 VibeGestures 配置"
-        panel.nameFieldStringValue = "VibeGestures-Backup.json"
+        panel.title = "导出 Velto 配置"
+        panel.nameFieldStringValue = "Velto-Backup.json"
         panel.canCreateDirectories = true
         panel.allowedContentTypes = [.json]
         guard panel.runModal() == .OK, let url = panel.url else { return }

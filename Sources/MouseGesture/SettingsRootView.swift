@@ -42,18 +42,31 @@ struct SettingsRootView: View {
             content
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(Color.mgBg)
+                .transaction { $0.animation = nil }
         }
         .frame(minWidth: 1100, idealWidth: 1280, minHeight: 720, idealHeight: 800)
         .background(Color.mgSidebar) // 在 hidden titlebar 区域露出
     }
 
-    @ViewBuilder
     private var content: some View {
-        switch page ?? .gestures {
-        case .gestures: GesturesPage()
-        case .window:   WindowManagementPage()
-        case .switcher: SwitcherSettingsPage()
-        case .general:  GeneralSettingsPage()
+        let current = page ?? .gestures
+        return ZStack {
+            pageContent(.gestures, current: current) { GesturesPage() }
+            pageContent(.window, current: current) { WindowManagementPage() }
+            pageContent(.switcher, current: current) { SwitcherSettingsPage() }
+            pageContent(.general, current: current) { GeneralSettingsPage() }
         }
+    }
+
+    private func pageContent<Content: View>(
+        _ target: MGPage,
+        current: MGPage,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        content()
+            .opacity(current == target ? 1 : 0)
+            .allowsHitTesting(current == target)
+            .accessibilityHidden(current != target)
+            .zIndex(current == target ? 1 : 0)
     }
 }

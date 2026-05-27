@@ -5,17 +5,17 @@
     <key>CFBundleDevelopmentRegion</key>
     <string>zh_CN</string>
     <key>CFBundleDisplayName</key>
-    <string>VibeGestures</string>
+    <string>Velto</string>
     <key>CFBundleExecutable</key>
-    <string>VibeGestures</string>
+    <string>Velto</string>
     <key>CFBundleIdentifier</key>
     <string>com.face.myapp</string>
     <key>CFBundleIconFile</key>
-    <string>VibeGestures</string>
+    <string>Velto</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
-    <string>VibeGestures</string>
+    <string>Velto</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
@@ -27,10 +27,10 @@
     <key>LSUIElement</key>
     <true/>
     <key>NSAccessibilityUsageDescription</key>
-    <string>VibeGestures 需要辅助功能权限来监听右键手势并发送快捷键。</string>
+    <string>Velto 需要辅助功能权限来监听右键手势并发送快捷键。</string>
     <key>NSInputMonitoringUsageDescription</key>
-    <string>VibeGestures 需要输入监控权限来接收全局右键手势。</string>
+    <string>Velto 需要输入监控权限来接收全局右键手势。</string>
     <key>NSScreenCaptureUsageDescription</key>
-    <string>VibeGestures 需要屏幕录制权限来抓取窗口缩略图,在窗口切换器里显示。</string>
+    <string>Velto 需要屏幕录制权限来抓取窗口缩略图,在窗口切换器里显示。</string>
 </dict>
 </plist>
