@@ -15,12 +15,26 @@ struct SwitcherWindowProbe: @unchecked Sendable {
     let axUiElement: AXUIElement
     let wid: CGWindowID
     let title: String?
+    let cgTitle: String?
     let subrole: String?
     let role: String?
     let size: CGSize?
     let position: CGPoint?
     let isMinimized: Bool
     let isFullscreen: Bool
+
+    var hasExplicitTitle: Bool {
+        Self.isNonEmptyTitle(title) || Self.isNonEmptyTitle(cgTitle)
+    }
+
+    var isUntitledPlaceholderCandidate: Bool {
+        !hasExplicitTitle && !isMinimized
+    }
+
+    private static func isNonEmptyTitle(_ value: String?) -> Bool {
+        guard let value else { return false }
+        return !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
 }
 
 /// AX 字符串常量 —— 这两个在某些 SDK 版本里没桥接成 Swift 常量,直接用字符串。
@@ -132,10 +146,12 @@ final class SwitcherWindowList {
                 ])
                 let size: CGSize? = attrs[kAXSizeAttribute as String].flatMap(SwitcherAxRead.axValueSize)
                 let position: CGPoint? = attrs[kAXPositionAttribute as String].flatMap(SwitcherAxRead.axValuePoint)
+                let axTitle = attrs[kAXTitleAttribute as String] as? String
                 return SwitcherWindowProbe(
                     axUiElement: ax,
                     wid: wid,
-                    title: attrs[kAXTitleAttribute as String] as? String,
+                    title: axTitle,
+                    cgTitle: SwitcherAxRead.cgTitle(for: wid),
                     subrole: attrs[kAXSubroleAttribute as String] as? String,
                     role: attrs[kAXRoleAttribute as String] as? String,
                     size: size,
@@ -155,19 +171,23 @@ final class SwitcherWindowList {
         guard let app = apps[pid] else { return }
         var changed = false
         var seenWids = Set<CGWindowID>()
-        for probe in probes {
-            guard SwitcherWindowDiscriminator.isActualWindow(
+        let actualProbes = probes.filter { probe in
+            SwitcherWindowDiscriminator.isActualWindow(
                 bundleIdentifier: app.bundleIdentifier,
                 wid: probe.wid,
                 title: probe.title,
                 subrole: probe.subrole,
                 role: probe.role,
                 size: probe.size
-            ) else { continue }
+            )
+        }
+        let appHasTitledWindow = actualProbes.contains(where: \.hasExplicitTitle)
+        for probe in actualProbes {
+            if appHasTitledWindow && probe.isUntitledPlaceholderCandidate { continue }
             seenWids.insert(probe.wid)
             let resolvedTitle = SwitcherAxRead.bestEffortTitle(
                 axTitle: probe.title,
-                cgWindowId: probe.wid,
+                cgTitle: probe.cgTitle,
                 appLocalizedName: app.localizedName
             )
             if let existing = windows[probe.wid] {

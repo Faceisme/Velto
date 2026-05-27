@@ -185,19 +185,25 @@ enum SwitcherAxRead {
     /// AX 给空 / 给不出来时,从 CG 兜底拿一次。仍空就用 app 名。
     static func bestEffortTitle(
         axTitle: String?,
-        cgWindowId: CGWindowID,
+        cgTitle: String?,
         appLocalizedName: String?
     ) -> String {
-        if let t = axTitle, !t.isEmpty { return t }
-        if let cgTitle = Self.cgTitle(for: cgWindowId), !cgTitle.isEmpty { return cgTitle }
+        if let t = nonEmptyTitle(axTitle) { return t }
+        if let t = nonEmptyTitle(cgTitle) { return t }
         return appLocalizedName ?? ""
     }
 
-    private static func cgTitle(for wid: CGWindowID) -> String? {
+    static func cgTitle(for wid: CGWindowID) -> String? {
         let opts: CGWindowListOption = [.optionIncludingWindow]
         guard let arr = CGWindowListCopyWindowInfo(opts, wid) as? [[String: Any]] else {
             return nil
         }
         return arr.first?[kCGWindowName as String] as? String
+    }
+
+    private static func nonEmptyTitle(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : value
     }
 }
