@@ -40,15 +40,6 @@ struct GestureCommand: Codable, Identifiable, Equatable {
 enum GestureTargetPolicy: String, Codable, Equatable {
     case windowUnderPointer
     case activeWindow
-
-    var displayName: String {
-        switch self {
-        case .windowUnderPointer:
-            return "鼠标指针下方的应用程序和窗口"
-        case .activeWindow:
-            return "活动的应用程序和窗口"
-        }
-    }
 }
 
 struct AppPreferences: Codable, Equatable {
@@ -122,7 +113,7 @@ struct AppPreferences: Codable, Equatable {
     )
 }
 
-struct VibeGesturesBackupFile: Codable {
+struct VeltoBackupFile: Codable {
     static let currentFormatVersion = 1
 
     var formatVersion: Int
@@ -158,7 +149,7 @@ enum GestureBackupError: LocalizedError {
 }
 
 extension Notification.Name {
-    static let gestureStoreDidChange = Notification.Name("VibeGestures.gestureStoreDidChange")
+    static let gestureStoreDidChange = Notification.Name("Velto.gestureStoreDidChange")
 }
 
 enum GestureStoreChangeReason: String {
@@ -200,19 +191,11 @@ extension CGEventFlags {
 final class GestureStore {
     static let shared = GestureStore()
 
-    private let gesturesKey = "VibeGestures.gestures"
-    private let preferencesKey = "VibeGestures.preferences"
+    private let gesturesKey = "Velto.gestures"
+    private let preferencesKey = "Velto.preferences"
     // `Notification` 的 userInfo 是字符串 key 的 dictionary,extension 上的
     // accessor 必须 nonisolated 才能从任意 actor 读取。
     nonisolated static let changeReasonUserInfoKey = "reason"
-    private static let legacyBundleIdentifiers = [
-        "com.local.MyGestures",
-        "com.local.MouseGestureLite"
-    ]
-    private static let legacyMyGesturesKey = "MyGestures.gestures"
-    private static let legacyMyGesturesPreferencesKey = "MyGestures.preferences"
-    private static let legacyGesturesKey = "MouseGestureLite.gestures"
-    private static let legacyPreferencesKey = "MouseGestureLite.preferences"
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
 
@@ -227,13 +210,11 @@ final class GestureStore {
         gestures = Self.load(
             [GestureCommand].self,
             key: gesturesKey,
-            legacyKeys: [Self.legacyMyGesturesKey, Self.legacyGesturesKey],
             decoder: decoder
         ) ?? Self.defaultGestures()
         preferences = Self.load(
             AppPreferences.self,
             key: preferencesKey,
-            legacyKeys: [Self.legacyMyGesturesPreferencesKey, Self.legacyPreferencesKey],
             decoder: decoder
         ) ?? .defaults
         let needsPreferencesWrite = !preferences.gesturesEnabled
@@ -259,7 +240,7 @@ final class GestureStore {
     }
 
     func exportBackupData() throws -> Data {
-        let backup = VibeGesturesBackupFile(
+        let backup = VeltoBackupFile(
             gestures: gestures,
             preferences: preferences
         )
@@ -273,8 +254,8 @@ final class GestureStore {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
 
-        let backup = try decoder.decode(VibeGesturesBackupFile.self, from: data)
-        guard backup.formatVersion <= VibeGesturesBackupFile.currentFormatVersion else {
+        let backup = try decoder.decode(VeltoBackupFile.self, from: data)
+        guard backup.formatVersion <= VeltoBackupFile.currentFormatVersion else {
             throw GestureBackupError.unsupportedVersion(backup.formatVersion)
         }
         guard !backup.gestures.isEmpty else {
@@ -314,37 +295,10 @@ final class GestureStore {
     private static func load<T: Decodable>(
         _ type: T.Type,
         key: String,
-        legacyKeys: [String],
         decoder: JSONDecoder
     ) -> T? {
-        if let data = UserDefaults.standard.data(forKey: key),
-           let decoded = try? decoder.decode(T.self, from: data) {
-            return decoded
-        }
-
-        for legacyKey in legacyKeys {
-            if let data = UserDefaults.standard.data(forKey: legacyKey),
-               let decoded = try? decoder.decode(T.self, from: data) {
-                UserDefaults.standard.set(data, forKey: key)
-                return decoded
-            }
-        }
-
-        for bundleIdentifier in legacyBundleIdentifiers {
-            guard let legacyDefaults = UserDefaults(suiteName: bundleIdentifier) else {
-                continue
-            }
-
-            for legacyKey in legacyKeys {
-                if let data = legacyDefaults.data(forKey: legacyKey),
-                   let decoded = try? decoder.decode(T.self, from: data) {
-                    UserDefaults.standard.set(data, forKey: key)
-                    return decoded
-                }
-            }
-        }
-
-        return nil
+        guard let data = UserDefaults.standard.data(forKey: key) else { return nil }
+        return try? decoder.decode(T.self, from: data)
     }
 
     private static func defaultGestures() -> [GestureCommand] {

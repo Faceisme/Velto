@@ -13,7 +13,7 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "Velto",
-            path: "Sources/MouseGesture",
+            path: "Sources/Velto",
             linkerSettings: [
                 // 切换器要用 SkyLight 私有框架里的 CGS / SLPS / _AXUIElementGetWindow
                 // 等符号。@_silgen_name 让 Swift 在编译期生成对未解析符号的引用,

@@ -16,7 +16,7 @@ import Foundation
 /// inside the sub-controllers on that thread — no cross-thread sync per
 /// event. The few fields read from the callback that are also written by the
 /// main-thread preferences observer (modifier snapshots) use short NSLocks.
-private let mouseGestureEventTapCallback: CGEventTapCallBack = { proxy, type, event, userInfo in
+private let veltoEventTapCallback: CGEventTapCallBack = { proxy, type, event, userInfo in
     guard let userInfo else { return Unmanaged.passUnretained(event) }
     let manager = Unmanaged<EventTapManager>.fromOpaque(userInfo).takeUnretainedValue()
     return manager.handle(proxy: proxy, type: type, event: event)
@@ -133,7 +133,7 @@ final class EventTapManager: @unchecked Sendable {
             place: .headInsertEventTap,
             options: .defaultTap,
             eventsOfInterest: mask,
-            callback: mouseGestureEventTapCallback,
+            callback: veltoEventTapCallback,
             userInfo: Unmanaged.passUnretained(self).toOpaque()
         ) else {
             onStatusChange?("事件拦截启动失败")
@@ -164,7 +164,7 @@ final class EventTapManager: @unchecked Sendable {
             CFRunLoopRun()
             CFRunLoopRemoveSource(runLoop, source, .commonModes)
         }
-        thread.name = "com.face.mygestures.eventtap"
+        thread.name = "com.face.velto.eventtap"
         thread.qualityOfService = QualityOfService.userInteractive
         tapThread = thread
         thread.start()

@@ -19,7 +19,7 @@ final class ContentZoomController: @unchecked Sendable {
     // 所有 mutation 路径 (handleScrollWheel/append/flushStep/resetSmoothing) 都
     // 必须先 `queue.async`,否则会出现数据竞争。类整体 `@unchecked Sendable`,
     // Swift 6 不替我们检查这些字段。
-    private let queue = DispatchQueue(label: "com.face.mygestures.content-zoom", qos: .userInteractive)
+    private let queue = DispatchQueue(label: "com.face.velto.content-zoom", qos: .userInteractive)
     private var accumulator: Double = 0
     private var stepScheduled = false
     private var lastDispatchTime: CFTimeInterval = 0

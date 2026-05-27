@@ -104,35 +104,40 @@ Package.swift
 Resources/
   Info.plist
   Velto.icns
-Sources/MouseGesture/
+Sources/Velto/
   main.swift
   AppDelegate.swift
-  AppQuirks.swift
-  ContentZoomController.swift
-  DisplayCoordinateConverter.swift
   EventTapManager.swift
-  GestureEngine.swift
-  GestureRecognizer.swift
-  GestureTargetController.swift
-  GestureOverlayController.swift
-  GestureCaptureView.swift
-  LoginItemManager.swift
   Models.swift
-  ModifierFormatter.swift
   PermissionManager.swift
   ShortcutSynthesizer.swift
-  WindowDragController.swift
-  WindowShortcutController.swift
-  # 设置窗口 UI (v2)
-  DesignSystem.swift
-  Components.swift
-  GestureTrailView.swift
-  RecorderViews.swift
+  DisplayCoordinateConverter.swift
+  GestureTargetController.swift
+  AppQuirks.swift
+  # 通用设置与共享 UI
   SettingsRootView.swift
   SidebarView.swift
-  GesturesPage.swift
-  WindowManagementPage.swift
   GeneralSettingsPage.swift
+  DesignSystem.swift
+  Components.swift
+  RecorderViews.swift
+  Gestures/
+    GesturesPage.swift
+    GestureEngine.swift
+    GestureRecognizer.swift
+    GestureOverlayController.swift
+    GestureCaptureView.swift
+    GestureTrailView.swift
+  WindowManagement/
+    WindowManagementPage.swift
+    WindowDragController.swift
+    WindowShortcutController.swift
+    ContentZoomController.swift
+  Switcher/
+    SwitcherSettingsPage.swift
+    SwitcherController.swift
+    SwitcherPanel.swift
+    SwitcherWindowList.swift
 scripts/
   build-app.sh
 ```
@@ -140,13 +145,13 @@ scripts/
 核心模块：
 
 - `EventTapManager`：监听右键手势、窗口移动/缩放修饰键、滚轮缩放修饰键，并调度对应动作。
-- `GestureEngine`：手势状态机，跟踪一次右键 stroke 的开始/结束并交给 `GestureRecognizer`。
-- `GestureRecognizer`：根据录入样本识别鼠标手势。
+- `Gestures/GestureEngine`：手势状态机，跟踪一次右键 stroke 的开始/结束并交给 `GestureRecognizer`。
+- `Gestures/GestureRecognizer`：根据录入样本识别鼠标手势。
 - `GestureTargetController`：定位鼠标下方窗口或活动窗口，并向目标应用发送快捷键。
 - `ShortcutSynthesizer`：合成并发送快捷键事件。
-- `GestureOverlayController`：绘制可选的手势轨迹反馈。
-- `WindowDragController` / `WindowShortcutController` / `ContentZoomController`：分别负责按修饰键拖动窗口、最大化快捷键、滚轮缩放。
-- 设置窗口：`SettingsRootView` + `SidebarView` + `GesturesPage` / `WindowManagementPage` / `GeneralSettingsPage`，共享 `DesignSystem.swift` 里的设计 token 和 `Components.swift`、`GestureTrailView.swift`、`RecorderViews.swift` 里的视觉组件。
+- `Gestures/GestureOverlayController`：绘制可选的手势轨迹反馈。
+- `WindowManagement/WindowDragController` / `WindowManagement/WindowShortcutController` / `WindowManagement/ContentZoomController`：分别负责按修饰键拖动窗口、最大化快捷键、滚轮缩放。
+- 设置窗口：`SettingsRootView` + `SidebarView` + `Gestures/GesturesPage` / `WindowManagement/WindowManagementPage` / `Switcher/SwitcherSettingsPage` / `GeneralSettingsPage`，共享 `DesignSystem.swift` 里的设计 token 和 `Components.swift`、`RecorderViews.swift` 里的通用控件；手势预览组件位于 `Gestures/GestureTrailView.swift`。
 
 ## 注意事项
 
@@ -167,7 +172,7 @@ pkill -x Velto
 从旧版本升级时，如果旧进程还在运行，也可以执行：
 
 ```bash
-pkill -x MyGestures
+pkill -x Velto
 ```
 
 ## License

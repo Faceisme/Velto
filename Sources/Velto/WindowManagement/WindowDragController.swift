@@ -37,7 +37,7 @@ final class WindowDragController: @unchecked Sendable {
         var location: CGPoint
     }
 
-    private let queue = DispatchQueue(label: "com.face.mygestures.window-drag", qos: .userInteractive)
+    private let queue = DispatchQueue(label: "com.face.velto.window-drag", qos: .userInteractive)
     private let lock = NSLock()
 
     /// `0` means "not configured". Read from the tap thread on every mouseMoved,
