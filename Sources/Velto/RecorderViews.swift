@@ -5,14 +5,27 @@ import SwiftUI
 //
 // 点击进入录制态:边框变虚线 + 提示"请按下快捷键…"
 // 用 NSEvent.addLocalMonitorForEvents 截取按键。
-// 录到合法 shortcut 后自动退出录制态。
+//
+// 退出录制态的触发器(任一即可):
+//   1. 录到合法 shortcut
+//   2. Esc 键
+//   3. 任意鼠标点击(包括点击自身 button —— 走 mouseDown → endRecording →
+//      事件放行 → button.action 再 begin,用户看起来无变化;点击列表里其他
+//      手势同理 → 切换前先退出录制态,修了"切手势后新手势仍显示录制中"那
+//      个 bug)
+//   4. 窗口失去 key window / app 失活
+//
+// 不要把 button.action 写成 begin/end toggle —— 那样跟 mouseDown monitor 会
+// 互相打架。
 
 struct ShortcutRecorderField: View {
     @Binding var shortcut: Shortcut?
     var placeholder: String = "点击设置快捷键"
 
     @State private var isRecording = false
-    @State private var monitor: Any?
+    @State private var keyMonitor: Any?
+    @State private var mouseMonitor: Any?
+    @State private var resignObservers: [NSObjectProtocol] = []
 
     /// 当 true 时,字段会填满父容器宽度并左对齐(详情卡里那种场景);
     /// 当 false 时,字段紧贴内容(键帽槽里那种场景)。
@@ -20,7 +33,8 @@ struct ShortcutRecorderField: View {
 
     var body: some View {
         Button {
-            if !isRecording { beginRecording() } else { endRecording() }
+            // 只 begin,不 toggle。退出靠 monitor / Esc / 失焦。
+            if !isRecording { beginRecording() }
         } label: {
             HStack(spacing: 8) {
                 if isRecording {
@@ -58,19 +72,39 @@ struct ShortcutRecorderField: View {
     }
 
     private func beginRecording() {
-        guard monitor == nil else { return }
+        guard keyMonitor == nil else { return }
         isRecording = true
-        monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { event in
+
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { event in
             handle(event)
             return nil
         }
+
+        // 鼠标 monitor:任意点击 → 退出录制,事件放行让点击照常发生。
+        mouseMonitor = NSEvent.addLocalMonitorForEvents(
+            matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]
+        ) { event in
+            endRecording()
+            return event
+        }
+
+        let nc = NotificationCenter.default
+        let o1 = nc.addObserver(forName: NSWindow.didResignKeyNotification,
+                                object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { endRecording() }
+        }
+        let o2 = nc.addObserver(forName: NSApplication.didResignActiveNotification,
+                                object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { endRecording() }
+        }
+        resignObservers = [o1, o2]
     }
 
     private func endRecording() {
-        if let m = monitor {
-            NSEvent.removeMonitor(m)
-            monitor = nil
-        }
+        if let m = keyMonitor { NSEvent.removeMonitor(m); keyMonitor = nil }
+        if let m = mouseMonitor { NSEvent.removeMonitor(m); mouseMonitor = nil }
+        for o in resignObservers { NotificationCenter.default.removeObserver(o) }
+        resignObservers = []
         isRecording = false
     }
 
@@ -98,11 +132,14 @@ struct ModifierRecorderField: View {
 
     @State private var isRecording = false
     @State private var monitor: Any?
+    @State private var mouseMonitor: Any?
+    @State private var resignObservers: [NSObjectProtocol] = []
     @State private var captured: UInt64 = 0
 
     var body: some View {
         Button {
-            if !isRecording { beginRecording() } else { endRecording(commit: true) }
+            // 只 begin。退出靠松开修饰键 / Esc / mouseDown / 失焦。
+            if !isRecording { beginRecording() }
         } label: {
             HStack(spacing: 4) {
                 if isRecording {
@@ -173,13 +210,31 @@ struct ModifierRecorderField: View {
             }
             return event
         }
+
+        // 鼠标点击 / 失焦 → 静默退出录制(不提交,因为用户没松完修饰键)
+        mouseMonitor = NSEvent.addLocalMonitorForEvents(
+            matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]
+        ) { event in
+            endRecording(commit: false)
+            return event
+        }
+        let nc = NotificationCenter.default
+        let o1 = nc.addObserver(forName: NSWindow.didResignKeyNotification,
+                                object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { endRecording(commit: false) }
+        }
+        let o2 = nc.addObserver(forName: NSApplication.didResignActiveNotification,
+                                object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { endRecording(commit: false) }
+        }
+        resignObservers = [o1, o2]
     }
 
     private func endRecording(commit: Bool) {
-        if let m = monitor {
-            NSEvent.removeMonitor(m)
-            monitor = nil
-        }
+        if let m = monitor { NSEvent.removeMonitor(m); monitor = nil }
+        if let m = mouseMonitor { NSEvent.removeMonitor(m); mouseMonitor = nil }
+        for o in resignObservers { NotificationCenter.default.removeObserver(o) }
+        resignObservers = []
         if commit, captured != 0 {
             modifierFlagsRawValue = captured
         }
