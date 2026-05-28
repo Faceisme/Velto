@@ -126,9 +126,18 @@ enum GestureTargetController {
         let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
         let cachedWindowList = (CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]]) ?? []
 
-        // 鼠标下最上层窗口属于 Velto 自己时,直接走 fallback,**绝对**不能再
-        // 调 AXUIElementCopyElementAtPosition —— 详见 selfPid 注释。
+        // 鼠标下最上层是 Velto 自己时,**绝对**不能再调
+        // AXUIElementCopyElementAtPosition —— 详见 selfPid 注释。
+        // 但仍要让 move/resize 对设置窗口本身生效,所以改走
+        // "按 frame 匹配自己 app 的 AX 窗口列表"路径:AXUIElementCreateApplication +
+        // kAXWindowsAttribute 枚举的是 NSApp.windows 快照,AppKit 内部 sync 回主线程
+        // 读 NSWindow.frame,不会跑 SwiftUI hit-test,在 background queue 上安全。
         if candidatePoints.contains(where: { topmostWindowIsSelf(in: cachedWindowList, at: $0) }) {
+            for p in candidatePoints {
+                if let candidate = selfWindowCandidate(in: cachedWindowList, at: p) {
+                    return target(from: candidate)
+                }
+            }
             return fallbackTarget()
         }
 
@@ -294,6 +303,34 @@ enum GestureTargetController {
         return nil
     }
 
+    /// `windowCandidate` 的 self-only 版本:用于"鼠标停在 Velto 自己窗口上"分支,
+    /// 显式只匹配 selfPid 的窗口(普通 windowCandidate 会主动 skip selfPid 作防线)。
+    private static func selfWindowCandidate(in windowList: [[String: Any]], at point: CGPoint) -> WindowCandidate? {
+        for info in windowList {
+            guard let layer = (info[kCGWindowLayer as String] as? NSNumber)?.intValue,
+                  layer == 0,
+                  let onscreen = info[kCGWindowIsOnscreen as String] as? Bool,
+                  onscreen,
+                  let alpha = (info[kCGWindowAlpha as String] as? NSNumber)?.doubleValue,
+                  alpha > 0.01,
+                  let pidNumber = info[kCGWindowOwnerPID as String] as? NSNumber,
+                  pid_t(pidNumber.intValue) == selfPid,
+                  let boundsDictionary = info[kCGWindowBounds as String] as? NSDictionary,
+                  let bounds = CGRect(dictionaryRepresentation: boundsDictionary),
+                  bounds.width >= 40,
+                  bounds.height >= 40,
+                  bounds.contains(point)
+            else { continue }
+
+            return WindowCandidate(
+                pid: selfPid,
+                ownerName: info[kCGWindowOwnerName as String] as? String ?? "",
+                bounds: bounds
+            )
+        }
+        return nil
+    }
+
     /// 鼠标位置最上层的可见窗口是否属于 Velto 自己。最上层 = windowList 第一个
     /// layer==0 / onscreen / alpha>0 / 包含 point 的条目;尺寸阈值不卡,
     /// 这里只关心"是不是我们"而不是"是不是可拖"。
@@ -366,19 +403,40 @@ enum GestureTargetController {
     }
 
     static func setPosition(_ position: CGPoint, ofWindow window: AXUIElement) -> Bool {
-        var position = position
-        guard let value = AXValueCreate(.cgPoint, &position) else {
-            return false
+        runOnMainIfSelf(window) {
+            var position = position
+            guard let value = AXValueCreate(.cgPoint, &position) else { return false }
+            return AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, value) == .success
         }
-        return AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, value) == .success
     }
 
     static func setSize(_ size: CGSize, ofWindow window: AXUIElement) -> Bool {
-        var size = size
-        guard let value = AXValueCreate(.cgSize, &size) else {
-            return false
+        runOnMainIfSelf(window) {
+            var size = size
+            guard let value = AXValueCreate(.cgSize, &size) else { return false }
+            return AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, value) == .success
         }
-        return AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, value) == .success
+    }
+
+    /// 对 Velto 自己进程的 AX window 写入(setPosition/setSize)必须在 main thread:
+    /// AppKit 的 `-[NSWindow _setFrameCommon:display:fromServer:]` 通过
+    /// `NSWMWindowCoordinator performTransactionUsingBlock:` 内部断言主线程,
+    /// 从 background queue 调直接 brk。这里只挑 self 走 main sync —— 不影响
+    /// 其他 app 的窗口(那些走跨进程 AX,server 自己排队)。
+    /// 用 `Thread.isMainThread` 兜底防止已在 main 上时 `DispatchQueue.main.sync`
+    /// 死锁。
+    /// `AXUIElement` 不 Sendable、闭包跨 queue 也会被 Swift 6 拦住,但这里只是
+    /// 同步等 main 上跑完就返回,引用不会真的逃逸,用 `@unchecked Sendable` 包装
+    /// 把 escape hatch 收敛在 helper 内部。
+    private struct UnsafeBox<T>: @unchecked Sendable { let value: T }
+
+    private static func runOnMainIfSelf(_ window: AXUIElement, _ action: () -> Bool) -> Bool {
+        guard processIdentifier(for: window) == selfPid else { return action() }
+        if Thread.isMainThread { return action() }
+        return withoutActuallyEscaping(action) { escapableAction in
+            let box = UnsafeBox(value: escapableAction)
+            return DispatchQueue.main.sync { box.value() }
+        }
     }
 
     private static func frameFromMultipleAttributes(of window: AXUIElement) -> CGRect? {
