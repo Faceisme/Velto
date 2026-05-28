@@ -131,11 +131,11 @@ final class SwitcherWindowList {
     /// 当前最前台 app 的 pid
     var frontmostPid: pid_t?
 
-    /// 列表发生变化(增删/MRU/title)的回调。Controller 在切换器活跃期间订阅。
-    var onListChanged: (() -> Void)?
-
     private var didInitialize = false
     private var lastGhostProbeTime: TimeInterval = 0
+    /// 已经派发了 ghost probe 还没回来。AXCallQueue 串行所以不会真并发,
+    /// 但 in-flight 期间再派只会让 probe 堆积在队尾 —— 用这个旗子直接挡掉。
+    private var ghostProbeInFlight = false
 
     private init() {}
 
@@ -185,7 +185,8 @@ final class SwitcherWindowList {
         guard app.isEligibleForTracking else { return }
         apps[pid] = app
         app.startObserving(Self.axObserverCallback, Unmanaged.passUnretained(self).toOpaque())
-        syncWindowsForApp(pid: pid)
+        // 首次发现这个 app:跑一次暴力枚举,把它在所有 Space 上的窗口一次性收齐。
+        syncWindowsForApp(pid: pid, includeBruteForce: true)
     }
 
     private func removeApp(pid: pid_t) {
@@ -200,16 +201,15 @@ final class SwitcherWindowList {
         for wid in removedWids { windows.removeValue(forKey: wid) }
         if !removedWids.isEmpty {
             compactMRUOrdering()
-            onListChanged?()
         }
     }
 
     // MARK: - 窗口同步
 
-    private func syncWindowsForApp(pid: pid_t) {
+    private func syncWindowsForApp(pid: pid_t, includeBruteForce: Bool = false) {
         guard let app = apps[pid] else { return }
         AXCallQueue.shared.schedule("sync-\(pid)") { [weak self] in
-            guard let axWindows = app.copyAxWindows() else { return }
+            guard let axWindows = app.copyAxWindows(includeBruteForce: includeBruteForce) else { return }
             let probes: [SwitcherWindowProbe] = axWindows.compactMap { ax in
                 guard let wid = SwitcherAxRead.cgWindowId(of: ax) else { return nil }
                 let attrs = SwitcherAxRead.multiAttributes(ax, [
@@ -259,7 +259,9 @@ final class SwitcherWindowList {
 
     private func applyProbes(_ probes: [SwitcherWindowProbe], for pid: pid_t, spaceMap: [CGWindowID: [CGSSpaceID]]) {
         guard let app = apps[pid] else { return }
-        var changed = false
+        // 窗口集合变化(新增 / 删除)—— 仅这种情况需要重排 lastFocusOrder。
+        // 字段更新(title/size/...)不影响 MRU 序,不触发 compact。
+        var setChanged = false
         var seenWids = Set<CGWindowID>()
         let traceApp = SwitcherDebugLog.shouldTrace(bundleIdentifier: app.bundleIdentifier, appName: app.localizedName)
         let actualProbes = probes.filter { probe in
@@ -300,13 +302,13 @@ final class SwitcherWindowList {
                 appLocalizedName: app.localizedName
             )
             if let existing = windows[probe.wid] {
-                if existing.title != resolvedTitle { existing.title = resolvedTitle; changed = true }
-                if existing.isMinimized != probe.isMinimized { existing.isMinimized = probe.isMinimized; changed = true }
-                if existing.isFullscreen != probe.isFullscreen { existing.isFullscreen = probe.isFullscreen; changed = true }
-                if existing.position != probe.position { existing.position = probe.position; changed = true }
-                if existing.size != probe.size { existing.size = probe.size; changed = true }
+                if existing.title != resolvedTitle { existing.title = resolvedTitle }
+                if existing.isMinimized != probe.isMinimized { existing.isMinimized = probe.isMinimized }
+                if existing.isFullscreen != probe.isFullscreen { existing.isFullscreen = probe.isFullscreen }
+                if existing.position != probe.position { existing.position = probe.position }
+                if existing.size != probe.size { existing.size = probe.size }
                 let newSpaces = spaceMap[probe.wid] ?? []
-                if existing.spaceIds != newSpaces { existing.spaceIds = newSpaces; changed = true }
+                if existing.spaceIds != newSpaces { existing.spaceIds = newSpaces }
             } else {
                 let win = SwitcherWindow(
                     application: app,
@@ -327,18 +329,17 @@ final class SwitcherWindowList {
                 // 预热抓取 —— 后台立刻抓这个新窗口的缩略图存进 win.thumbnail。
                 // Cmd+Tab 召唤时这张图已经就位,用户感觉不到延迟。
                 SwitcherThumbnails.shared.warmThumbnail(for: win)
-                changed = true
+                setChanged = true
             }
         }
         let stale = windows.values.filter { $0.application.pid == pid && !seenWids.contains($0.cgWindowId) }
         for w in stale {
             unsubscribeWindowNotifications(w)
             windows.removeValue(forKey: w.cgWindowId)
-            changed = true
+            setChanged = true
         }
-        if changed {
+        if setChanged {
             compactMRUOrdering()
-            onListChanged?()
         }
     }
 
@@ -379,6 +380,9 @@ final class SwitcherWindowList {
     }
 
     private func handleAxNotification(_ type: String, element: AXUIElement) {
+        // 只处理 SwitcherApp.observedNotifications / SwitcherWindow.observedNotifications
+        // 里明确订阅的通知,其他都不可能到这。不写 default 分支,免得未来加新订阅
+        // 时忘了在这补 case 还以为有兜底。
         switch type {
         // ---- 窗口级别通知 ----
         case kAXWindowMiniaturizedNotification:
@@ -386,35 +390,27 @@ final class SwitcherWindowList {
                let w = windows[wid], !w.isMinimized
             {
                 w.isMinimized = true
-                onListChanged?()
             }
-            return
         case kAXWindowDeminiaturizedNotification:
             if let wid = SwitcherAxRead.cgWindowId(of: element),
                let w = windows[wid], w.isMinimized
             {
                 w.isMinimized = false
-                onListChanged?()
             }
-            return
         case kAXUIElementDestroyedNotification:
             // 销毁的 element 可能拿不到 wid(它已经从 CGS 里消失),退化到全量 sync
             if let wid = SwitcherAxRead.cgWindowId(of: element), let w = windows[wid] {
                 unsubscribeWindowNotifications(w)
                 windows.removeValue(forKey: wid)
                 compactMRUOrdering()
-                onListChanged?()
             } else if let pid = frontmostPid {
                 syncWindowsForApp(pid: pid)
             }
-            return
         case kAXTitleChangedNotification:
-            // 标题更新 —— 通过对应 pid 的 sync 拿最新值。该 sync 是节流的,
-            // 高频改名的 app 不会把我们 IPC 打爆。
-            if let pid = frontmostPid {
-                syncWindowsForApp(pid: pid)
-            }
-            return
+            // 标题更新 —— Chrome / Slack / Xcode 改一个 tab 的标题就触发,频率
+            // 极高。走轻量路径:只读这一个窗口的 title,不走全量 sync(就不会
+            // 触发 100ms 暴力枚举 + 全 app 窗口属性读取)。
+            updateTitleForWindow(element)
 
         // ---- 应用级别通知 ----
         case kAXFocusedWindowChangedNotification, kAXApplicationActivatedNotification:
@@ -422,21 +418,43 @@ final class SwitcherWindowList {
             if let pid = frontmostPid {
                 syncWindowsForApp(pid: pid)
             }
-            return
         case kAXApplicationHiddenNotification, kAXApplicationShownNotification:
             refreshAppHiddenStates()
-            onListChanged?()
-            return
         case kAXWindowCreatedNotification:
+            // 新窗口有可能直接开在别的 Space 上(用户从菜单栏新建窗口时常见),
+            // 标准 AX 路径只拿当前 Space —— 这种 case 必须叠上暴力枚举才能抓到。
             if let pid = frontmostPid {
-                syncWindowsForApp(pid: pid)
+                syncWindowsForApp(pid: pid, includeBruteForce: true)
             }
-            return
 
         default:
-            // 其他未识别通知保持原有"激活的 app 重扫一遍"逻辑
-            if let pid = frontmostPid {
-                syncWindowsForApp(pid: pid)
+            break
+        }
+    }
+
+    /// kAXTitleChangedNotification 专用的轻量更新路径。
+    /// 后台只对单个 AXUIElement 读 title,完了主线程写回。
+    /// 跟 syncWindowsForApp 比省掉了:全量窗口枚举、N 个 multiAttributes 读、
+    /// brute force 100ms。
+    private func updateTitleForWindow(_ element: AXUIElement) {
+        // 主线程拿 wid:_AXUIElementGetWindow 是本进程内的查询,廉价。
+        guard let wid = SwitcherAxRead.cgWindowId(of: element),
+              let existing = windows[wid] else { return }
+        let appLocalizedName = existing.application.localizedName
+        let elementBox = SwitcherAxRefBox(element: element)
+        AXCallQueue.shared.schedule("title-\(wid)") { [weak self] in
+            var v: CFTypeRef?
+            let result = AXUIElementCopyAttributeValue(elementBox.element, kAXTitleAttribute as CFString, &v)
+            let axTitle = (result == .success ? v as? String : nil)
+            let cgTitle = SwitcherAxRead.cgTitle(for: wid)
+            let resolved = SwitcherAxRead.bestEffortTitle(
+                axTitle: axTitle,
+                cgTitle: cgTitle,
+                appLocalizedName: appLocalizedName
+            )
+            Task { @MainActor [weak self] in
+                guard let self, let w = self.windows[wid], w === existing else { return }
+                if w.title != resolved { w.title = resolved }
             }
         }
     }
@@ -467,7 +485,6 @@ final class SwitcherWindowList {
         // 焦点窗口刚活跃过,内容大概率变了 —— 重新预热它的缩略图
         // (背景优先级,不抢 UI 主线程)
         SwitcherThumbnails.shared.warmThumbnail(for: promoted)
-        onListChanged?()
     }
 
     private func refreshAppHiddenStates() {
@@ -639,20 +656,27 @@ final class SwitcherWindowList {
 
     /// 不看节流立刻派发一次探针。snapshot 路径用 runGhostProbeIfDue 包了 500ms 节流。
     private func runGhostProbeNow() {
-        lastGhostProbeTime = CFAbsoluteTimeGetCurrent()
+        guard !ghostProbeInFlight else { return }
+        ghostProbeInFlight = true
         let allSpaces = SwitcherSpaces.allSpaceIds()
         let visibleSpaces = SwitcherSpaces.visibleSpaceIds()
         let snapshotWindows = Array(windows.values)
-        AXCallQueue.shared.submit { [weak self] in
+        // ghost probe 走的是 CGS API(SwitcherSpaces),不是 AX,跟 AXCallQueue
+        // 的串行锁没冲突。放进 detached task,不要白白堵 AX 队列后面的 title /
+        // sync 工作。in-flight 旗子已经保证不会并发多个 probe。
+        Task.detached(priority: .userInitiated) { [weak self] in
             let probe = SwitcherGhostDetector.probe(across: allSpaces)
-            Task { @MainActor [weak self] in
+            await MainActor.run { [weak self] in
                 self?.applyGhostProbe(probe, visibleSpaces: visibleSpaces, against: snapshotWindows)
             }
         }
     }
 
     private func applyGhostProbe(_ probe: WindowVisibilityProbe, visibleSpaces: Set<CGSSpaceID>, against snapshotWindows: [SwitcherWindow]) {
-        var anyChanged = false
+        // probe 真正回来才记时间戳 —— 节流以"上次完成"为锚,卡死的 probe 不会
+        // 让我们一直派新的。
+        lastGhostProbeTime = CFAbsoluteTimeGetCurrent()
+        ghostProbeInFlight = false
         for w in snapshotWindows {
             guard windows[w.cgWindowId] === w else { continue }
             let newValue = SwitcherGhostDetector.isInvisible(
@@ -666,13 +690,23 @@ final class SwitcherWindowList {
             )
             if w.isInvisible != newValue {
                 w.isInvisible = newValue
-                anyChanged = true
             }
         }
-        if anyChanged { onListChanged?() }
+    }
+
+    /// 把缩略图缓存压到 top-keep 个 MRU 窗口以内。session 结束 N 分钟后由
+    /// controller 调,避免 500+ 窗口场景下 thumbnail 永久驻留把内存撑到 100MB+。
+    /// 被裁掉的窗口下次进入 switcher 时,SwitcherThumbnails 会重新抓。
+    func trimThumbnails(keepTop: Int) {
+        let ranked = windows.values.sorted { $0.lastFocusOrder < $1.lastFocusOrder }
+        guard ranked.count > keepTop else { return }
+        for w in ranked.dropFirst(keepTop) where w.thumbnail != nil {
+            w.thumbnail = nil
+        }
     }
 
     private func runGhostProbeIfDue() {
+        guard !ghostProbeInFlight else { return }
         let now = CFAbsoluteTimeGetCurrent()
         guard now - lastGhostProbeTime > 0.5 else { return }
         runGhostProbeNow()

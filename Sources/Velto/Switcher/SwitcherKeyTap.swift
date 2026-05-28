@@ -1,4 +1,5 @@
 import Cocoa
+@preconcurrency import CoreFoundation
 
 /// 切换器需要监听的"逻辑事件" —— 物理键被翻译成这些。Controller 只看这层。
 enum SwitcherKeyEvent {
@@ -21,6 +22,10 @@ enum SwitcherKeyEvent {
 ///   4. Controller 决定要不要弹 panel / 循环 / 切换 / 取消
 ///   5. 退出时务必 `setNativeCommandTabEnabled(true)` 恢复 —— 系统 hotkey 状态
 ///      是**持久的**,我们 crash 了下次开机系统 Cmd+Tab 都还是关着!
+///
+/// Tap 跑在独立的 userInteractive 线程,而非 main runloop —— 主线程被 SwiftUI
+/// 设置页 / 文件 IO 之类卡住时,Cmd+Tab 仍可即时响应。这跟 EventTapManager 同款
+/// 设计,代价是 callback 跨线程,所有共享字段都走 NSLock 保护。
 ///
 /// `@unchecked Sendable`:tap 回调在 tap 线程,onEvent 闭包要小心 actor 边界 ——
 /// Controller 自己负责回到 main。
@@ -92,8 +97,14 @@ final class SwitcherKeyTap: @unchecked Sendable {
         triggerLock.unlock()
     }
 
+    /// Tap / runloop source / tap 线程的生命周期都由 start/stop 管,这三个字段
+    /// 只在主线程读写(start、stop 都只从主线程调),不需要锁。
     private var tap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
+    private var tapThread: Thread?
+    /// tap 线程的 runloop。线程启动时写一次,主线程 stop 时读一次,用
+    /// `ready.wait()` 同步;声明周期内不可变,不需要锁。
+    private var tapRunLoop: CFRunLoop?
     private var didDisableSystemHotkey = false
 
     /// 启动 —— 接管 Cmd+Tab 并装 tap。失败返回 false(权限缺失 / tap 创建失败)。
@@ -124,23 +135,56 @@ final class SwitcherKeyTap: @unchecked Sendable {
             return false
         }
 
-        let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
-        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
-        CGEvent.tapEnable(tap: tap, enable: true)
+        guard let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0) else {
+            CFMachPortInvalidate(tap)
+            setNativeCommandTabEnabled(true)
+            didDisableSystemHotkey = false
+            return false
+        }
 
         self.tap = tap
         self.runLoopSource = source
+
+        // 起独立的高优先级线程跑 tap runloop。这样主线程被 SwiftUI 卡住时
+        // Cmd+Tab 仍能即时响应。
+        let ready = DispatchSemaphore(value: 0)
+        let thread = Thread { [weak self] in
+            guard let runLoop = CFRunLoopGetCurrent() else {
+                ready.signal()
+                return
+            }
+            CFRunLoopAddSource(runLoop, source, .commonModes)
+            self?.tapRunLoop = runLoop
+            ready.signal()
+            CFRunLoopRun()
+            CFRunLoopRemoveSource(runLoop, source, .commonModes)
+        }
+        thread.name = "com.face.velto.switcher.keytap"
+        thread.qualityOfService = .userInteractive
+        tapThread = thread
+        thread.start()
+        ready.wait()
+
+        CGEvent.tapEnable(tap: tap, enable: true)
         return true
     }
 
     /// 停止 —— 恢复系统 Cmd+Tab,卸 tap。**必须** 在 app 退出时调用。
     func stop() {
-        if let tap, let runLoopSource {
+        if let tap {
             CGEvent.tapEnable(tap: tap, enable: false)
-            CFRunLoopRemoveSource(CFRunLoopGetMain(), runLoopSource, .commonModes)
+            CFMachPortInvalidate(tap)
+        }
+        if let runLoopSource {
+            CFRunLoopSourceInvalidate(runLoopSource)
+        }
+        if let tapRunLoop {
+            CFRunLoopStop(tapRunLoop)
         }
         tap = nil
         runLoopSource = nil
+        tapRunLoop = nil
+        tapThread = nil
 
         if didDisableSystemHotkey {
             setNativeCommandTabEnabled(true)

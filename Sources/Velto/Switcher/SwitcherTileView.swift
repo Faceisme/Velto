@@ -39,8 +39,14 @@ final class SwitcherTileView: NSView {
     var onHover: ((SwitcherTileView) -> Void)?
     var onClick: ((SwitcherTileView) -> Void)?
 
-    var isSelected: Bool = false { didSet { needsDisplay = true } }
-    var isHovered: Bool = false { didSet { needsDisplay = true } }
+    // mouseMoved 会高频回调 onHover,Tiles 又会广播 setHoveredIndex 到所有
+    // tile。加去重,只有真变化时才 redraw,避免拖动鼠标时的 redraw 风暴。
+    var isSelected: Bool = false {
+        didSet { if oldValue != isSelected { needsDisplay = true } }
+    }
+    var isHovered: Bool = false {
+        didSet { if oldValue != isHovered { needsDisplay = true } }
+    }
 
     private var trackingArea: NSTrackingArea?
 

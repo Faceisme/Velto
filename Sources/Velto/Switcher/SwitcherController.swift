@@ -24,6 +24,11 @@ final class SwitcherController {
     /// 第一次 trigger 时探一下 Screen Recording 权限 —— 没有就引导用户授权。
     /// 只探一次,授权后需要重启才生效,所以多次 prompt 没意义。
     private var didPromptForScreenRecording = false
+    /// session 结束后挂起的 thumbnail 裁剪任务 —— 2 分钟没新 session 就把 MRU
+    /// 之外的窗口缩略图清掉。下次 trigger 会取消它。
+    private var thumbnailTrimTask: Task<Void, Never>?
+    private static let thumbnailTrimDelayNanos: UInt64 = 120 * 1_000_000_000
+    private static let thumbnailTrimKeepTop = 100
     /// panel 是 lazy 创建 —— 第一次 trigger 时才实例化,避免拖慢启动
     private var _panel: SwitcherPanel?
     private var panel: SwitcherPanel {
@@ -125,6 +130,9 @@ final class SwitcherController {
             stepSelection(reverse: reverse)
             return
         }
+        // 新 session 起来了 —— 把上次 dismiss 后挂的"清缩略图"任务取消,
+        // 避免它在 session 进行中把 MRU 之外的窗口缩略图清掉。
+        cancelThumbnailTrim()
         // 首次召唤:取快照、起 session、显示 panel。
         // snapshot(applying:) 把过滤 + 排序全部按 prefs 跑完。
         let panelScreen = Self.resolvePanelScreen(for: prefs.showOnScreen)
@@ -170,8 +178,11 @@ final class SwitcherController {
         SwitcherThumbnails.shared.captureThumbnails(
             for: session.windows,
             onThumbnailReady: { window, contents in
-                guard SwitcherSession.current === session else { return }
+                // 永远写回 window.thumbnail —— 哪怕 session 已经结束,这张图也是
+                // 下次召唤的预热缓存,丢了就得再抓一次。
                 window.thumbnail = contents
+                // 但只有 panel 仍是这次 session 时才更新 tile,避免改到下一轮的 UI。
+                guard SwitcherSession.current === session else { return }
                 if let tile = panelRef.tilesView.tiles.first(where: { $0.window_ === window }) {
                     tile.updateThumbnail(contents)
                 }
@@ -222,5 +233,26 @@ final class SwitcherController {
         SwitcherSession.current = nil
         keyTap.isActive = false
         _panel?.hidePanel()
+        scheduleThumbnailTrim()
+    }
+
+    // MARK: - Thumbnail LRU 清
+
+    /// 排个延迟任务,N 分钟没新 session 就把非 top-MRU 的窗口缩略图清掉。
+    /// 用户连续 Cmd+Tab 多次时,每次 trigger 都会取消并重排,实际不会真清。
+    /// 这是个软上限:闲置 N 分钟后释放,而不是每次 dismiss 立刻丢图。
+    private func scheduleThumbnailTrim() {
+        thumbnailTrimTask?.cancel()
+        thumbnailTrimTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: Self.thumbnailTrimDelayNanos)
+            if Task.isCancelled { return }
+            SwitcherWindowList.shared.trimThumbnails(keepTop: Self.thumbnailTrimKeepTop)
+            self?.thumbnailTrimTask = nil
+        }
+    }
+
+    private func cancelThumbnailTrim() {
+        thumbnailTrimTask?.cancel()
+        thumbnailTrimTask = nil
     }
 }

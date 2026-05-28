@@ -96,11 +96,16 @@ final class SwitcherApp: @unchecked Sendable {
     ///
     /// 公开 AX API 没有"拿一个进程所有桌面上所有窗口"的方法 —— 必须叠这两层。
     /// alt-tab `AXUIElement.allWindows(pid:)` 的同款 trick。
-    nonisolated func copyAxWindows() -> [AXUIElement]? {
+    ///
+    /// `includeBruteForce` 默认 false —— 高频事件(activate / title / focus)只走
+    /// 标准路径(目标 Space 的窗口即可),省掉 100ms 暴力枚举的代价。只在(a)
+    /// 首次 addApp 和(b)kAXWindowCreatedNotification(新窗口有可能开在别的
+    /// Space 上)这两个时机付费。
+    nonisolated func copyAxWindows(includeBruteForce: Bool = false) -> [AXUIElement]? {
         var stdValue: CFTypeRef?
         let stdResult = AXUIElementCopyAttributeValue(axUiElement, kAXWindowsAttribute as CFString, &stdValue)
         let stdWindows: [AXUIElement] = (stdResult == .success ? (stdValue as? [AXUIElement]) : nil) ?? []
-        let bruteWindows = Self.windowsByBruteForce(pid: pid)
+        let bruteWindows = includeBruteForce ? Self.windowsByBruteForce(pid: pid) : []
         let combined = stdWindows + bruteWindows
         // 标准调用失败 + 暴力没拿到 → 视为 AX 不响应,nil 让调用方稍后重试
         if combined.isEmpty && stdResult != .success { return nil }
