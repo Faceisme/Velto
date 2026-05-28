@@ -403,6 +403,12 @@ private struct GestureDetailPanel: View {
                     }
                     .buttonStyle(MGDestructiveButtonStyle())
                 }
+                // hold 住右侧整组的固有宽度。Kbd 多一个键(如 ⇧⌘])就要多 ~37pt,
+                // 父 HStack 宽度紧时 SwiftUI 默认会去挤 Button label —— 表现是
+                // "修改" / "删除" 两个字被截掉,只剩个铅笔/垃圾桶图标。
+                // fixedSize 把压缩压力推回给左边的标题 Text(它已经 lineLimit(1),
+                // 会优雅截断)。
+                .fixedSize(horizontal: true, vertical: false)
             }
         }
         .onChange(of: isEditingName) { _, editing in
