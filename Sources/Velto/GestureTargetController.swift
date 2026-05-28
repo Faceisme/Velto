@@ -21,6 +21,14 @@ enum GestureTargetController {
         let bounds: CGRect
     }
 
+    /// Velto 自己的 pid。所有"鼠标下的目标"查询都必须先 skip 这个 pid ——
+    /// 否则当鼠标停在 Velto 设置窗口边缘时(典型场景:用户 resize 设置窗口),
+    /// `AXUIElementCopyElementAtPosition` 会被 AppKit 同步路由回我们自己的
+    /// NSHostingView,在 *调用方所在线程*(可能是 WindowDragController 的
+    /// background queue)同步跑 SwiftUI view graph update,撞到 MainActor
+    /// 隔离的 Binding 闭包时 Swift 6 runtime executor 校验直接 SIGTRAP。
+    private static let selfPid: pid_t = getpid()
+
     static func executionTarget(
         at point: CGPoint,
         policy: GestureTargetPolicy,
@@ -113,18 +121,20 @@ enum GestureTargetController {
         let candidatePoints = targetLookupPoints(for: point)
 
         // CGWindowListCopyWindowInfo 是跨进程的全窗口枚举,本次手势内最多取一次,
-        // 各个 fallback 路径复用同一份列表。
-        var cachedWindowList: [[String: Any]]?
-        var didFetchWindowList = false
+        // 各个 fallback 路径复用同一份列表。这里**无条件**先取一次,因为接下来
+        // 要先用它做 self-pid 守护(见 selfPid 注释)。
+        let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+        let cachedWindowList = (CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]]) ?? []
+
+        // 鼠标下最上层窗口属于 Velto 自己时,直接走 fallback,**绝对**不能再
+        // 调 AXUIElementCopyElementAtPosition —— 详见 selfPid 注释。
+        if candidatePoints.contains(where: { topmostWindowIsSelf(in: cachedWindowList, at: $0) }) {
+            return fallbackTarget()
+        }
+
         func candidateFromWindowList() -> WindowCandidate? {
-            if !didFetchWindowList {
-                let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
-                cachedWindowList = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]]
-                didFetchWindowList = true
-            }
-            guard let list = cachedWindowList else { return nil }
             for p in candidatePoints {
-                if let candidate = windowCandidate(in: list, at: p) {
+                if let candidate = windowCandidate(in: cachedWindowList, at: p) {
                     return candidate
                 }
             }
@@ -269,14 +279,41 @@ enum GestureTargetController {
                 continue
             }
 
+            // Velto 自己的窗口不能当作目标 —— 上层 targetUnderPointer 已经守住
+            // 了 AX 路径,这里是 fallback 路径的同等防线。
+            let pid = pid_t(pidNumber.intValue)
+            if pid == selfPid { continue }
+
             return WindowCandidate(
-                pid: pid_t(pidNumber.intValue),
+                pid: pid,
                 ownerName: info[kCGWindowOwnerName as String] as? String ?? "",
                 bounds: bounds
             )
         }
 
         return nil
+    }
+
+    /// 鼠标位置最上层的可见窗口是否属于 Velto 自己。最上层 = windowList 第一个
+    /// layer==0 / onscreen / alpha>0 / 包含 point 的条目;尺寸阈值不卡,
+    /// 这里只关心"是不是我们"而不是"是不是可拖"。
+    private static func topmostWindowIsSelf(in windowList: [[String: Any]], at point: CGPoint) -> Bool {
+        for info in windowList {
+            guard let layer = (info[kCGWindowLayer as String] as? NSNumber)?.intValue,
+                  layer == 0,
+                  let onscreen = info[kCGWindowIsOnscreen as String] as? Bool,
+                  onscreen,
+                  let alpha = (info[kCGWindowAlpha as String] as? NSNumber)?.doubleValue,
+                  alpha > 0.01,
+                  let boundsDictionary = info[kCGWindowBounds as String] as? NSDictionary,
+                  let bounds = CGRect(dictionaryRepresentation: boundsDictionary),
+                  bounds.contains(point),
+                  let pidNumber = info[kCGWindowOwnerPID as String] as? NSNumber
+            else { continue }
+
+            return pid_t(pidNumber.intValue) == selfPid
+        }
+        return false
     }
 
     private static func processIdentifier(for element: AXUIElement) -> pid_t? {
