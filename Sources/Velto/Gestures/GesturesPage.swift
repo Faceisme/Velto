@@ -362,65 +362,48 @@ private struct GestureDetailPanel: View {
         }
     }
 
-    // Header: GESTURE tag + 大标题 + Kbd + 删除
+    // Header: GESTURE tag 独立一行;下面大标题 + Kbd + 按钮组同一行,
+    // 右侧控件整体垂直居中于标题。**不要**用外层 alignment + padding 微调
+    // 的写法 —— 字号一动就破。
     private var headerRow: some View {
-        HStack(alignment: .top, spacing: 12) {
-            VStack(alignment: .leading, spacing: 0) {
-                Text("GESTURE")
-                    .font(.mgTag)
-                    .tracking(1.5)
-                    .foregroundStyle(Color.mgText3)
-                    .padding(.bottom, 6)
+        VStack(alignment: .leading, spacing: 0) {
+            Text("GESTURE")
+                .font(.mgTag)
+                .tracking(1.5)
+                .foregroundStyle(Color.mgText3)
+                .padding(.bottom, 6)
 
-                if isEditingName {
-                    TextField("手势名称", text: $editingName)
-                        .textFieldStyle(.plain)
-                        .font(.mgPageTitle)
-                        .tracking(-0.4)
-                        .foregroundStyle(Color.mgText1)
-                        .focused($nameFieldFocused)
-                        .onSubmit { isEditingName = false }
-                        .onChange(of: editingName) { _, newVal in
-                            updateDraft { $0.name = newVal }
+            HStack(alignment: .center, spacing: 12) {
+                titleField
+
+                Spacer(minLength: 12)
+
+                HStack(alignment: .center, spacing: 8) {
+                    if let sc = gesture.shortcut {
+                        Kbd(keys: sc.kbdKeys, size: .lg)
+                    }
+
+                    Button {
+                        isEditingName.toggle()
+                    } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: isEditingName ? "checkmark" : "pencil")
+                                .font(.system(size: 12, weight: .medium))
+                            Text(isEditingName ? "完成" : "修改")
                         }
-                } else {
-                    Text(displayName)
-                        .font(.mgPageTitle)
-                        .tracking(-0.4)
-                        .foregroundStyle(Color.mgText1)
-                        .lineLimit(1)
-                        .textSelection(.disabled)
+                    }
+                    .buttonStyle(MGSecondaryButtonStyle(height: 32, hPad: 12, font: .mgBodyMedium))
+
+                    Button(action: onDelete) {
+                        HStack(spacing: 5) {
+                            Image(systemName: "trash")
+                                .font(.system(size: 12, weight: .medium))
+                            Text("删除")
+                        }
+                    }
+                    .buttonStyle(MGDestructiveButtonStyle())
                 }
             }
-
-            Spacer(minLength: 12)
-
-            HStack(alignment: .center, spacing: 8) {
-                if let sc = gesture.shortcut {
-                    Kbd(keys: sc.kbdKeys, size: .lg)
-                }
-
-                Button {
-                    isEditingName.toggle()
-                } label: {
-                    HStack(spacing: 5) {
-                        Image(systemName: isEditingName ? "checkmark" : "pencil")
-                            .font(.system(size: 12, weight: .medium))
-                        Text(isEditingName ? "完成" : "修改")
-                    }
-                }
-                .buttonStyle(MGSecondaryButtonStyle(height: 32, hPad: 12, font: .mgBodyMedium))
-
-                Button(action: onDelete) {
-                    HStack(spacing: 5) {
-                        Image(systemName: "trash")
-                            .font(.system(size: 12, weight: .medium))
-                        Text("删除")
-                    }
-                }
-                .buttonStyle(MGDestructiveButtonStyle())
-            }
-            .padding(.top, 4)
         }
         .onChange(of: isEditingName) { _, editing in
             if editing {
@@ -430,6 +413,29 @@ private struct GestureDetailPanel: View {
             } else {
                 nameFieldFocused = false
             }
+        }
+    }
+
+    @ViewBuilder
+    private var titleField: some View {
+        if isEditingName {
+            TextField("手势名称", text: $editingName)
+                .textFieldStyle(.plain)
+                .font(.mgPageTitle)
+                .tracking(-0.4)
+                .foregroundStyle(Color.mgText1)
+                .focused($nameFieldFocused)
+                .onSubmit { isEditingName = false }
+                .onChange(of: editingName) { _, newVal in
+                    updateDraft { $0.name = newVal }
+                }
+        } else {
+            Text(displayName)
+                .font(.mgPageTitle)
+                .tracking(-0.4)
+                .foregroundStyle(Color.mgText1)
+                .lineLimit(1)
+                .textSelection(.disabled)
         }
     }
 
