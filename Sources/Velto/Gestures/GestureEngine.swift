@@ -63,6 +63,24 @@ final class GestureEngine: @unchecked Sendable {
     private weak var runLoopOwner: AnyObject?
     private var tapRunLoop: CFRunLoop?
 
+    /// cancel 时 warp 过去的位置。mouseUp 时如果 release 位置和这里一致,就不再
+    /// 重复 warp —— 避免连续两次 warp 把 events suppression interval 叠成 1-2s 卡顿。
+    private var lastWarpedPosition: CGPoint?
+
+    /// `CGWarpMouseCursorPosition` 默认会引入一段 "events suppression interval"
+    /// (系统偏好里默认 0.25s,macOS 26 上实测更长),期间鼠标移动事件被静默丢弃,
+    /// 用户感受是"光标卡在原地一两秒才跟手"。
+    /// 原代码靠 `CGAssociateMouseAndMouseCursorPosition(1)` 取消,但在 macOS 26 上
+    /// 这条路径不稳定,需要直接把进程内所有相关 source 的 suppression interval
+    /// 设为 0(老的 `CGSetLocalEventsSuppressionInterval` 在 macOS 26 SDK 里已经
+    /// 标 unavailable,只能用 per-source 接口)。用 `static let` 保证只配一次。
+    private static let didDisableWarpSuppression: Bool = {
+        for stateID: CGEventSourceStateID in [.hidSystemState, .combinedSessionState, .privateState] {
+            CGEventSource(stateID: stateID)?.localEventsSuppressionInterval = 0
+        }
+        return true
+    }()
+
     private let movementThreshold: CGFloat = 10
     private let minimumRecordedPointDistance: CGFloat = 2
     private let timeoutRearmDistance: CGFloat = 8
@@ -80,6 +98,8 @@ final class GestureEngine: @unchecked Sendable {
         self.lastFrontmostApplication = NSWorkspace.shared.frontmostApplication
         self.recognizer = GestureRecognizer()
         self.overlay = GestureOverlayController()
+        // 触发一次性的 suppression interval 配置 —— 不取这个值就不会执行。
+        _ = Self.didDisableWarpSuppression
     }
 
     /// Called once on the tap thread right after the runloop is up.
@@ -218,10 +238,14 @@ final class GestureEngine: @unchecked Sendable {
             // holding the button — same logical/visual divergence accrues
             // during the cleanup window. Resync once on release so the next
             // mouseMoved event doesn't snap the cursor to a stale position.
-            if releasePoint != .zero {
+            // 但要避开 cancel 时已经 warp 过同一个位置的 no-op warp:连续两次
+            // warp 即使 suppression interval = 0 也是无谓 syscall,而且如果哪天
+            // suppression 又被系统加回来,redundant warp 会直接卡 1-2s。
+            if releasePoint != .zero, releasePoint != lastWarpedPosition {
                 CGWarpMouseCursorPosition(releasePoint)
                 CGAssociateMouseAndMouseCursorPosition(1)
             }
+            lastWarpedPosition = nil
             return true
 
         case .idle:
@@ -423,10 +447,15 @@ final class GestureEngine: @unchecked Sendable {
         // snaps the visual cursor back to that stale logical position. Warp
         // the logical position to where the user actually is so the snap
         // doesn't happen. Re-associate immediately to avoid the cursor freeze
-        // that CGWarpMouseCursorPosition can otherwise introduce.
+        // that CGWarpMouseCursorPosition can otherwise introduce —— 配合
+        // `didDisableWarpSuppression` 把 suppression interval 设为 0,
+        // 两层防线共同消除"光标卡 1-2 秒"。
         if endPosition != .zero, endPosition != startPoint {
             CGWarpMouseCursorPosition(endPosition)
             CGAssociateMouseAndMouseCursorPosition(1)
+            lastWarpedPosition = endPosition
+        } else {
+            lastWarpedPosition = nil
         }
     }
 
