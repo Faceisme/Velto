@@ -261,8 +261,9 @@ final class SwitcherWindowList {
         guard let app = apps[pid] else { return }
         var changed = false
         var seenWids = Set<CGWindowID>()
+        let traceApp = SwitcherDebugLog.shouldTrace(bundleIdentifier: app.bundleIdentifier, appName: app.localizedName)
         let actualProbes = probes.filter { probe in
-            SwitcherWindowDiscriminator.isActualWindow(
+            let keep = SwitcherWindowDiscriminator.isActualWindow(
                 bundleIdentifier: app.bundleIdentifier,
                 wid: probe.wid,
                 title: probe.title,
@@ -270,16 +271,28 @@ final class SwitcherWindowList {
                 role: probe.role,
                 size: probe.size
             )
+            if traceApp && !keep {
+                SwitcherDebugLog.log("  applyProbes DROP wid=\(probe.wid) reason=isActualWindow=false subrole=\(probe.subrole ?? "-") size=\(probe.size.map { "\(Int($0.width))x\(Int($0.height))" } ?? "-")")
+            }
+            return keep
         }
         let appHasTitledWindow = actualProbes.contains { $0.hasUserVisibleTitle(appLocalizedName: app.localizedName) }
+        if traceApp {
+            SwitcherDebugLog.log("  applyProbes pid=\(pid) actualCount=\(actualProbes.count) appHasTitledWindow=\(appHasTitledWindow)")
+        }
         for probe in actualProbes {
             if probe.shouldHideSyntheticSwitcherWindow(
                 bundleIdentifier: app.bundleIdentifier,
                 appLocalizedName: app.localizedName
             ) {
+                if traceApp { SwitcherDebugLog.log("    DROP wid=\(probe.wid) reason=shouldHideSyntheticSwitcherWindow") }
                 continue
             }
-            if appHasTitledWindow && probe.isUntitledPlaceholderCandidate { continue }
+            if appHasTitledWindow && probe.isUntitledPlaceholderCandidate {
+                if traceApp { SwitcherDebugLog.log("    DROP wid=\(probe.wid) reason=untitledPlaceholderCandidate") }
+                continue
+            }
+            if traceApp { SwitcherDebugLog.log("    KEEP wid=\(probe.wid) axTitle=\"\(probe.title ?? "<nil>")\" cgTitle=\"\(probe.cgTitle ?? "<nil>")\"") }
             seenWids.insert(probe.wid)
             let resolvedTitle = SwitcherAxRead.bestEffortTitle(
                 axTitle: probe.title,
@@ -484,8 +497,15 @@ final class SwitcherWindowList {
         }
 
         let filtered = windows.values.filter { w in
+            let traceWin = SwitcherDebugLog.shouldTrace(
+                bundleIdentifier: w.application.bundleIdentifier,
+                appName: w.application.localizedName
+            )
             // ghost 永远不显示
-            if w.isInvisible { return false }
+            if w.isInvisible {
+                if traceWin { SwitcherDebugLog.log("snapshot DROP wid=\(w.cgWindowId) title=\"\(w.title)\" reason=isInvisible") }
+                return false
+            }
             // 部分 App 会留下 AX 能枚举到、但 WindowServer 已不再认为可见的
             // 合成标题窗口。选中它会把透明/空白壳激活出来,所以在快照时再查一次。
             if AppQuirks.hidesSyntheticSwitcherWindows(
@@ -496,7 +516,15 @@ final class SwitcherWindowList {
                !w.isMinimized,
                !isCurrentlyOnScreen(w.cgWindowId)
             {
+                if traceWin { SwitcherDebugLog.log("snapshot DROP wid=\(w.cgWindowId) title=\"\(w.title)\" reason=syntheticOffscreen") }
                 return false
+            }
+            if traceWin {
+                let posStr = w.position.map { "(\(Int($0.x)),\(Int($0.y)))" } ?? "-"
+                let sizeStr = w.size.map { "\(Int($0.width))x\(Int($0.height))" } ?? "-"
+                let onScreen = isCurrentlyOnScreen(w.cgWindowId)
+                let isSynthetic = AppQuirks.isSyntheticSwitcherWindowTitle(w.title, appName: w.application.localizedName)
+                SwitcherDebugLog.log("snapshot KEEP-candidate wid=\(w.cgWindowId) title=\"\(w.title)\" pos=\(posStr) size=\(sizeStr) minimized=\(w.isMinimized) fullscreen=\(w.isFullscreen) onScreen=\(onScreen) isSyntheticTitle=\(isSynthetic) spaces=\(w.spaceIds)")
             }
             // 隐藏 app
             if prefs.hiddenWindows == .hide && w.isAppHidden { return false }
