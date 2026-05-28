@@ -22,6 +22,29 @@ private let veltoEventTapCallback: CGEventTapCallBack = { proxy, type, event, us
     return manager.handle(proxy: proxy, type: type, event: event)
 }
 
+/// 右键透传白区。GestureCaptureView 之类 Velto 自己的"想吃右键"的 view 在被
+/// 显示时把自己的屏幕 rect(event-tap 坐标:左上角原点,Y 向下)写进来,移除
+/// 时清空。EventTapManager 的右键分支会先看一下当前光标是不是落在区域里,
+/// 是就让事件透传给 NSView,而不是塞给 GestureEngine。
+///
+/// 用 NSLock 串行化 —— 写在主线程(view lifecycle),读在 tap 线程(每个右键
+/// 事件)。读路径锁 + rect.contains,只是几条 CPU 指令,不会成为瓶颈。
+enum RightClickPassThrough {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var _region: CGRect?
+
+    static func setRegion(_ region: CGRect?) {
+        lock.lock(); defer { lock.unlock() }
+        _region = region
+    }
+
+    static func contains(_ point: CGPoint) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard let r = _region else { return false }
+        return r.contains(point)
+    }
+}
+
 /// 跨线程协调器:主线程 (lifecycle / preferences observer) ↔ tap 线程
 /// (CGEvent callback)。因为存在主线程拥有的字段 (eventTap/tapRunLoop) 和
 /// tap-thread callback (`handle`) 同时存在,整类标 `@unchecked Sendable`,
@@ -225,11 +248,19 @@ final class EventTapManager: @unchecked Sendable {
             if event.getIntegerValueField(.eventSourceUserData) == gestureEngine.rightClickSyntheticMarker {
                 return Unmanaged.passUnretained(event)
             }
+            // 录制手势卡片这种自己想吃右键的 view 已经把屏幕区域登记进来 ——
+            // 让事件原样透传,GestureEngine 完全不介入。
+            if RightClickPassThrough.contains(event.location) {
+                return Unmanaged.passUnretained(event)
+            }
             _ = gestureEngine.handleRightMouseDown(at: event.location)
             return nil
 
         case .rightMouseDragged:
             if event.getIntegerValueField(.eventSourceUserData) == gestureEngine.rightClickSyntheticMarker {
+                return Unmanaged.passUnretained(event)
+            }
+            if RightClickPassThrough.contains(event.location) {
                 return Unmanaged.passUnretained(event)
             }
             return gestureEngine.handleRightMouseDragged(at: event.location)
@@ -238,6 +269,9 @@ final class EventTapManager: @unchecked Sendable {
 
         case .rightMouseUp:
             if event.getIntegerValueField(.eventSourceUserData) == gestureEngine.rightClickSyntheticMarker {
+                return Unmanaged.passUnretained(event)
+            }
+            if RightClickPassThrough.contains(event.location) {
                 return Unmanaged.passUnretained(event)
             }
             return gestureEngine.handleRightMouseUp(at: event.location)
