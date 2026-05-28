@@ -22,18 +22,95 @@ struct SwitcherWindowProbe: @unchecked Sendable {
     let position: CGPoint?
     let isMinimized: Bool
     let isFullscreen: Bool
+    let hasOnlyWindowChromeChildren: Bool
 
-    var hasExplicitTitle: Bool {
-        Self.isNonEmptyTitle(title) || Self.isNonEmptyTitle(cgTitle)
+    func hasUserVisibleTitle(appLocalizedName: String?) -> Bool {
+        if Self.normalizedTitle(cgTitle) != nil { return true }
+        guard let title = Self.normalizedTitle(title) else { return false }
+        return !Self.isSyntheticWindowTitle(title, appLocalizedName: appLocalizedName)
     }
+
+    func shouldHideSyntheticSwitcherWindow(bundleIdentifier: String?, appLocalizedName: String?) -> Bool {
+        guard !isMinimized,
+              Self.normalizedTitle(cgTitle) == nil,
+              AppQuirks.hidesSyntheticSwitcherWindows(
+                bundleIdentifier: bundleIdentifier,
+                appName: appLocalizedName
+              )
+        else {
+            return false
+        }
+
+        if let title = Self.normalizedTitle(title) {
+            return Self.isSyntheticWindowTitle(title, appLocalizedName: appLocalizedName)
+        }
+
+        return hasOnlyWindowChromeChildren
+    }
+
+    static func hasNoTitle(axTitle: String?, cgTitle: String?) -> Bool {
+        normalizedTitle(axTitle) == nil && normalizedTitle(cgTitle) == nil
+    }
+
+    static func hasOnlyWindowChromeChildren(_ window: AXUIElement) -> Bool {
+        var value: CFTypeRef?
+        let result = AXUIElementCopyAttributeValue(window, kAXChildrenAttribute as CFString, &value)
+        guard result == .success, let children = value as? [AXUIElement] else { return false }
+        guard !children.isEmpty else { return true }
+        return children.allSatisfy(isChromeOnlyChild)
+    }
+
+    private static func isChromeOnlyChild(_ child: AXUIElement) -> Bool {
+        let attrs = SwitcherAxRead.multiAttributes(child, [
+            kAXRoleAttribute as String,
+            kAXSubroleAttribute as String,
+            kAXTitleAttribute as String,
+            kAXValueAttribute as String,
+            kAXSizeAttribute as String,
+        ])
+        let role = attrs[kAXRoleAttribute as String] as? String
+        if role == kAXButtonRole as String,
+           let subrole = attrs[kAXSubroleAttribute as String] as? String,
+           windowChromeButtonSubroles.contains(subrole)
+        {
+            return true
+        }
+        // 微信 4.x 在合成空窗里塞了一个 10x16 的无字 AXStaticText 占位元素。
+        // 视为 chrome 一类 —— 真主窗不会出现"全是 chrome + 微型空文本"的组合。
+        if role == kAXStaticTextRole as String,
+           let raw = attrs[kAXSizeAttribute as String],
+           let size = SwitcherAxRead.axValueSize(raw),
+           size.width < 40, size.height < 40
+        {
+            let title = (attrs[kAXTitleAttribute as String] as? String) ?? ""
+            let valueStr = (attrs[kAXValueAttribute as String] as? String) ?? ""
+            let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+            let trimmedValue = valueStr.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmedTitle.isEmpty && trimmedValue.isEmpty
+        }
+        return false
+    }
+
+    private static let windowChromeButtonSubroles: Set<String> = [
+        kAXCloseButtonSubrole as String,
+        kAXMinimizeButtonSubrole as String,
+        kAXZoomButtonSubrole as String,
+        "AXFullScreenButton",
+        "AXToolbarButton",
+    ]
 
     var isUntitledPlaceholderCandidate: Bool {
-        !hasExplicitTitle && !isMinimized
+        Self.normalizedTitle(title) == nil && Self.normalizedTitle(cgTitle) == nil && !isMinimized
     }
 
-    private static func isNonEmptyTitle(_ value: String?) -> Bool {
-        guard let value else { return false }
-        return !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    private static func normalizedTitle(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private static func isSyntheticWindowTitle(_ title: String, appLocalizedName: String?) -> Bool {
+        AppQuirks.isSyntheticSwitcherWindowTitle(title, appName: appLocalizedName)
     }
 }
 
@@ -147,17 +224,30 @@ final class SwitcherWindowList {
                 let size: CGSize? = attrs[kAXSizeAttribute as String].flatMap(SwitcherAxRead.axValueSize)
                 let position: CGPoint? = attrs[kAXPositionAttribute as String].flatMap(SwitcherAxRead.axValuePoint)
                 let axTitle = attrs[kAXTitleAttribute as String] as? String
+                let cgTitle = SwitcherAxRead.cgTitle(for: wid)
+                let hasOnlyWindowChromeChildren: Bool
+                if AppQuirks.hidesSyntheticSwitcherWindows(
+                    bundleIdentifier: app.bundleIdentifier,
+                    appName: app.localizedName
+                ),
+                   SwitcherWindowProbe.hasNoTitle(axTitle: axTitle, cgTitle: cgTitle)
+                {
+                    hasOnlyWindowChromeChildren = SwitcherWindowProbe.hasOnlyWindowChromeChildren(ax)
+                } else {
+                    hasOnlyWindowChromeChildren = false
+                }
                 return SwitcherWindowProbe(
                     axUiElement: ax,
                     wid: wid,
                     title: axTitle,
-                    cgTitle: SwitcherAxRead.cgTitle(for: wid),
+                    cgTitle: cgTitle,
                     subrole: attrs[kAXSubroleAttribute as String] as? String,
                     role: attrs[kAXRoleAttribute as String] as? String,
                     size: size,
                     position: position,
                     isMinimized: (attrs[kAXMinimizedAttribute as String] as? Bool) ?? false,
-                    isFullscreen: (attrs[kAXFullScreenAttribute] as? Bool) ?? false
+                    isFullscreen: (attrs[kAXFullScreenAttribute] as? Bool) ?? false,
+                    hasOnlyWindowChromeChildren: hasOnlyWindowChromeChildren
                 )
             }
             let spaceMap = SwitcherSpaces.spaces(forWindowIds: probes.map(\.wid))
@@ -181,8 +271,14 @@ final class SwitcherWindowList {
                 size: probe.size
             )
         }
-        let appHasTitledWindow = actualProbes.contains(where: \.hasExplicitTitle)
+        let appHasTitledWindow = actualProbes.contains { $0.hasUserVisibleTitle(appLocalizedName: app.localizedName) }
         for probe in actualProbes {
+            if probe.shouldHideSyntheticSwitcherWindow(
+                bundleIdentifier: app.bundleIdentifier,
+                appLocalizedName: app.localizedName
+            ) {
+                continue
+            }
             if appHasTitledWindow && probe.isUntitledPlaceholderCandidate { continue }
             seenWids.insert(probe.wid)
             let resolvedTitle = SwitcherAxRead.bestEffortTitle(
@@ -378,10 +474,30 @@ final class SwitcherWindowList {
         runGhostProbeIfDue()
         let visibleSpaces = SwitcherSpaces.visibleSpaceIds()
         let frontPid = frontmostPid
+        var currentOnScreenWindowIds: Set<CGWindowID>?
+
+        func isCurrentlyOnScreen(_ wid: CGWindowID) -> Bool {
+            if currentOnScreenWindowIds == nil {
+                currentOnScreenWindowIds = Self.currentOnScreenWindowIds()
+            }
+            return currentOnScreenWindowIds?.contains(wid) ?? false
+        }
 
         let filtered = windows.values.filter { w in
             // ghost 永远不显示
             if w.isInvisible { return false }
+            // 部分 App 会留下 AX 能枚举到、但 WindowServer 已不再认为可见的
+            // 合成标题窗口。选中它会把透明/空白壳激活出来,所以在快照时再查一次。
+            if AppQuirks.hidesSyntheticSwitcherWindows(
+                bundleIdentifier: w.application.bundleIdentifier,
+                appName: w.application.localizedName
+            ),
+               AppQuirks.isSyntheticSwitcherWindowTitle(w.title, appName: w.application.localizedName),
+               !w.isMinimized,
+               !isCurrentlyOnScreen(w.cgWindowId)
+            {
+                return false
+            }
             // 隐藏 app
             if prefs.hiddenWindows == .hide && w.isAppHidden { return false }
             // 最小化
@@ -417,6 +533,20 @@ final class SwitcherWindowList {
         // showAtEnd 状态的窗口推到末尾(在它们自己的 sort 顺序内保持)。
         let sorted = Self.sort(Array(filtered), by: prefs.sortBy)
         return Self.partitionShowAtEnd(sorted, prefs: prefs)
+    }
+
+    private static func currentOnScreenWindowIds() -> Set<CGWindowID> {
+        let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+        guard let info = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
+            return []
+        }
+        return Set(info.compactMap { row -> CGWindowID? in
+            let value = row[kCGWindowNumber as String]
+            if let id = value as? CGWindowID { return id }
+            if let number = value as? NSNumber { return CGWindowID(truncating: number) }
+            if let int = value as? Int { return CGWindowID(int) }
+            return nil
+        })
     }
 
     /// showAtEnd 三档实现:任何匹配 showAtEnd 条件的窗口移到列表末尾。

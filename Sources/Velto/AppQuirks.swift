@@ -62,6 +62,45 @@ enum AppQuirks {
         return rawApp
     }
 
+    /// Some apps expose internal helper/webview windows to AX as normal windows,
+    /// but their only title is the system synthesized "AppName (window)" label.
+    /// These should not appear in the custom switcher.
+    static func hidesSyntheticSwitcherWindows(bundleIdentifier: String?, appName: String?) -> Bool {
+        if let bundleIdentifier {
+            let lower = bundleIdentifier.lowercased()
+            if isWeChatBundleIdentifier(bundleIdentifier)
+                || lower.contains("dropbox")
+                || lower.contains("1password")
+                || lower.contains("onepassword")
+            {
+                return true
+            }
+        }
+
+        let name = (appName ?? "").lowercased()
+        return isWeChatText(appName ?? "")
+            || name.contains("dropbox")
+            || name.contains("1password")
+            || name.contains("onepassword")
+    }
+
+    static func isSyntheticSwitcherWindowTitle(_ title: String, appName: String?) -> Bool {
+        let normalizedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !normalizedTitle.isEmpty else { return false }
+
+        let suffixes = ["(窗口)", "（窗口）", "(window)", "（window）"]
+        guard suffixes.contains(where: normalizedTitle.hasSuffix) else { return false }
+
+        guard let appName else { return true }
+        let normalizedAppName = appName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !normalizedAppName.isEmpty else { return true }
+
+        return suffixes.contains { suffix in
+            normalizedTitle == "\(normalizedAppName) \(suffix)"
+                || normalizedTitle == "\(normalizedAppName)\(suffix)"
+        } || hidesSyntheticSwitcherWindows(bundleIdentifier: nil, appName: appName)
+    }
+
     // MARK: - WeChat detection
 
     private static func isWeChat(_ application: NSRunningApplication?) -> Bool {
