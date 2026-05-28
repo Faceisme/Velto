@@ -69,9 +69,10 @@ final class SwitcherPanel: NSPanel {
     func show(
         with windows: [SwitcherWindow],
         style: SwitcherAppearanceStyle = .thumbnails,
+        hideWindowTitle: Bool = false,
         on screen: NSScreen? = nil
     ) {
-        let contentSize = tilesView.rebuild(with: windows, style: style)
+        let contentSize = tilesView.rebuild(with: windows, style: style, hideWindowTitle: hideWindowTitle)
         let frame = positionedFrame(for: contentSize, on: screen)
         setFrame(frame, display: true)
         // 即时显示 —— 跟 alt-tab 一致。fade-in 会被感受为"按下后等了一下"。

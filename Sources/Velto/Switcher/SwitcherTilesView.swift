@@ -16,8 +16,13 @@ final class SwitcherTilesView: NSView {
     var onClick: ((Int) -> Void)?
 
     /// 用 windows 列表重建整张网格。返回内容尺寸,Panel 拿去调整自己。
+    /// `hideWindowTitle`:perApp 分组时为 true,tile 只显示 app 名。
     @discardableResult
-    func rebuild(with windows: [SwitcherWindow], style: SwitcherAppearanceStyle = .thumbnails) -> NSSize {
+    func rebuild(
+        with windows: [SwitcherWindow],
+        style: SwitcherAppearanceStyle = .thumbnails,
+        hideWindowTitle: Bool = false
+    ) -> NSSize {
         for t in tiles { t.removeFromSuperview() }
         tiles.removeAll()
 
@@ -46,7 +51,7 @@ final class SwitcherTilesView: NSView {
             let yFromTop = inset + CGFloat(row) * (tileSize.height + sp)
             let y = contentH - yFromTop - tileSize.height
 
-            let tile = SwitcherTileView(window: w, style: style)
+            let tile = SwitcherTileView(window: w, style: style, hideWindowTitle: hideWindowTitle)
             tile.frame = NSRect(x: x, y: y, width: tileSize.width, height: tileSize.height)
             tile.onHover = { [weak self] t in
                 guard let self else { return }

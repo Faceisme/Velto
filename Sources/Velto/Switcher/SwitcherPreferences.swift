@@ -62,6 +62,19 @@ enum SwitcherScreensScope: String, Codable, CaseIterable, Hashable {
     }
 }
 
+/// 分组方式:每个窗口一个条目 / 每个应用一个条目
+enum SwitcherGroupingMode: String, Codable, CaseIterable, Hashable {
+    case perWindow
+    case perApp
+
+    var displayName: String {
+        switch self {
+        case .perWindow: return "按窗口"
+        case .perApp: return "按应用"
+        }
+    }
+}
+
 /// 排序方式
 enum SwitcherSortOrder: String, Codable, CaseIterable, Hashable {
     case recentlyFocused
@@ -136,6 +149,7 @@ struct SwitcherPreferences: Codable, Equatable {
 
     // --- 排序与分组 ---
     var sortBy: SwitcherSortOrder
+    var groupBy: SwitcherGroupingMode
 
     // --- 屏幕与外观 ---
     var showOnScreen: SwitcherScreenChoice
@@ -157,6 +171,7 @@ struct SwitcherPreferences: Codable, Equatable {
         fullscreenWindows: .show,
         windowlessApps: .hide,
         sortBy: .recentlyFocused,
+        groupBy: .perWindow,
         showOnScreen: .mouse,
         appearanceStyle: .thumbnails
     )
@@ -172,6 +187,7 @@ struct SwitcherPreferences: Codable, Equatable {
         fullscreenWindows: SwitcherShowMode,
         windowlessApps: SwitcherShowMode,
         sortBy: SwitcherSortOrder,
+        groupBy: SwitcherGroupingMode,
         showOnScreen: SwitcherScreenChoice,
         appearanceStyle: SwitcherAppearanceStyle
     ) {
@@ -185,6 +201,7 @@ struct SwitcherPreferences: Codable, Equatable {
         self.fullscreenWindows = fullscreenWindows
         self.windowlessApps = windowlessApps
         self.sortBy = sortBy
+        self.groupBy = groupBy
         self.showOnScreen = showOnScreen
         self.appearanceStyle = appearanceStyle
     }
@@ -202,6 +219,7 @@ struct SwitcherPreferences: Codable, Equatable {
         fullscreenWindows = try c.decodeIfPresent(SwitcherShowMode.self, forKey: .fullscreenWindows) ?? d.fullscreenWindows
         windowlessApps = try c.decodeIfPresent(SwitcherShowMode.self, forKey: .windowlessApps) ?? d.windowlessApps
         sortBy = try c.decodeIfPresent(SwitcherSortOrder.self, forKey: .sortBy) ?? d.sortBy
+        groupBy = try c.decodeIfPresent(SwitcherGroupingMode.self, forKey: .groupBy) ?? d.groupBy
         showOnScreen = try c.decodeIfPresent(SwitcherScreenChoice.self, forKey: .showOnScreen) ?? d.showOnScreen
         appearanceStyle = try c.decodeIfPresent(SwitcherAppearanceStyle.self, forKey: .appearanceStyle) ?? d.appearanceStyle
     }

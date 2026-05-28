@@ -154,10 +154,18 @@ struct SwitcherSettingsPage: View {
             GroupCard(radius: MGRadius.cardLg) {
                 VStack(spacing: 0) {
                     row(
+                        icon: "square.stack.3d.up",
+                        title: "分组方式",
+                        desc: "按窗口 = 每个窗口/标签一个条目;按应用 = 每个应用只保留一个(MRU 代表),终端/Chrome 标签多时更清爽。",
+                        showDivider: false
+                    ) {
+                        AnyView(menuPicker(\.groupBy))
+                    }
+                    row(
                         icon: "arrow.up.arrow.down",
                         title: "排序",
                         desc: "窗口在切换器里的排列顺序。",
-                        showDivider: false
+                        showDivider: true
                     ) {
                         AnyView(menuPicker(\.sortBy))
                     }
@@ -245,6 +253,7 @@ struct SwitcherSettingsPage: View {
         if let v = value as? SwitcherSpacesScope { return v.displayName }
         if let v = value as? SwitcherScreensScope { return v.displayName }
         if let v = value as? SwitcherSortOrder { return v.displayName }
+        if let v = value as? SwitcherGroupingMode { return v.displayName }
         if let v = value as? SwitcherScreenChoice { return v.displayName }
         if let v = value as? SwitcherAppearanceStyle { return v.displayName }
         return String(describing: value)

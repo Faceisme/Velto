@@ -22,6 +22,8 @@ final class SwitcherTileView: NSView {
 
     let window_: SwitcherWindow
     let style: SwitcherAppearanceStyle
+    /// perApp 模式下我们只想显示 app 名(单行),不显示窗口标题副标题。
+    let hideWindowTitle: Bool
 
     /// 缩略图层 —— 仅在 thumbnails 模式可见
     private let thumbnailView: SwitcherImageView
@@ -42,9 +44,10 @@ final class SwitcherTileView: NSView {
 
     private var trackingArea: NSTrackingArea?
 
-    init(window: SwitcherWindow, style: SwitcherAppearanceStyle) {
+    init(window: SwitcherWindow, style: SwitcherAppearanceStyle, hideWindowTitle: Bool = false) {
         self.window_ = window
         self.style = style
+        self.hideWindowTitle = hideWindowTitle
         self.thumbnailView = SwitcherImageView(frame: .zero)
         self.mainIconView = NSImageView(frame: .zero)
         self.badgeIconView = NSImageView(frame: .zero)
@@ -70,9 +73,9 @@ final class SwitcherTileView: NSView {
         appNameLabel.textColor = .labelColor
         appNameLabel.stringValue = appName
 
-        // 副标题:窗口标题,跟 app 名相同 / 为空时隐藏
+        // 副标题:窗口标题,跟 app 名相同 / 为空 / perApp 模式时隐藏
         let winTitle = window.title
-        let showSubtitle = !winTitle.isEmpty && winTitle != appName
+        let showSubtitle = !hideWindowTitle && !winTitle.isEmpty && winTitle != appName
         titleLabel.font = .systemFont(ofSize: 10, weight: .regular)
         titleLabel.alignment = style == .titles ? .left : .center
         titleLabel.lineBreakMode = .byTruncatingTail

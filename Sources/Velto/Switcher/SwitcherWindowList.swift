@@ -560,7 +560,22 @@ final class SwitcherWindowList {
         // 主排序后做 showAtEnd 分桶 —— hide 已经在 filter 里剔除,这里只需把
         // showAtEnd 状态的窗口推到末尾(在它们自己的 sort 顺序内保持)。
         let sorted = Self.sort(Array(filtered), by: prefs.sortBy)
-        return Self.partitionShowAtEnd(sorted, prefs: prefs)
+        let partitioned = Self.partitionShowAtEnd(sorted, prefs: prefs)
+        return Self.collapsePerApp(partitioned, mode: prefs.groupBy)
+    }
+
+    /// perApp 模式:每个 app 在结果里只保留第一个出现的窗口(也就是排序后
+    /// 该 app 最靠前的那个)。perWindow 模式原样返回。
+    /// 选中后激活那个代表窗口,macOS 自然会带出整个 app。
+    private static func collapsePerApp(_ windows: [SwitcherWindow], mode: SwitcherGroupingMode) -> [SwitcherWindow] {
+        guard mode == .perApp else { return windows }
+        var seen = Set<pid_t>()
+        var result: [SwitcherWindow] = []
+        result.reserveCapacity(windows.count)
+        for w in windows where seen.insert(w.application.pid).inserted {
+            result.append(w)
+        }
+        return result
     }
 
     private static func currentOnScreenWindowIds() -> Set<CGWindowID> {

@@ -143,7 +143,12 @@ final class SwitcherController {
         let session = SwitcherSession(windows: snapshot, initialSelection: initialSelection)
         SwitcherSession.current = session
         keyTap.isActive = true
-        panel.show(with: snapshot, style: prefs.appearanceStyle, on: panelScreen)
+        panel.show(
+            with: snapshot,
+            style: prefs.appearanceStyle,
+            hideWindowTitle: prefs.groupBy == .perApp,
+            on: panelScreen
+        )
         panel.tilesView.setSelectedIndex(session.selectedIndex)
 
         // 启动缩略图抓取 —— 异步,抓到一张更新一张 tile,不阻塞 panel 显示。
