@@ -186,6 +186,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             window.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
             window.titlebarAppearsTransparent = true
             window.titleVisibility = .hidden
+            window.isMovableByWindowBackground = true
+            window.isOpaque = false
+            window.backgroundColor = .clear
             // 关闭后不要被 AppKit 释放,这样 ⌘W / 红点关闭后还能再次打开同一窗口。
             window.isReleasedWhenClosed = false
             window.setContentSize(NSSize(width: 1180, height: 760))

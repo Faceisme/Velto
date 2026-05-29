@@ -25,10 +25,6 @@ enum MGPage: String, CaseIterable, Identifiable, Hashable {
 }
 
 // MARK: - Root shell
-//
-// 自定义 HSplit:左侧 SidebarView 220 宽 + 右侧 main 区。
-// 不用 NavigationSplitView,因为它带 sidebar material/vibrancy 和系统插画,
-// 会破坏 v2 的 flat #ECECEE / #F5F5F7 配色。
 
 struct SettingsRootView: View {
     @State private var page: MGPage? = .gestures
@@ -45,7 +41,7 @@ struct SettingsRootView: View {
                 .transaction { $0.animation = nil }
         }
         .frame(minWidth: 1100, idealWidth: 1280, minHeight: 720, idealHeight: 800)
-        .background(Color.mgSidebar) // 在 hidden titlebar 区域露出
+        .background(Color.clear)
     }
 
     private var content: some View {

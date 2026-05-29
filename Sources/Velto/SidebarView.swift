@@ -1,63 +1,88 @@
+import AppKit
 import SwiftUI
 
 // MARK: - SidebarView (v2)
-//
-// 220px wide. 背景 #ECECEE.
-//  - 两个分组:"功能" / "偏好"
-//  - SidebarItem: 圆角 8 / 内 7×10 / 选中 #0A84FF 白字 / badge 22% 白透明底
-//  - 底部贴住一张 StatusCard
 
 struct SidebarView: View {
     @Binding var page: MGPage?
     private let store = GestureStore.shared
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            // 顶部留出标题栏空间(transparent titlebar)
-            Spacer().frame(height: 40)
+        ZStack {
+            SettingsSidebarGlassView(
+                cornerRadius: 0,
+                tintColor: NSColor.windowBackgroundColor.withAlphaComponent(0.18),
+                style: .regular
+            )
+            .ignoresSafeArea(.container, edges: [.top, .bottom, .leading])
 
-            SidebarGroup(title: "功能") {
-                SidebarItem(
-                    icon: MGPage.gestures.icon,
-                    label: MGPage.gestures.label,
-                    badge: store.gestures.count,
-                    active: page == .gestures
-                ) { page = .gestures }
+            VStack(alignment: .leading, spacing: 0) {
+                Spacer().frame(height: 58)
 
-                SidebarItem(
-                    icon: MGPage.window.icon,
-                    label: MGPage.window.label,
-                    badge: nil,
-                    active: page == .window
-                ) { page = .window }
+                SidebarGroup(title: "功能") {
+                    SidebarItem(
+                        icon: MGPage.gestures.icon,
+                        label: MGPage.gestures.label,
+                        badge: store.gestures.count,
+                        active: page == .gestures
+                    ) { page = .gestures }
 
-                SidebarItem(
-                    icon: MGPage.switcher.icon,
-                    label: MGPage.switcher.label,
-                    badge: nil,
-                    active: page == .switcher
-                ) { page = .switcher }
+                    SidebarItem(
+                        icon: MGPage.window.icon,
+                        label: MGPage.window.label,
+                        badge: nil,
+                        active: page == .window
+                    ) { page = .window }
+
+                    SidebarItem(
+                        icon: MGPage.switcher.icon,
+                        label: MGPage.switcher.label,
+                        badge: nil,
+                        active: page == .switcher
+                    ) { page = .switcher }
+                }
+
+                Spacer().frame(height: 14)
+
+                SidebarGroup(title: "偏好") {
+                    SidebarItem(
+                        icon: MGPage.general.icon,
+                        label: MGPage.general.label,
+                        badge: nil,
+                        active: page == .general
+                    ) { page = .general }
+                }
+
+                Spacer()
+
+                StatusCard()
             }
-
-            Spacer().frame(height: 14)
-
-            SidebarGroup(title: "偏好") {
-                SidebarItem(
-                    icon: MGPage.general.icon,
-                    label: MGPage.general.label,
-                    badge: nil,
-                    active: page == .general
-                ) { page = .general }
-            }
-
-            Spacer()
-
-            StatusCard()
+            .padding(.horizontal, 12)
+            .padding(.bottom, 12)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
-        .padding(.horizontal, 12)
-        .padding(.bottom, 12)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(Color.mgSidebar)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .ignoresSafeArea(.container, edges: [.top, .bottom, .leading])
+    }
+}
+
+private struct SettingsSidebarGlassView: NSViewRepresentable {
+    var cornerRadius: CGFloat
+    var tintColor: NSColor?
+    var style: NSGlassEffectView.Style = .regular
+
+    func makeNSView(context: Context) -> NSGlassEffectView {
+        let view = NSGlassEffectView()
+        view.cornerRadius = cornerRadius
+        view.tintColor = tintColor
+        view.style = style
+        return view
+    }
+
+    func updateNSView(_ nsView: NSGlassEffectView, context: Context) {
+        nsView.cornerRadius = cornerRadius
+        nsView.tintColor = tintColor
+        nsView.style = style
     }
 }
 
