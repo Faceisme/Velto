@@ -186,7 +186,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             window.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
             window.titlebarAppearsTransparent = true
             window.titleVisibility = .hidden
-            window.isMovableByWindowBackground = true
+            // 不开启背景可拖动:否则触摸板三指拖动(辅助功能合成的拖拽)在滑块/开关
+            // 等控件上会被窗口背景移动抢走,导致拖到的是窗口而不是控件。窗口是
+            // .titled,仍可通过顶部标题栏区域拖动(与系统设置窗口一致)。
+            window.isMovableByWindowBackground = false
             window.isOpaque = false
             window.backgroundColor = .clear
             // 关闭后不要被 AppKit 释放,这样 ⌘W / 红点关闭后还能再次打开同一窗口。
