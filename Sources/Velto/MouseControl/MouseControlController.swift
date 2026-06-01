@@ -823,7 +823,9 @@ private final class MouseSmoothScrollAnimator: NSObject, @unchecked Sendable {
     }
 
     @objc private func frameTick(_ link: CADisplayLink) {
-        processing()
+        // targetTimestamp - timestamp 是本帧应跨越的真实时长(一个刷新周期),
+        // 用它把每帧推进量换算成帧率无关。
+        processing(dt: link.targetTimestamp - link.timestamp)
     }
 
     /// 把控制调用投递到滚动线程串行执行;已在该线程则直接执行。
@@ -1048,7 +1050,21 @@ private final class MouseSmoothScrollAnimator: NSObject, @unchecked Sendable {
         _ = post(delta, phaseOverride: phaseOverride, fallbackToCurrentPhase: false)
     }
 
-    private func processing() {
+    /// 假定原 frameFactor 是按此刷新率调校的(经典 60Hz)。改这个常数即可整体平移
+    /// 帧率无关的锚点(例如想保持某台 120Hz 屏的现状就改成 120)。
+    private static let referenceFrameRate = 60.0
+
+    /// 把"按参考刷新率调出来的每帧追赶系数"换算到任意帧间隔 dt:先反推时间常数 tau
+    /// (alpha = 1 - exp(-Δt_ref/tau)),再用真实 dt 求 1 - exp(-dt/tau)。
+    /// 这样不同刷新率下单位时间的收敛速度一致,而非每帧固定比例。
+    private static func frameRateAdjustedAlpha(_ referenceAlpha: Double, dt: CFTimeInterval) -> Double {
+        guard referenceAlpha > 0, referenceAlpha < 1, dt > 0 else { return referenceAlpha }
+        let referenceInterval = 1.0 / referenceFrameRate
+        let tau = -referenceInterval / log(1 - referenceAlpha)
+        return 1 - exp(-dt / tau)
+    }
+
+    private func processing(dt: CFTimeInterval) {
         var pendingStopPhase: MouseScrollPhase?
         let debugID = activeDebugID
         let phaseBefore = phaseState.phase
@@ -1057,7 +1073,10 @@ private final class MouseSmoothScrollAnimator: NSObject, @unchecked Sendable {
         var didContinueMomentum = false
         var didScheduleMomentumEnd = false
 
-        let frameFactor = manualInputEnded ? max(duration, momentumTransitionFactor) : duration
+        // referenceAlpha 是按 60Hz 调出来的每帧追赶系数,换成真实 dt 重算 → 帧率无关:
+        // 60Hz 上与原来逐帧等价,120Hz 上不再快一倍。
+        let referenceAlpha = manualInputEnded ? max(duration, momentumTransitionFactor) : duration
+        let frameFactor = Self.frameRateAdjustedAlpha(referenceAlpha, dt: dt)
         let frame = (
             y: (buffer.y - current.y) * frameFactor,
             x: (buffer.x - current.x) * frameFactor
@@ -1131,7 +1150,7 @@ private final class MouseSmoothScrollAnimator: NSObject, @unchecked Sendable {
         } else {
             trackingEndScheduledTime = nil
         }
-        MouseScrollDebugLogger.shared.log("#\(debugID) frame phase=\(phaseBefore)->\(phaseState.phase) frame=(\(mouseDebugPair(frame))) frameFactor=\(mouseDebugNumber(frameFactor)) current=(\(mouseDebugPair(current))) buffer=(\(mouseDebugPair(buffer))) filled=(\(mouseDebugPair(filledValue))) residual=(y=\(mouseDebugNumber(residualY)) x=\(mouseDebugNumber(residualX)) mag=\(mouseDebugNumber(residualMagnitude))) residualStop=\(mouseDebugNumber(residualStopThreshold)) outputMag=\(mouseDebugNumber(outputMagnitude)) outputDeadZone=\(mouseDebugNumber(outputDeadZone)) manualEnded=\(manualInputEnded) endedManualThisFrame=\(didEndManualInput) momentumActive=\(momentumActive) startedMomentum=\(didStartMomentum) continuedMomentum=\(didContinueMomentum) scheduledMomentumEnd=\(didScheduleMomentumEnd) momentumEndIn=\(mouseDebugOptionalNumber(momentumEndScheduledTime.map { $0 - now })) trackingEndIn=\(mouseDebugOptionalNumber(trackingEndScheduledTime.map { $0 - now })) pendingStop=\(String(describing: pendingStopPhase))")
+        MouseScrollDebugLogger.shared.log("#\(debugID) frame phase=\(phaseBefore)->\(phaseState.phase) frame=(\(mouseDebugPair(frame))) dt=\(mouseDebugNumber(dt)) refAlpha=\(mouseDebugNumber(referenceAlpha)) frameFactor=\(mouseDebugNumber(frameFactor)) current=(\(mouseDebugPair(current))) buffer=(\(mouseDebugPair(buffer))) filled=(\(mouseDebugPair(filledValue))) residual=(y=\(mouseDebugNumber(residualY)) x=\(mouseDebugNumber(residualX)) mag=\(mouseDebugNumber(residualMagnitude))) residualStop=\(mouseDebugNumber(residualStopThreshold)) outputMag=\(mouseDebugNumber(outputMagnitude)) outputDeadZone=\(mouseDebugNumber(outputDeadZone)) manualEnded=\(manualInputEnded) endedManualThisFrame=\(didEndManualInput) momentumActive=\(momentumActive) startedMomentum=\(didStartMomentum) continuedMomentum=\(didContinueMomentum) scheduledMomentumEnd=\(didScheduleMomentumEnd) momentumEndIn=\(mouseDebugOptionalNumber(momentumEndScheduledTime.map { $0 - now })) trackingEndIn=\(mouseDebugOptionalNumber(trackingEndScheduledTime.map { $0 - now })) pendingStop=\(String(describing: pendingStopPhase))")
 
         if let pendingStopPhase {
             stop(pendingStopPhase)

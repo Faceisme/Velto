@@ -176,18 +176,13 @@ private struct MouseScrollProfileEditor: View {
                         format: "%.2f"
                     )
                 }
-                GroupRow(label: "持续时间", sub: "数值越大,滚动尾迹越长", showDivider: true) {
-                    HStack(spacing: 6) {
-                        MouseSliderStepperField(
-                            value: $profile.duration,
-                            range: 0.5...5.0,
-                            step: 0.05,
-                            format: "%.2f"
-                        )
-                        Text("秒")
-                            .font(.mgBody)
-                            .foregroundStyle(Color.mgText2)
-                    }
+                GroupRow(label: "尾迹长度", sub: "数值越大,滚动缓动越久、尾迹越长(相对值,非秒)", showDivider: true) {
+                    MouseSliderStepperField(
+                        value: $profile.duration,
+                        range: 0.5...5.0,
+                        step: 0.05,
+                        format: "%.2f"
+                    )
                 }
                 GroupRow(label: "模拟触控板模式", sub: "为合成滚动补充连续滚动标记", showDivider: true) {
                     Toggle("", isOn: $profile.simulateTrackpad)
