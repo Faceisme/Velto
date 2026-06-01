@@ -80,6 +80,20 @@ struct GeneralSettingsPage: View {
                                 .controlSize(.small)
                                 .tint(.mgAccent)
                             }
+                            GroupRow(
+                                label: "乱划取消手势",
+                                sub: "手势途中来回乱划几下即可取消,无需等待超时",
+                                showDivider: true
+                            ) {
+                                Toggle("", isOn: Binding(
+                                    get: { store.preferences.scribbleCancelEnabled },
+                                    set: { v in store.updatePreferences { $0.scribbleCancelEnabled = v } }
+                                ))
+                                .labelsHidden()
+                                .toggleStyle(.switch)
+                                .controlSize(.small)
+                                .tint(.mgAccent)
+                            }
                         }
                     }
                 }

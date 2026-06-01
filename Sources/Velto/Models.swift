@@ -48,6 +48,8 @@ struct AppPreferences: Codable, Equatable {
     var showMenuBarIcon: Bool
     var recognitionThreshold: Double
     var gestureTimeoutSeconds: Double
+    /// 开启后,手势进行中"来回乱划几下"会立即判为无效并取消,无需等待超时。
+    var scribbleCancelEnabled: Bool
     var gestureTargetPolicy: GestureTargetPolicy
     var windowMoveModifierFlags: UInt64
     var windowResizeModifierFlags: UInt64
@@ -64,6 +66,7 @@ struct AppPreferences: Codable, Equatable {
         showMenuBarIcon: Bool,
         recognitionThreshold: Double,
         gestureTimeoutSeconds: Double,
+        scribbleCancelEnabled: Bool,
         gestureTargetPolicy: GestureTargetPolicy,
         windowMoveModifierFlags: UInt64,
         windowResizeModifierFlags: UInt64,
@@ -77,6 +80,7 @@ struct AppPreferences: Codable, Equatable {
         self.showMenuBarIcon = showMenuBarIcon
         self.recognitionThreshold = recognitionThreshold
         self.gestureTimeoutSeconds = gestureTimeoutSeconds
+        self.scribbleCancelEnabled = scribbleCancelEnabled
         self.gestureTargetPolicy = gestureTargetPolicy
         self.windowMoveModifierFlags = windowMoveModifierFlags
         self.windowResizeModifierFlags = windowResizeModifierFlags
@@ -93,6 +97,7 @@ struct AppPreferences: Codable, Equatable {
         showMenuBarIcon = try container.decodeIfPresent(Bool.self, forKey: .showMenuBarIcon) ?? Self.defaults.showMenuBarIcon
         recognitionThreshold = try container.decodeIfPresent(Double.self, forKey: .recognitionThreshold) ?? Self.defaults.recognitionThreshold
         gestureTimeoutSeconds = try container.decodeIfPresent(Double.self, forKey: .gestureTimeoutSeconds) ?? Self.defaults.gestureTimeoutSeconds
+        scribbleCancelEnabled = try container.decodeIfPresent(Bool.self, forKey: .scribbleCancelEnabled) ?? Self.defaults.scribbleCancelEnabled
         gestureTargetPolicy = try container.decodeIfPresent(GestureTargetPolicy.self, forKey: .gestureTargetPolicy) ?? Self.defaults.gestureTargetPolicy
         windowMoveModifierFlags = try container.decodeIfPresent(UInt64.self, forKey: .windowMoveModifierFlags) ?? Self.defaults.windowMoveModifierFlags
         windowResizeModifierFlags = try container.decodeIfPresent(UInt64.self, forKey: .windowResizeModifierFlags) ?? Self.defaults.windowResizeModifierFlags
@@ -108,6 +113,7 @@ struct AppPreferences: Codable, Equatable {
         showMenuBarIcon: true,
         recognitionThreshold: 0.34,
         gestureTimeoutSeconds: 3.0,
+        scribbleCancelEnabled: true,
         gestureTargetPolicy: .windowUnderPointer,
         windowMoveModifierFlags: 0,
         windowResizeModifierFlags: 0,
