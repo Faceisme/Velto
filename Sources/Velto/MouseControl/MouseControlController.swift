@@ -123,6 +123,9 @@ private func mouseDebugPair(_ value: (y: Double, x: Double)) -> String {
 
 final class MouseControlController: @unchecked Sendable {
     static let syntheticScrollMarker: Int64 = 0x56454C544F534352
+    /// iPhone 镜像:把鼠标滚轮重新合成成带 momentum 的连续事件,需绕过触控板跳过
+    /// 才能翻转方向。
+    private static let iPhoneMirroringBundleID = "com.apple.ScreenContinuity"
 
     /// 总开关闸门:每个滚动 / 触发事件最顶端无锁读一次,关功能时一条原子 load
     /// 就返回,跳过 bundle 解析、快照与按钮匹配等全部工作。写于主线程偏好观察者。
@@ -196,15 +199,20 @@ final class MouseControlController: @unchecked Sendable {
             logger.log("#\(debugID) skip reason=synthetic-marker")
             return false
         }
-        guard !isTrackpadLike(event) else {
-            logger.log("#\(debugID) skip reason=trackpad-like phase=\(mouseDebugNumber(event.getDoubleValueField(.scrollWheelEventScrollPhase))) momentum=\(mouseDebugNumber(event.getDoubleValueField(.scrollWheelEventMomentumPhase))) count=\(mouseDebugNumber(event.getDoubleValueField(.scrollWheelEventScrollCount)))")
-            return false
-        }
 
         let bundleID = bundleIdentifier(for: event)
         let snapshot = snapshot(for: bundleID)
         guard snapshot.preferences.enabled else {
             logger.log("#\(debugID) skip reason=preferences-disabled bundle=\(bundleID ?? "-")")
+            return false
+        }
+
+        // iPhone 镜像会把鼠标滚轮重新合成成带 momentum 的连续事件,通用触控板判定会把
+        // 它整段(惯性部分)挡在翻转之前。对它放行:照常翻转,但不接管平滑(它自带
+        // iOS 惯性,Velto 再合成平滑会打架)。其余 app 维持"触控板一律跳过"。
+        let isContinuityMirror = bundleID == Self.iPhoneMirroringBundleID
+        guard isContinuityMirror || !isTrackpadLike(event) else {
+            logger.log("#\(debugID) skip reason=trackpad-like phase=\(mouseDebugNumber(event.getDoubleValueField(.scrollWheelEventScrollPhase))) momentum=\(mouseDebugNumber(event.getDoubleValueField(.scrollWheelEventMomentumPhase))) count=\(mouseDebugNumber(event.getDoubleValueField(.scrollWheelEventScrollCount)))")
             return false
         }
 
@@ -227,6 +235,20 @@ final class MouseControlController: @unchecked Sendable {
         }
         if hasX && reverseX {
             scrollEvent.reverseX()
+        }
+
+        // iPhone 镜像读的是 CGEvent 底层的 IOHIDEvent 滚动量,无视我们对 delta 字段的
+        // 就地修改 + 透传。必须重新投递一个合成事件(无原始 HID 背书)并吃掉原事件,
+        // 它才会读我们给的(已翻转)值。1:1 重投,不走平滑(它自带 iOS 惯性)。
+        if isContinuityMirror {
+            if (hasY && reverseY) || (hasX && reverseX) {
+                event.setIntegerValueField(.eventSourceUserData, value: Self.syntheticScrollMarker)
+                event.postToPid(targetPID)
+                logger.log("#\(debugID) return consumed=true reason=mirror-repost reverseY=\(reverseY) reverseX=\(reverseX)")
+                return true
+            }
+            logger.log("#\(debugID) return consumed=false reason=mirror-no-reverse")
+            return false
         }
 
         let smoothAllowed = profile.smooth && !state.disableSmooth
