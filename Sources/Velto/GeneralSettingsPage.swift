@@ -193,6 +193,36 @@ struct GeneralSettingsPage: View {
                         }
                     }
                 }
+
+                // 调试
+                VStack(alignment: .leading, spacing: 0) {
+                    MGSectionLabel(text: "调试")
+                    GroupCard {
+                        VStack(spacing: 0) {
+                            GroupRow(
+                                label: "调试模式",
+                                sub: "记录手势轨迹等诊断日志,排查问题时打开,平时保持关闭"
+                            ) {
+                                Toggle("", isOn: Binding(
+                                    get: { store.preferences.debugLoggingEnabled },
+                                    set: { v in store.updatePreferences { $0.debugLoggingEnabled = v } }
+                                ))
+                                .labelsHidden()
+                                .toggleStyle(.switch)
+                                .controlSize(.small)
+                                .tint(.mgAccent)
+                            }
+                            GroupRow(
+                                label: "诊断日志",
+                                sub: "~/Library/Logs/Velto/velto-debug.jsonl",
+                                showDivider: true
+                            ) {
+                                Button("在访达中显示", action: revealDebugLog)
+                                    .buttonStyle(MGSecondaryButtonStyle())
+                            }
+                        }
+                    }
+                }
             }
             .padding(.horizontal, 32)
             .padding(.top, 28)
@@ -214,6 +244,20 @@ struct GeneralSettingsPage: View {
             Button("好") {}
         } message: {
             Text(errorMessage)
+        }
+    }
+
+    // MARK: - Debug
+
+    /// 在访达里定位诊断日志;文件还没生成时,退而打开其所在目录。
+    private func revealDebugLog() {
+        let url = DebugLog.fileURL
+        let dir = url.deletingLastPathComponent()
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        if FileManager.default.fileExists(atPath: url.path) {
+            NSWorkspace.shared.activateFileViewerSelecting([url])
+        } else {
+            NSWorkspace.shared.open(dir)
         }
     }
 

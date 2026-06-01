@@ -50,6 +50,9 @@ struct AppPreferences: Codable, Equatable {
     var gestureTimeoutSeconds: Double
     /// 开启后,手势进行中"来回乱划几下"会立即判为无效并取消,无需等待超时。
     var scribbleCancelEnabled: Bool
+    /// 调试模式总开关(默认关)。开启后诊断日志(如手势轨迹)会写入
+    /// ~/Library/Logs/Velto/,便于排查与迭代;关闭时几乎零开销。
+    var debugLoggingEnabled: Bool
     var gestureTargetPolicy: GestureTargetPolicy
     var windowMoveModifierFlags: UInt64
     var windowResizeModifierFlags: UInt64
@@ -67,6 +70,7 @@ struct AppPreferences: Codable, Equatable {
         recognitionThreshold: Double,
         gestureTimeoutSeconds: Double,
         scribbleCancelEnabled: Bool,
+        debugLoggingEnabled: Bool,
         gestureTargetPolicy: GestureTargetPolicy,
         windowMoveModifierFlags: UInt64,
         windowResizeModifierFlags: UInt64,
@@ -81,6 +85,7 @@ struct AppPreferences: Codable, Equatable {
         self.recognitionThreshold = recognitionThreshold
         self.gestureTimeoutSeconds = gestureTimeoutSeconds
         self.scribbleCancelEnabled = scribbleCancelEnabled
+        self.debugLoggingEnabled = debugLoggingEnabled
         self.gestureTargetPolicy = gestureTargetPolicy
         self.windowMoveModifierFlags = windowMoveModifierFlags
         self.windowResizeModifierFlags = windowResizeModifierFlags
@@ -98,6 +103,7 @@ struct AppPreferences: Codable, Equatable {
         recognitionThreshold = try container.decodeIfPresent(Double.self, forKey: .recognitionThreshold) ?? Self.defaults.recognitionThreshold
         gestureTimeoutSeconds = try container.decodeIfPresent(Double.self, forKey: .gestureTimeoutSeconds) ?? Self.defaults.gestureTimeoutSeconds
         scribbleCancelEnabled = try container.decodeIfPresent(Bool.self, forKey: .scribbleCancelEnabled) ?? Self.defaults.scribbleCancelEnabled
+        debugLoggingEnabled = try container.decodeIfPresent(Bool.self, forKey: .debugLoggingEnabled) ?? Self.defaults.debugLoggingEnabled
         gestureTargetPolicy = try container.decodeIfPresent(GestureTargetPolicy.self, forKey: .gestureTargetPolicy) ?? Self.defaults.gestureTargetPolicy
         windowMoveModifierFlags = try container.decodeIfPresent(UInt64.self, forKey: .windowMoveModifierFlags) ?? Self.defaults.windowMoveModifierFlags
         windowResizeModifierFlags = try container.decodeIfPresent(UInt64.self, forKey: .windowResizeModifierFlags) ?? Self.defaults.windowResizeModifierFlags
@@ -114,6 +120,7 @@ struct AppPreferences: Codable, Equatable {
         recognitionThreshold: 0.34,
         gestureTimeoutSeconds: 3.0,
         scribbleCancelEnabled: true,
+        debugLoggingEnabled: false,
         gestureTargetPolicy: .windowUnderPointer,
         windowMoveModifierFlags: 0,
         windowResizeModifierFlags: 0,
@@ -235,6 +242,7 @@ final class GestureStore {
         if needsPreferencesWrite {
             savePreferences()
         }
+        syncDebugLog()
     }
 
     func updateGestures(_ update: (inout [GestureCommand]) -> Void) {
@@ -247,6 +255,7 @@ final class GestureStore {
     func updatePreferences(_ update: (inout AppPreferences) -> Void) {
         update(&preferences)
         savePreferences()
+        syncDebugLog()
         notifyChanged(reason: .preferences)
     }
 
@@ -280,6 +289,7 @@ final class GestureStore {
         gesturesVersion &+= 1
         saveGestures()
         savePreferences()
+        syncDebugLog()
         notifyChanged(reason: .backupImport)
     }
 
@@ -293,6 +303,11 @@ final class GestureStore {
         if let data = try? encoder.encode(preferences) {
             UserDefaults.standard.set(data, forKey: preferencesKey)
         }
+    }
+
+    /// 把"调试模式"开关同步给 `DebugLog` —— 覆盖启动加载 / UI 改动 / 配置导入。
+    private func syncDebugLog() {
+        DebugLog.setEnabled(preferences.debugLoggingEnabled)
     }
 
     private func notifyChanged(reason: GestureStoreChangeReason) {

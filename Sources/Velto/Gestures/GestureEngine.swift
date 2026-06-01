@@ -72,6 +72,15 @@ final class GestureEngine: @unchecked Sendable {
     private var scribbleLastLegDirection: CGVector?
     private var scribbleTurnAccumulator: CGFloat = 0
 
+    // MARK: 调试轨迹记录 (仅"调试模式"开启时记录,不改变手势行为)
+    //
+    // 每次手势开始读一次 `DebugLog.isEnabled` 定本次是否记录(`debugThisSession`),
+    // 关闭时 begin/append/flush 全不触发,零额外缓冲开销。`debugReason` 记录本次
+    // 手势的终止方式(乱划取消/超时/松手放行…),松手时连同完整轨迹写一条 JSONL。
+    private var debugThisSession = false
+    private var debugReason = ""
+    private var debugTrace = GestureTraceRecorder()
+
     private var frontmostApplicationAtGestureStart: NSRunningApplication?
     private var lastFrontmostApplication: NSRunningApplication?
 
@@ -164,7 +173,14 @@ final class GestureEngine: @unchecked Sendable {
     /// Returns whether the engine consumed the event. Tap thread.
     func handleRightMouseDown(at location: CGPoint) -> Bool {
         if state != .idle {
+            if debugThisSession { debugTrace.flush(reason: "abandoned") }
             resetTracking()
+        }
+
+        debugThisSession = DebugLog.isEnabled
+        if debugThisSession {
+            debugReason = ""
+            debugTrace.begin(at: location)
         }
 
         state = .pending
@@ -182,6 +198,7 @@ final class GestureEngine: @unchecked Sendable {
     }
 
     func handleRightMouseDragged(at location: CGPoint) -> Bool {
+        if debugThisSession, state != .idle { debugTrace.append(at: location) }
         switch state {
         case .pending:
             _ = appendPoint(location)
@@ -231,6 +248,18 @@ final class GestureEngine: @unchecked Sendable {
     }
 
     func handleRightMouseUp(at location: CGPoint) -> Bool {
+        if debugThisSession, state != .idle {
+            debugTrace.append(at: location)
+            let reason: String
+            switch state {
+            case .pending: reason = "click"
+            case .gesturing: reason = debugReason.isEmpty ? "release" : debugReason
+            case .cleanupAwaitingUp: reason = debugReason.isEmpty ? "cancel" : debugReason
+            case .idle: reason = "idle"
+            }
+            debugTrace.flush(reason: reason)
+            debugThisSession = false
+        }
         switch state {
         case .pending:
             let point = startPoint
@@ -493,6 +522,7 @@ final class GestureEngine: @unchecked Sendable {
 
     /// 在 tap 线程上调用 —— 和超时取消同一条收尾链路。
     private func cancelGestureByScribble() {
+        if debugThisSession { debugReason = "scribbleCancel" }
         cancelGestureAndWaitForRightMouseUp()
         onGestureMatch?(nil)
         onStatusChange?("本次手势已取消")
@@ -558,11 +588,13 @@ final class GestureEngine: @unchecked Sendable {
 
     private func fireSafetyTimer() {
         guard state != .idle else { return }
+        if debugThisSession { debugReason = "safetyCancel" }
         cancelGestureAndWaitForRightMouseUp()
     }
 
     private func fireGestureTimeoutTimer() {
         guard state == .gesturing else { return }
+        if debugThisSession { debugReason = "timeoutCancel" }
         cancelGestureAndWaitForRightMouseUp()
         // callback 是 `@Sendable`,从 tap runloop 直接调用即可,
         // 调用方 (AppDelegate) 自己把 UI 更新 hop 到 main actor。
@@ -633,5 +665,39 @@ private final class TimerBox {
     let handler: () -> Void
     init(handler: @escaping () -> Void) {
         self.handler = handler
+    }
+}
+
+/// 手势轨迹调试记录器(仅"调试模式"开启时被 `GestureEngine` 喂数据)。一次手势
+/// (按下→松开)攒一条记录,松手时经 `DebugLog` 落一行 JSONL:含相对毫秒时间戳的
+/// 原始轨迹点 `pts:[[t,x,y],…]`、点数与终止原因 `reason`。坐标取整以压缩体积。
+private struct GestureTraceRecorder {
+    private var start: CFAbsoluteTime = 0
+    private var samples: [[Int]] = []
+    private var seq = 0
+    private let maxSamples = 6000
+
+    mutating func begin(at p: CGPoint) {
+        start = CFAbsoluteTimeGetCurrent()
+        samples = [[0, Int(p.x.rounded()), Int(p.y.rounded())]]
+    }
+
+    mutating func append(at p: CGPoint) {
+        guard samples.count < maxSamples else { return }
+        let t = Int(((CFAbsoluteTimeGetCurrent() - start) * 1000).rounded())
+        samples.append([t, Int(p.x.rounded()), Int(p.y.rounded())])
+    }
+
+    mutating func flush(reason: String) {
+        guard !samples.isEmpty else { return }
+        seq += 1
+        DebugLog.event("gesture", [
+            "seq": seq,
+            "reason": reason,
+            "durationMs": samples.last?.first ?? 0,
+            "count": samples.count,
+            "pts": samples
+        ])
+        samples = []
     }
 }
