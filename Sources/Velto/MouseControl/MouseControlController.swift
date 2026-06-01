@@ -365,11 +365,19 @@ final class MouseControlController: @unchecked Sendable {
                 NSWorkspace.shared.open(URL(fileURLWithPath: path))
             }
         case .runScript(let script):
+            let trimmed = script.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return }
             DispatchQueue.global(qos: .utility).async {
                 let process = Process()
+                // 保留登录 shell(-l):GUI 经 LaunchServices 启动时环境极简,-l 才能
+                // 带上用户 PATH(Homebrew 等),否则依赖 PATH 的脚本会失效。
                 process.executableURL = URL(fileURLWithPath: "/bin/zsh")
                 process.arguments = ["-lc", script]
-                try? process.run()
+                do {
+                    try process.run()
+                } catch {
+                    NSLog("Velto mouse control: runScript 启动失败 — %@", String(describing: error))
+                }
             }
         }
     }

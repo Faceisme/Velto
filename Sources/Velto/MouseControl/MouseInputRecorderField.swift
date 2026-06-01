@@ -4,6 +4,9 @@ import SwiftUI
 struct MouseInputRecorderField: View {
     @Binding var trigger: MouseInputTrigger?
     var placeholder: String = "点击录制"
+    /// 是否允许录制纯修饰键(无主键)。滚动功能键需要(按住 ⌥ 加速);按钮绑定
+    /// 不允许 —— 把裸修饰键绑成按钮会让该修饰键被全局吞掉,破坏整个系统的修饰键。
+    var allowsModifierOnly: Bool = true
 
     @State private var isRecording = false
     @State private var monitor: Any?
@@ -91,6 +94,7 @@ struct MouseInputRecorderField: View {
 
         switch event.type {
         case .flagsChanged:
+            guard allowsModifierOnly else { return }
             let raw = ModifierFormatter.normalizedRawValue(from: event.modifierFlags)
             guard raw != 0 else { return }
             trigger = MouseInputTrigger(

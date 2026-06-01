@@ -314,10 +314,11 @@ private struct MouseBindingsSection: View {
                         .padding(.vertical, 8)
                 } else {
                     VStack(spacing: 10) {
-                        ForEach(bindings.indices, id: \.self) { index in
+                        // 按元素 id 遍历 / 删除:索引式 ForEach 在删除时会越界且动画错乱。
+                        ForEach($bindings) { $binding in
                             MouseBindingRow(
-                                binding: $bindings[index],
-                                onDelete: { bindings.remove(at: index) }
+                                binding: $binding,
+                                onDelete: { bindings.removeAll { $0.id == binding.id } }
                             )
                         }
                     }
@@ -412,7 +413,10 @@ private struct MouseBindingRow: View {
                     .frame(minWidth: 130)
 
                 KeyCapSlot(minWidth: 104) {
-                    MouseInputRecorderField(trigger: requiredTriggerBinding)
+                    MouseInputRecorderField(
+                        trigger: requiredTriggerBinding,
+                        allowsModifierOnly: false
+                    )
                 }
 
                 Picker("", selection: actionKind) {
