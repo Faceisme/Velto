@@ -1,8 +1,8 @@
 # Velto
 
-Velto 是一个面向 Apple Silicon Mac 的轻量级桌面操作增强工具。最初只做鼠标手势，现在还包含窗口拖动 / 缩放 / 最大化、内容缩放，以及一个仿 Win11 风格、带实时缩略图的窗口切换器。整体目标是用最少的交互完成高频操作：按住鼠标右键画手势执行快捷键，按住修饰键拖动或缩放窗口，按 `⌘+Tab` 在面板里挑窗口。
+Velto 是一个面向 Apple Silicon Mac 的轻量级桌面操作增强工具。最初只做鼠标手势，现在还包含 Mos 风格的鼠标滚轮控制、窗口拖动 / 缩放 / 最大化、内容缩放，以及一个仿 Win11 风格、带实时缩略图的窗口切换器。整体目标是用最少的交互完成高频操作：按住鼠标右键画手势执行快捷键，用鼠标滚轮获得更顺滑的滚动手感，按住修饰键拖动或缩放窗口，按 `⌘+Tab` 在面板里挑窗口。
 
-项目最初是为了替代没有 Apple Silicon 原生版本的鼠标手势工具，后续按个人使用习惯持续扩展。界面使用 macOS 26 的原生 Liquid Glass 风格，功能模块化、可单独开关。
+项目最初是为了替代没有 Apple Silicon 原生版本的鼠标手势工具，后续按个人使用习惯持续扩展。界面使用 macOS 26 的原生 Liquid Glass 风格，功能模块化，当前设置侧边栏包含「鼠标手势」「鼠标控制」「窗口管理」「窗口切换」「通用设置」五个入口。
 
 ## 功能特性
 
@@ -13,7 +13,7 @@ Velto 是一个面向 Apple Silicon Mac 的轻量级桌面操作增强工具。�
 - 支持开机自动启动，默认不显示 Dock 图标，菜单栏图标可隐藏。
 - 支持导入、导出完整 App 配置备份（JSON）。
 - 关键 Event Tap 运行在独立高优先级线程上，降低主线程繁忙带来的延迟。
-- 各功能模块互相独立，可在设置里单独启用或停用。
+- 各功能模块互相独立，可在设置里单独启用或停用；鼠标控制和窗口切换都保留独立调试入口。
 
 ### 鼠标手势
 
@@ -38,14 +38,16 @@ Velto 是一个面向 Apple Silicon Mac 的轻量级桌面操作增强工具。�
 
 ### 鼠标控制
 
-参考 Mos 的功能形态增加独立入口，当前覆盖平滑滚动、轴向独立、滚动功能键、按应用配置和基础按钮绑定。
+参考 Mos 的功能形态增加独立入口，当前覆盖平滑滚动、轴向独立、滚动功能键、按应用配置、基础按钮绑定和滚轮调试日志开关。
 
-- 支持全局启用 / 停用鼠标控制。
-- 支持配置最短步长、速度增益、持续时间，以及模拟触控板模式。
+- 支持全局启用 / 停用鼠标控制；关闭后滚动平滑、滚动功能键和按钮绑定都不会生效。
+- 支持用滑条和数值框配置最短步长、速度增益、尾迹长度，以及模拟触控板模式。
 - 支持垂直 / 水平滚动分别设置平滑和反向。
 - 支持为滚动加速、方向转换、临时禁用平滑录制键盘或鼠标触发键。
 - 支持为指定 App 覆盖滚动、滚动功能键和按钮绑定。
 - 支持录制键盘或鼠标按钮，并绑定到系统动作、快捷键、打开 App、打开文件或运行脚本。
+- 支持 iPhone 镜像 (`com.apple.ScreenContinuity`) 的滚轮反向处理：镜像场景下不额外接管平滑，只重投已翻转的滚轮事件，避免和 iOS 自带惯性打架。
+- 支持在设置里临时打开滚轮调试日志，默认关闭，日常使用不会持续写日志。
 
 ### 窗口切换器
 
@@ -130,6 +132,7 @@ scripts/build-app.sh --run
 - 手势识别参数与作用目标。
 - 窗口移动、缩放、最大化相关快捷键和修饰键。
 - 滚轮缩放修饰键。
+- 鼠标控制的全局滚动、滚动功能键、按钮绑定、按应用覆盖规则和滚轮调试开关。
 - 切换器的触发快捷键和全部偏好（分组、排序、筛选、外观、屏幕选择等）。
 - 菜单栏图标、轨迹显示等 App 内偏好。
 
@@ -180,6 +183,7 @@ Sources/Velto/
     ContentZoomController.swift
   Switcher/
     SwitcherSettingsPage.swift
+    SwitcherPreferences.swift
     SwitcherController.swift
     SwitcherPanel.swift
     SwitcherTilesView.swift
@@ -204,8 +208,8 @@ scripts/
 核心模块：
 
 - `EventTapManager`：监听右键手势、窗口移动 / 缩放修饰键、滚轮缩放修饰键，并调度对应动作。
-- `MouseControl/MouseControlController`：处理鼠标滚轮平滑、滚动功能键和按钮绑定。
-- `MouseControl/MouseControlPage`：侧边栏「鼠标控制」设置页，包含全局、按应用和按钮绑定配置。
+- `MouseControl/MouseControlController`：处理鼠标滚轮平滑、轴向反向、滚动功能键、按钮绑定、iPhone 镜像滚轮重投和滚轮调试日志。
+- `MouseControl/MouseControlPage`：侧边栏「鼠标控制」设置页，包含全局、按应用、按钮绑定、滑条参数和调试开关配置。
 - `Gestures/GestureEngine` + `GestureRecognizer`：手势状态机和样本匹配。
 - `GestureTargetController` + `ShortcutSynthesizer`：定位目标窗口并合成快捷键事件。
 - `Gestures/GestureOverlayController` + `GestureTrailView`：可选的手势轨迹反馈。
@@ -219,6 +223,14 @@ scripts/
 - 设置窗口：`SettingsRootView` + `SidebarView` + 各 `*Page`，共享 `DesignSystem.swift` 里的设计 token 和 `Components.swift`、`RecorderViews.swift` 里的通用控件。
 
 ## 调试
+
+鼠标控制页里有「滚轮调试日志」总开关，默认关闭。排查滚动手感时打开后，日志会写到：
+
+```text
+~/Library/Logs/Velto/mouse-scroll-debug.log
+```
+
+这个日志会记录滚轮输入、平滑队列、合成滚动投递、方向变化和动量尾迹等信息；问题定位完成后建议关掉，避免日常使用持续写入。
 
 如果切换器列表里出现莫名其妙的窗口（过去遇到过微信 4.x 的空壳、Dropbox / 1Password 的小组件式窗口），可以用环境变量打开切换器调试日志：
 
@@ -240,6 +252,7 @@ VELTO_SWITCHER_DEBUG=1 /Applications/Velto.app/Contents/MacOS/Velto
 - 这是一个个人使用优先的小工具，不追求完整替代大型商业软件。
 - 当前只支持右键触发鼠标手势。
 - 当前手势动作以快捷键和基础窗口控制为主，不内置复杂动作系统。
+- 鼠标控制默认不处理触控板事件；触控板本身已有系统惯性，Velto 主要接管物理鼠标滚轮。
 - App 默认使用本机 ad-hoc 签名即可自用；公开分发时需要按 Apple 的分发要求重新签名、公证。
 - 默认 Bundle Identifier 是 `com.face.myapp`，如果你要分发自己的版本，建议改成自己的反向域名。
 - 切换器使用了 SkyLight 私有框架（`_AXUIElementGetWindow` 等），用于跨 Space 枚举窗口和判定可见性 —— 这是 Mac 窗口管理类工具的通用做法，但意味着这部分代码无法上架 Mac App Store。
