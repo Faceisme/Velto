@@ -28,6 +28,13 @@ struct SidebarView: View {
                     ) { page = .gestures }
 
                     SidebarItem(
+                        icon: MGPage.mouseControl.icon,
+                        label: MGPage.mouseControl.label,
+                        badge: nil,
+                        active: page == .mouseControl
+                    ) { page = .mouseControl }
+
+                    SidebarItem(
                         icon: MGPage.window.icon,
                         label: MGPage.window.label,
                         badge: nil,

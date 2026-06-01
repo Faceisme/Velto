@@ -93,8 +93,7 @@ echo "$INSTALLED_APP  (also at $APP_DIR)"
 # ============ 5. --run:可选地直接启动 ============
 if [ "$DO_RUN" = "1" ]; then
     echo "启动中..."
-    "$INSTALLED_APP/Contents/MacOS/Velto" &
-    disown 2>/dev/null || true
+    open -a "$INSTALLED_APP"
     sleep 0.5
     echo "进程已启动 (pid: $(pgrep -f "$INSTALLED_APP/Contents/MacOS/Velto" | head -1))"
 fi

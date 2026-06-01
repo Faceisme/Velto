@@ -4,9 +4,14 @@ import ApplicationServices
 import CoreGraphics
 import Foundation
 
-/// Owns the global CGEventTap, the dedicated tap-callback thread, and the four
-/// sub-controllers that act on events:
+/// Owns the global CGEventTaps, the dedicated HID tap-callback thread, and the
+/// controllers that act on events. Wheel events intentionally run through a
+/// separate `.cgAnnotatedSessionEventTap`, matching Mos' routing model; the
+/// annotated event carries the target PID needed by smooth-scroll replay.
+///
+/// Sub-controllers:
 /// - `GestureEngine`        right-click gesture state machine
+/// - `MouseControlController` smooth scroll / scroll hotkeys / button bindings
 /// - `WindowDragController` modifier+drag move/resize
 /// - `ContentZoomController` modifier+scroll content zoom
 /// - `WindowShortcutController` shortcut-triggered window actions
@@ -20,6 +25,12 @@ private let veltoEventTapCallback: CGEventTapCallBack = { proxy, type, event, us
     guard let userInfo else { return Unmanaged.passUnretained(event) }
     let manager = Unmanaged<EventTapManager>.fromOpaque(userInfo).takeUnretainedValue()
     return manager.handle(proxy: proxy, type: type, event: event)
+}
+
+private let veltoScrollEventTapCallback: CGEventTapCallBack = { proxy, type, event, userInfo in
+    guard let userInfo else { return Unmanaged.passUnretained(event) }
+    let manager = Unmanaged<EventTapManager>.fromOpaque(userInfo).takeUnretainedValue()
+    return manager.handleAnnotatedScroll(proxy: proxy, type: type, event: event)
 }
 
 /// 右键透传白区。GestureCaptureView 之类 Velto 自己的"想吃右键"的 view 在被
@@ -61,6 +72,7 @@ final class EventTapManager: @unchecked Sendable {
 
     private let store: GestureStore
     private let gestureEngine: GestureEngine
+    private let mouseControlController = MouseControlController()
     private let windowDragController = WindowDragController()
     private let contentZoomController = ContentZoomController()
     private let windowShortcutController = WindowShortcutController()
@@ -68,6 +80,8 @@ final class EventTapManager: @unchecked Sendable {
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
     private var tapThread: Thread?
+    private var scrollEventTap: CFMachPort?
+    private var scrollRunLoopSource: CFRunLoopSource?
     /// 写于 tap 线程 (start 里 thread block 起步时),读于主线程 (performOnTapThread,
     /// stop)。启动期靠 `ready.wait()` 同步可见性;`stop()` 仅在主线程调用,所有
     /// `performOnTapThread` 调用点也都在主线程,串行化天然成立。类整体标
@@ -143,13 +157,22 @@ final class EventTapManager: @unchecked Sendable {
             return false
         }
 
+        guard startScrollEventTap() else {
+            onStatusChange?("滚轮拦截启动失败")
+            return false
+        }
+
         let mask = eventMask(for: .rightMouseDown)
             | eventMask(for: .rightMouseDragged)
             | eventMask(for: .rightMouseUp)
+            | eventMask(for: .leftMouseDown)
+            | eventMask(for: .leftMouseUp)
+            | eventMask(for: .otherMouseDown)
+            | eventMask(for: .otherMouseUp)
             | eventMask(for: .mouseMoved)
-            | eventMask(for: .scrollWheel)
             | eventMask(for: .flagsChanged)
             | eventMask(for: .keyDown)
+            | eventMask(for: .keyUp)
 
         guard let tap = CGEvent.tapCreate(
             tap: .cghidEventTap,
@@ -159,6 +182,7 @@ final class EventTapManager: @unchecked Sendable {
             callback: veltoEventTapCallback,
             userInfo: Unmanaged.passUnretained(self).toOpaque()
         ) else {
+            stopScrollEventTap()
             onStatusChange?("事件拦截启动失败")
             return false
         }
@@ -167,6 +191,7 @@ final class EventTapManager: @unchecked Sendable {
         guard let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0) else {
             CFMachPortInvalidate(tap)
             eventTap = nil
+            stopScrollEventTap()
             onStatusChange?("事件拦截启动失败")
             return false
         }
@@ -225,12 +250,14 @@ final class EventTapManager: @unchecked Sendable {
         if let runLoop {
             CFRunLoopStop(runLoop)
         }
+        stopScrollEventTap()
     }
 
     // MARK: - Event dispatch (tap thread)
 
     func handle(proxy: CGEventTapProxy, type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+            mouseControlController.resetTransientState()
             if let eventTap {
                 CGEvent.tapEnable(tap: eventTap, enable: true)
             }
@@ -253,6 +280,9 @@ final class EventTapManager: @unchecked Sendable {
             if RightClickPassThrough.contains(event.location) {
                 return Unmanaged.passUnretained(event)
             }
+            if mouseControlController.handleTriggerEvent(type: type, event: event) {
+                return nil
+            }
             _ = gestureEngine.handleRightMouseDown(at: event.location)
             return nil
 
@@ -274,7 +304,15 @@ final class EventTapManager: @unchecked Sendable {
             if RightClickPassThrough.contains(event.location) {
                 return Unmanaged.passUnretained(event)
             }
+            if mouseControlController.handleTriggerEvent(type: type, event: event) {
+                return nil
+            }
             return gestureEngine.handleRightMouseUp(at: event.location)
+                ? nil
+                : Unmanaged.passUnretained(event)
+
+        case .leftMouseDown, .leftMouseUp, .otherMouseDown, .otherMouseUp:
+            return mouseControlController.handleTriggerEvent(type: type, event: event)
                 ? nil
                 : Unmanaged.passUnretained(event)
 
@@ -289,22 +327,14 @@ final class EventTapManager: @unchecked Sendable {
             windowDragController.handleMouseMoved(at: event.location, mode: mode)
             return Unmanaged.passUnretained(event)
 
-        case .scrollWheel:
-            guard !gestureEngine.isHandlingRightMouse else {
-                return Unmanaged.passUnretained(event)
-            }
-            if raw == 0 { return Unmanaged.passUnretained(event) }
-            return contentZoomController.handleScrollWheel(event: event, normalizedFlags: raw)
-                ? nil
-                : Unmanaged.passUnretained(event)
-
         case .flagsChanged:
             guard !gestureEngine.isHandlingRightMouse else {
                 return Unmanaged.passUnretained(event)
             }
+            let consumed = mouseControlController.handleTriggerEvent(type: type, event: event)
             contentZoomController.handleFlagsChanged(normalizedFlags: raw)
             windowDragController.handleFlagsChanged(event: event, normalizedFlags: raw)
-            return Unmanaged.passUnretained(event)
+            return consumed ? nil : Unmanaged.passUnretained(event)
 
         case .keyDown:
             if event.getIntegerValueField(.eventSourceUserData) == ShortcutSynthesizer.syntheticEventMarker {
@@ -313,13 +343,104 @@ final class EventTapManager: @unchecked Sendable {
             guard !gestureEngine.isHandlingRightMouse else {
                 return Unmanaged.passUnretained(event)
             }
+            if mouseControlController.handleTriggerEvent(type: type, event: event) {
+                return nil
+            }
             return windowShortcutController.handleKeyDown(event: event, normalizedFlags: raw)
+                ? nil
+                : Unmanaged.passUnretained(event)
+
+        case .keyUp:
+            if event.getIntegerValueField(.eventSourceUserData) == ShortcutSynthesizer.syntheticEventMarker {
+                return Unmanaged.passUnretained(event)
+            }
+            guard !gestureEngine.isHandlingRightMouse else {
+                return Unmanaged.passUnretained(event)
+            }
+            return mouseControlController.handleTriggerEvent(type: type, event: event)
                 ? nil
                 : Unmanaged.passUnretained(event)
 
         default:
             return Unmanaged.passUnretained(event)
         }
+    }
+
+    // MARK: - Annotated scroll tap (main run loop)
+
+    func handleAnnotatedScroll(
+        proxy: CGEventTapProxy,
+        type: CGEventType,
+        event: CGEvent
+    ) -> Unmanaged<CGEvent>? {
+        if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+            mouseControlController.stopSmoothScroll()
+            if let scrollEventTap {
+                CGEvent.tapEnable(tap: scrollEventTap, enable: true)
+            }
+            return Unmanaged.passUnretained(event)
+        }
+
+        guard type == .scrollWheel else {
+            return Unmanaged.passUnretained(event)
+        }
+
+        if event.getIntegerValueField(.eventSourceUserData) == MouseControlController.syntheticScrollMarker {
+            return Unmanaged.passUnretained(event)
+        }
+
+        let raw = ModifierFormatter.normalizedRawValue(from: event.flags)
+        if raw != 0,
+           contentZoomController.handleScrollWheel(event: event, normalizedFlags: raw) {
+            return nil
+        }
+
+        return mouseControlController.handleScrollWheel(event: event)
+            ? nil
+            : Unmanaged.passUnretained(event)
+    }
+
+    private func startScrollEventTap() -> Bool {
+        guard scrollEventTap == nil else { return true }
+
+        let mask = eventMask(for: .scrollWheel)
+        guard let tap = CGEvent.tapCreate(
+            tap: .cgAnnotatedSessionEventTap,
+            place: .tailAppendEventTap,
+            options: .defaultTap,
+            eventsOfInterest: mask,
+            callback: veltoScrollEventTapCallback,
+            userInfo: Unmanaged.passUnretained(self).toOpaque()
+        ) else {
+            return false
+        }
+
+        guard let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0) else {
+            CFMachPortInvalidate(tap)
+            return false
+        }
+
+        scrollEventTap = tap
+        scrollRunLoopSource = source
+        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
+        CGEvent.tapEnable(tap: tap, enable: true)
+        return true
+    }
+
+    private func stopScrollEventTap() {
+        mouseControlController.stopSmoothScroll()
+        if let tap = scrollEventTap {
+            CGEvent.tapEnable(tap: tap, enable: false)
+            CFMachPortInvalidate(tap)
+        }
+        if let source = scrollRunLoopSource {
+            CFRunLoopSourceInvalidate(source)
+            if CFRunLoopContainsSource(CFRunLoopGetMain(), source, .commonModes) {
+                CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
+            }
+        }
+        scrollEventTap = nil
+        scrollRunLoopSource = nil
     }
 
     // MARK: - Cross-thread helpers
@@ -334,6 +455,7 @@ final class EventTapManager: @unchecked Sendable {
     }
 
     private func applyPreferenceSnapshots(_ preferences: AppPreferences) {
+        mouseControlController.updatePreferences(preferences.mouseControl)
         windowDragController.updateModifierFlags(
             move: preferences.windowMoveModifierFlags,
             resize: preferences.windowResizeModifierFlags

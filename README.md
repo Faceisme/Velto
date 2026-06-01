@@ -36,6 +36,17 @@ Velto 是一个面向 Apple Silicon Mac 的轻量级桌面操作增强工具。�
 - 支持快捷键最大化光标下窗口。
 - 支持按住自定义修饰键并滚动鼠标滚轮，对网页、图片等内容执行平滑缩放。
 
+### 鼠标控制
+
+参考 Mos 的功能形态增加独立入口，当前覆盖平滑滚动、轴向独立、滚动功能键、按应用配置和基础按钮绑定。
+
+- 支持全局启用 / 停用鼠标控制。
+- 支持配置最短步长、速度增益、持续时间，以及模拟触控板模式。
+- 支持垂直 / 水平滚动分别设置平滑和反向。
+- 支持为滚动加速、方向转换、临时禁用平滑录制键盘或鼠标触发键。
+- 支持为指定 App 覆盖滚动、滚动功能键和按钮绑定。
+- 支持录制键盘或鼠标按钮，并绑定到系统动作、快捷键、打开 App、打开文件或运行脚本。
+
 ### 窗口切换器
 
 类似 Windows 11 风格的 `⌘+Tab` 替代：按下触发键弹出居中浮动面板，实时显示每个窗口的缩略图，松开切换。
@@ -150,6 +161,11 @@ Sources/Velto/
   DesignSystem.swift
   Components.swift
   RecorderViews.swift
+  MouseControl/
+    MouseControlModels.swift
+    MouseControlController.swift
+    MouseControlPage.swift
+    MouseInputRecorderField.swift
   Gestures/
     GesturesPage.swift
     GestureEngine.swift
@@ -188,6 +204,8 @@ scripts/
 核心模块：
 
 - `EventTapManager`：监听右键手势、窗口移动 / 缩放修饰键、滚轮缩放修饰键，并调度对应动作。
+- `MouseControl/MouseControlController`：处理鼠标滚轮平滑、滚动功能键和按钮绑定。
+- `MouseControl/MouseControlPage`：侧边栏「鼠标控制」设置页，包含全局、按应用和按钮绑定配置。
 - `Gestures/GestureEngine` + `GestureRecognizer`：手势状态机和样本匹配。
 - `GestureTargetController` + `ShortcutSynthesizer`：定位目标窗口并合成快捷键事件。
 - `Gestures/GestureOverlayController` + `GestureTrailView`：可选的手势轨迹反馈。
@@ -237,3 +255,5 @@ pkill -x Velto
 ## License
 
 当前仓库还没有选择开源许可证。正式公开前建议添加一个明确的 `LICENSE` 文件，例如 MIT、Apache-2.0 或 GPL 系列许可证。
+
+新增「鼠标控制」入口参考了 [Caldis/Mos](https://github.com/Caldis/Mos) 的功能设计和滚动处理思路。Mos 使用 CC BY-NC 4.0 授权；如果后续公开或商业分发 Velto，需要重新确认这部分的授权兼容性。

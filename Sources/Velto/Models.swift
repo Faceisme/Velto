@@ -53,6 +53,7 @@ struct AppPreferences: Codable, Equatable {
     var windowResizeModifierFlags: UInt64
     var contentZoomModifierFlags: UInt64
     var windowMaximizeShortcut: Shortcut?
+    var mouseControl: MouseControlPreferences
     /// 窗口切换器的全部配置 —— 子结构定义在 Switcher/SwitcherPreferences.swift。
     /// 嵌进来跟手势/窗口管理共享一份 JSON 持久化。
     var switcher: SwitcherPreferences
@@ -68,6 +69,7 @@ struct AppPreferences: Codable, Equatable {
         windowResizeModifierFlags: UInt64,
         contentZoomModifierFlags: UInt64,
         windowMaximizeShortcut: Shortcut?,
+        mouseControl: MouseControlPreferences,
         switcher: SwitcherPreferences
     ) {
         self.gesturesEnabled = gesturesEnabled
@@ -80,6 +82,7 @@ struct AppPreferences: Codable, Equatable {
         self.windowResizeModifierFlags = windowResizeModifierFlags
         self.contentZoomModifierFlags = contentZoomModifierFlags
         self.windowMaximizeShortcut = windowMaximizeShortcut
+        self.mouseControl = mouseControl
         self.switcher = switcher
     }
 
@@ -95,6 +98,7 @@ struct AppPreferences: Codable, Equatable {
         windowResizeModifierFlags = try container.decodeIfPresent(UInt64.self, forKey: .windowResizeModifierFlags) ?? Self.defaults.windowResizeModifierFlags
         contentZoomModifierFlags = try container.decodeIfPresent(UInt64.self, forKey: .contentZoomModifierFlags) ?? Self.defaults.contentZoomModifierFlags
         windowMaximizeShortcut = try container.decodeIfPresent(Shortcut.self, forKey: .windowMaximizeShortcut) ?? Self.defaults.windowMaximizeShortcut
+        mouseControl = try container.decodeIfPresent(MouseControlPreferences.self, forKey: .mouseControl) ?? Self.defaults.mouseControl
         switcher = try container.decodeIfPresent(SwitcherPreferences.self, forKey: .switcher) ?? Self.defaults.switcher
     }
 
@@ -109,6 +113,7 @@ struct AppPreferences: Codable, Equatable {
         windowResizeModifierFlags: 0,
         contentZoomModifierFlags: 0,
         windowMaximizeShortcut: nil,
+        mouseControl: .defaults,
         switcher: .defaults
     )
 }
