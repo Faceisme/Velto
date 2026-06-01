@@ -293,7 +293,7 @@ final class EventTapManager: @unchecked Sendable {
             if RightClickPassThrough.contains(event.location) {
                 return Unmanaged.passUnretained(event)
             }
-            if mouseControlController.handleTriggerEvent(type: type, event: event) {
+            if mouseControlController.handleTriggerEvent(type: type, event: event, normalizedFlags: raw) {
                 return nil
             }
             _ = gestureEngine.handleRightMouseDown(at: event.location)
@@ -317,7 +317,7 @@ final class EventTapManager: @unchecked Sendable {
             if RightClickPassThrough.contains(event.location) {
                 return Unmanaged.passUnretained(event)
             }
-            if mouseControlController.handleTriggerEvent(type: type, event: event) {
+            if mouseControlController.handleTriggerEvent(type: type, event: event, normalizedFlags: raw) {
                 return nil
             }
             return gestureEngine.handleRightMouseUp(at: event.location)
@@ -325,7 +325,7 @@ final class EventTapManager: @unchecked Sendable {
                 : Unmanaged.passUnretained(event)
 
         case .leftMouseDown, .leftMouseUp, .otherMouseDown, .otherMouseUp:
-            return mouseControlController.handleTriggerEvent(type: type, event: event)
+            return mouseControlController.handleTriggerEvent(type: type, event: event, normalizedFlags: raw)
                 ? nil
                 : Unmanaged.passUnretained(event)
 
@@ -344,7 +344,7 @@ final class EventTapManager: @unchecked Sendable {
             guard !gestureEngine.isHandlingRightMouse else {
                 return Unmanaged.passUnretained(event)
             }
-            let consumed = mouseControlController.handleTriggerEvent(type: type, event: event)
+            let consumed = mouseControlController.handleTriggerEvent(type: type, event: event, normalizedFlags: raw)
             contentZoomController.handleFlagsChanged(normalizedFlags: raw)
             windowDragController.handleFlagsChanged(event: event, normalizedFlags: raw)
             return consumed ? nil : Unmanaged.passUnretained(event)
@@ -356,7 +356,7 @@ final class EventTapManager: @unchecked Sendable {
             guard !gestureEngine.isHandlingRightMouse else {
                 return Unmanaged.passUnretained(event)
             }
-            if mouseControlController.handleTriggerEvent(type: type, event: event) {
+            if mouseControlController.handleTriggerEvent(type: type, event: event, normalizedFlags: raw) {
                 return nil
             }
             return windowShortcutController.handleKeyDown(event: event, normalizedFlags: raw)
@@ -370,7 +370,7 @@ final class EventTapManager: @unchecked Sendable {
             guard !gestureEngine.isHandlingRightMouse else {
                 return Unmanaged.passUnretained(event)
             }
-            return mouseControlController.handleTriggerEvent(type: type, event: event)
+            return mouseControlController.handleTriggerEvent(type: type, event: event, normalizedFlags: raw)
                 ? nil
                 : Unmanaged.passUnretained(event)
 

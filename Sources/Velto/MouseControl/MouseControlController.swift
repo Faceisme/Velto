@@ -3,6 +3,7 @@ import AppKit
 import CoreGraphics
 import Foundation
 import QuartzCore
+import Synchronization
 
 private struct MouseRuntimeTriggerKey: Hashable {
     let kind: MouseInputKind
@@ -20,6 +21,9 @@ private final class MouseScrollDebugLogger: @unchecked Sendable {
 
     private let queue = DispatchQueue(label: "com.face.velto.mouse-scroll.debug-log", qos: .utility)
     private let stateLock = NSLock()
+    /// `enabled` 的无锁镜像。生产态(日志关闭)下,每事件的 nextEventID/log 只做一次
+    /// 原子 load 即返回,不再加锁。开启日志时才走 stateLock 路径。
+    private let enabledFlag = Atomic<Bool>(false)
     private var enabled = false
     private var eventCounter: UInt64 = 0
     private var fileHandle: FileHandle?
@@ -31,6 +35,7 @@ private final class MouseScrollDebugLogger: @unchecked Sendable {
     }
 
     func setEnabled(_ shouldEnable: Bool) {
+        enabledFlag.store(shouldEnable, ordering: .relaxed)
         stateLock.lock()
         let didChange = enabled != shouldEnable
         enabled = shouldEnable
@@ -52,6 +57,7 @@ private final class MouseScrollDebugLogger: @unchecked Sendable {
     }
 
     func nextEventID() -> UInt64 {
+        guard enabledFlag.load(ordering: .relaxed) else { return 0 }
         stateLock.lock()
         defer { stateLock.unlock() }
         guard enabled else { return 0 }
@@ -60,6 +66,7 @@ private final class MouseScrollDebugLogger: @unchecked Sendable {
     }
 
     func log(_ message: @autoclosure () -> String) {
+        guard enabledFlag.load(ordering: .relaxed) else { return }
         stateLock.lock()
         let isEnabled = enabled
         stateLock.unlock()
@@ -117,6 +124,10 @@ private func mouseDebugPair(_ value: (y: Double, x: Double)) -> String {
 final class MouseControlController: @unchecked Sendable {
     static let syntheticScrollMarker: Int64 = 0x56454C544F534352
 
+    /// 总开关闸门:每个滚动 / 触发事件最顶端无锁读一次,关功能时一条原子 load
+    /// 就返回,跳过 bundle 解析、快照与按钮匹配等全部工作。写于主线程偏好观察者。
+    private let enabledFlag = Atomic<Bool>(false)
+
     private let lock = NSLock()
     private let animator = MouseSmoothScrollAnimator()
 
@@ -124,10 +135,19 @@ final class MouseControlController: @unchecked Sendable {
     private var hotkeyState = MouseScrollHotkeyState()
     private var consumedTriggers = Set<MouseRuntimeTriggerKey>()
 
+    /// pid → bundleID 单条 memo(由 `lock` 保护)。事件按 app 聚簇,命中即免去
+    /// 每事件一次 `NSRunningApplication(processIdentifier:)` 查询;pid→bundle 稳定,
+    /// 切换 app 自然刷新,pid 复用属极端情形,结果与逐次查询一致。
+    private var cachedPID: pid_t = 0
+    private var cachedBundleID: String?
+
     func updatePreferences(_ preferences: MouseControlPreferences) {
         MouseScrollDebugLogger.shared.setEnabled(preferences.debugLoggingEnabled)
+        enabledFlag.store(preferences.enabled, ordering: .relaxed)
         lock.lock()
         self.preferences = preferences
+        cachedPID = 0
+        cachedBundleID = nil
         lock.unlock()
         if !preferences.enabled {
             resetTransientState()
@@ -166,6 +186,7 @@ final class MouseControlController: @unchecked Sendable {
     }
 
     func handleScrollWheel(event: CGEvent) -> Bool {
+        guard enabledFlag.load(ordering: .relaxed) else { return false }
         let logger = MouseScrollDebugLogger.shared
         let debugID = logger.nextEventID()
         let marker = event.getIntegerValueField(.eventSourceUserData)
@@ -250,12 +271,13 @@ final class MouseControlController: @unchecked Sendable {
         return didSubmitSmoothEvent
     }
 
-    func handleTriggerEvent(type: CGEventType, event: CGEvent) -> Bool {
+    func handleTriggerEvent(type: CGEventType, event: CGEvent, normalizedFlags: UInt64) -> Bool {
+        guard enabledFlag.load(ordering: .relaxed) else { return false }
         guard event.getIntegerValueField(.eventSourceUserData) != ShortcutSynthesizer.syntheticEventMarker,
               event.getIntegerValueField(.eventSourceUserData) != Self.syntheticScrollMarker else {
             return false
         }
-        guard let triggerEvent = MouseTriggerEvent(type: type, event: event) else {
+        guard let triggerEvent = MouseTriggerEvent(type: type, event: event, normalizedFlags: normalizedFlags) else {
             return false
         }
 
@@ -354,9 +376,20 @@ final class MouseControlController: @unchecked Sendable {
 
     private func bundleIdentifier(for event: CGEvent) -> String? {
         let pid = pid_t(event.getIntegerValueField(.eventTargetUnixProcessID))
-        if pid > 1,
-           let bundleID = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier {
-            return bundleID
+        if pid > 1 {
+            lock.lock()
+            let hit = pid == cachedPID ? cachedBundleID : nil
+            lock.unlock()
+            if let hit {
+                return hit
+            }
+            if let bundleID = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier {
+                lock.lock()
+                cachedPID = pid
+                cachedBundleID = bundleID
+                lock.unlock()
+                return bundleID
+            }
         }
         return NSWorkspace.shared.frontmostApplication?.bundleIdentifier
     }
@@ -382,8 +415,7 @@ private struct MouseTriggerEvent {
     let isDown: Bool
     let isMouseDown: Bool
 
-    init?(type: CGEventType, event: CGEvent) {
-        let normalizedFlags = ModifierFormatter.normalizedRawValue(from: event.flags)
+    init?(type: CGEventType, event: CGEvent, normalizedFlags: UInt64) {
         switch type {
         case .keyDown:
             kind = .keyboard
@@ -669,40 +701,37 @@ private final class MouseScrollPhaseState {
 }
 
 private final class MouseScrollFilter {
-    private var curveWindowY = [0.0, 0.0]
-    private var curveWindowX = [0.0, 0.0]
+    // 单 tap 指数平滑(alpha=0.23),输出较状态延迟一帧 —— 与原 5 元素 curveWindow
+    // 实现逐位等价(原数组里索引 2/3/4 的中间值从不被读取),但每帧零堆分配。
+    private var stateY = 0.0
+    private var stateX = 0.0
 
     func fill(with nextValue: (y: Double, x: Double)) -> (y: Double, x: Double) {
-        curveWindowY = polish(curveWindowY, with: nextValue.y)
-        curveWindowX = polish(curveWindowX, with: nextValue.x)
-        return (y: curveWindowY[0], x: curveWindowX[0])
+        let output = (y: stateY, x: stateX)
+        stateY += 0.23 * (nextValue.y - stateY)
+        stateX += 0.23 * (nextValue.x - stateX)
+        return output
     }
 
     func reset() {
-        curveWindowY = [0.0, 0.0]
-        curveWindowX = [0.0, 0.0]
+        stateY = 0.0
+        stateX = 0.0
     }
 
     func resetY() {
-        curveWindowY = [0.0, 0.0]
+        stateY = 0.0
     }
 
     func resetX() {
-        curveWindowX = [0.0, 0.0]
+        stateX = 0.0
     }
 
     func primeY(with value: Double) {
-        curveWindowY = [value, value]
+        stateY = value
     }
 
     func primeX(with value: Double) {
-        curveWindowX = [value, value]
-    }
-
-    private func polish(_ values: [Double], with nextValue: Double) -> [Double] {
-        let first = values[1]
-        let diff = nextValue - first
-        return [first, first + 0.23 * diff, first + 0.5 * diff, first + 0.77 * diff, nextValue]
+        stateX = value
     }
 }
 
