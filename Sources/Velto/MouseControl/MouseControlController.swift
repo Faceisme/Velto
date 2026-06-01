@@ -1050,9 +1050,10 @@ private final class MouseSmoothScrollAnimator: NSObject, @unchecked Sendable {
         _ = post(delta, phaseOverride: phaseOverride, fallbackToCurrentPhase: false)
     }
 
-    /// 假定原 frameFactor 是按此刷新率调校的(经典 60Hz)。改这个常数即可整体平移
-    /// 帧率无关的锚点(例如想保持某台 120Hz 屏的现状就改成 120)。
-    private static let referenceFrameRate = 60.0
+    /// 原 frameFactor 常数(minStep/speedGain/duration)是在 120Hz 开发机上调出来的,
+    /// 所以锚点取 120:在 120Hz 屏上 frameFactor 精确等于 refAlpha,完全还原原手感;
+    /// 同时仍是帧率无关 —— 60Hz 外接屏会自动匹配这套 120Hz 调好的手感,而非变半速。
+    private static let referenceFrameRate = 120.0
 
     /// 把"按参考刷新率调出来的每帧追赶系数"换算到任意帧间隔 dt:先反推时间常数 tau
     /// (alpha = 1 - exp(-Δt_ref/tau)),再用真实 dt 求 1 - exp(-dt/tau)。
