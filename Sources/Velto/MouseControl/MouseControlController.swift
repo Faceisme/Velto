@@ -2,7 +2,7 @@ import AppKit
 @preconcurrency import CoreFoundation
 import CoreGraphics
 import Foundation
-import os
+import QuartzCore
 
 private struct MouseRuntimeTriggerKey: Hashable {
     let kind: MouseInputKind
@@ -146,6 +146,23 @@ final class MouseControlController: @unchecked Sendable {
     func stopSmoothScroll() {
         MouseScrollDebugLogger.shared.log("controller stopSmoothScroll")
         animator.stop()
+    }
+
+    // MARK: - 滚动线程接入(由 EventTapManager 调用)
+
+    /// 在主线程调用:`NSScreen` 访问需主线程。返回未加入 runloop 的 CADisplayLink。
+    func makeScrollDisplayLink() -> CADisplayLink? {
+        animator.makeDisplayLink()
+    }
+
+    /// 在滚动线程调用:把 displayLink 装入该线程 runloop,并记录线程身份。
+    func attachScrollRunLoop(_ runLoop: CFRunLoop, thread: Thread, displayLink: CADisplayLink?) {
+        animator.attach(runLoop: runLoop, thread: thread, displayLink: displayLink)
+    }
+
+    /// 在滚动线程调用(runloop 退出后):invalidate displayLink,打破引用环。
+    func detachScrollRunLoop() {
+        animator.detach()
     }
 
     func handleScrollWheel(event: CGEvent) -> Bool {
@@ -689,118 +706,21 @@ private final class MouseScrollFilter {
     }
 }
 
-private final class MouseScrollDispatchContext: @unchecked Sendable {
-    struct PostingSnapshot: @unchecked Sendable {
-        let event: CGEvent
-        let targetPID: pid_t
-        let generation: UInt64
-        let capturedAt: CFTimeInterval
-        let debugID: UInt64
-    }
-
-    private struct SnapshotState {
-        var eventTemplate: CGEvent?
-        var targetPID: pid_t = 0
-        var generation: UInt64 = 0
-        var updatedAt: CFTimeInterval = 0
-        var debugID: UInt64 = 0
-    }
-
-    private var state = SnapshotState()
-    private var lock = os_unfair_lock_s()
-    private let postQueue = DispatchQueue(label: "com.face.velto.mouse-scroll.post", qos: .userInteractive)
-    private let eventTTL: CFTimeInterval = 5.0
-
-    @discardableResult
-    func capture(event: CGEvent, debugID: UInt64) -> Bool {
-        guard let template = event.copy() else {
-            MouseScrollDebugLogger.shared.log("#\(debugID) capture failed reason=event-copy")
-            return false
-        }
-        let pid = pid_t(event.getIntegerValueField(.eventTargetUnixProcessID))
-        guard pid != 0 else {
-            MouseScrollDebugLogger.shared.log("#\(debugID) capture failed reason=missing-target-pid")
-            return false
-        }
-        os_unfair_lock_lock(&lock)
-        state.eventTemplate = template
-        state.targetPID = pid
-        state.updatedAt = CFAbsoluteTimeGetCurrent()
-        state.debugID = debugID
-        let generation = state.generation
-        os_unfair_lock_unlock(&lock)
-        MouseScrollDebugLogger.shared.log("#\(debugID) capture ok pid=\(pid) generation=\(generation)")
-        return true
-    }
-
-    func advanceGeneration() {
-        os_unfair_lock_lock(&lock)
-        state.generation &+= 1
-        os_unfair_lock_unlock(&lock)
-    }
-
-    func clearContext() {
-        os_unfair_lock_lock(&lock)
-        state.eventTemplate = nil
-        state.targetPID = 0
-        state.updatedAt = 0
-        state.debugID = 0
-        os_unfair_lock_unlock(&lock)
-    }
-
-    func invalidateAll() {
-        os_unfair_lock_lock(&lock)
-        state.generation &+= 1
-        state.eventTemplate = nil
-        state.targetPID = 0
-        state.updatedAt = 0
-        state.debugID = 0
-        os_unfair_lock_unlock(&lock)
-    }
-
-    func preparePostingSnapshot() -> PostingSnapshot? {
-        os_unfair_lock_lock(&lock)
-        guard state.targetPID != 0,
-              let eventClone = state.eventTemplate?.copy() else {
-            os_unfair_lock_unlock(&lock)
-            MouseScrollDebugLogger.shared.log("prepare snapshot failed reason=missing-context")
-            return nil
-        }
-        let snapshot = PostingSnapshot(
-            event: eventClone,
-            targetPID: state.targetPID,
-            generation: state.generation,
-            capturedAt: state.updatedAt,
-            debugID: state.debugID
-        )
-        os_unfair_lock_unlock(&lock)
-        return snapshot
-    }
-
-    func enqueue(_ snapshot: PostingSnapshot) {
-        postQueue.async { [self] in
-            os_unfair_lock_lock(&lock)
-            let now = CFAbsoluteTimeGetCurrent()
-            let stateGeneration = state.generation
-            let validGeneration = snapshot.generation == state.generation
-            let validTTL = now - snapshot.capturedAt <= eventTTL
-            os_unfair_lock_unlock(&lock)
-            let age = now - snapshot.capturedAt
-            guard validGeneration && validTTL else {
-                MouseScrollDebugLogger.shared.log("#\(snapshot.debugID) enqueue drop validGeneration=\(validGeneration) snapshotGeneration=\(snapshot.generation) stateGeneration=\(stateGeneration) validTTL=\(validTTL) age=\(mouseDebugNumber(age))")
-                return
-            }
-            snapshot.event.postToPid(snapshot.targetPID)
-            MouseScrollDebugLogger.shared.log("#\(snapshot.debugID) postToPid pid=\(snapshot.targetPID) generation=\(snapshot.generation) age=\(mouseDebugNumber(age))")
-        }
-    }
-}
-
-private final class MouseSmoothScrollAnimator: @unchecked Sendable {
+private final class MouseSmoothScrollAnimator: NSObject, @unchecked Sendable {
     private let filter = MouseScrollFilter()
     private let phaseState = MouseScrollPhaseState()
-    private let dispatchContext = MouseScrollDispatchContext()
-    private var displayLink: CVDisplayLink?
+    private var displayLink: CADisplayLink?
+
+    /// 单一可变投递上下文:由物理滚动事件拷贝而来,后续每帧合成都复用同一个
+    /// CGEvent、就地改写 delta/phase/marker 后投递,避免每帧 clone。仅滚动线程读写。
+    private var templateEvent: CGEvent?
+    private var targetPID: pid_t = 0
+
+    /// 动画器全部可变状态都 affine 到滚动线程(scroll tap 回调 + CADisplayLink
+    /// 回调同在这条 runloop),因此无锁。跨线程进来的控制调用(鼠标按下叫停、
+    /// 偏好变更)统一经 `onScrollThread` 投递到这条线程串行执行。
+    private weak var scrollThread: Thread?
+    private var scrollRunLoop: CFRunLoop?
 
     private var current = (y: 0.0, x: 0.0)
     private var delta = (y: 0.0, x: 0.0)
@@ -813,7 +733,6 @@ private final class MouseSmoothScrollAnimator: @unchecked Sendable {
     private var momentumEndScheduledTime: CFTimeInterval?
     private var trackingEndScheduledTime: CFTimeInterval?
     private var activeDebugID: UInt64 = 0
-    private var stateLock = os_unfair_lock_s()
 
     private let manualContinuationThreshold: CFTimeInterval = 0.18
     private let manualSeparationThreshold: CFTimeInterval = 0.45
@@ -828,13 +747,57 @@ private final class MouseSmoothScrollAnimator: @unchecked Sendable {
         displayLink != nil
     }
 
-    init() {
-        createDisplayLink()
+    deinit {
+        displayLink?.invalidate()
     }
 
-    deinit {
-        if let displayLink {
-            CVDisplayLinkStop(displayLink)
+    // MARK: - 生命周期(NSScreen 在主线程取,runloop 安装在滚动线程)
+
+    /// 主线程调用:`NSScreen` 访问需主线程。返回的 link 尚未加入任何 runloop。
+    func makeDisplayLink() -> CADisplayLink? {
+        guard let screen = NSScreen.main else {
+            NSLog("Velto mouse scroll: NSScreen.main unavailable, CADisplayLink not created")
+            MouseScrollDebugLogger.shared.log("displayLink create failed reason=no-screen")
+            return nil
+        }
+        let link = screen.displayLink(target: self, selector: #selector(frameTick(_:)))
+        link.isPaused = true
+        return link
+    }
+
+    /// 滚动线程调用:把 displayLink 装入本线程 runloop,回调即在本线程触发。
+    func attach(runLoop: CFRunLoop, thread: Thread, displayLink: CADisplayLink?) {
+        scrollRunLoop = runLoop
+        scrollThread = thread
+        self.displayLink = displayLink
+        displayLink?.add(to: RunLoop.current, forMode: .common)
+        MouseScrollDebugLogger.shared.log("displayLink attached available=\(displayLink != nil)")
+    }
+
+    /// 滚动线程调用(runloop 退出后):invalidate 打破 CADisplayLink ↔ self 引用环,
+    /// 并清空动画状态,保证"停止→再启动"从干净状态开始(teardown 时 marshaled 的
+    /// stop 可能来不及执行)。
+    func detach() {
+        displayLink?.invalidate()
+        displayLink = nil
+        scrollRunLoop = nil
+        scrollThread = nil
+        resetState()
+    }
+
+    @objc private func frameTick(_ link: CADisplayLink) {
+        processing()
+    }
+
+    /// 把控制调用投递到滚动线程串行执行;已在该线程则直接执行。
+    private func onScrollThread(_ work: @escaping () -> Void) {
+        if Thread.current === scrollThread {
+            work()
+        } else if let runLoop = scrollRunLoop {
+            CFRunLoopPerformBlock(runLoop, CFRunLoopMode.commonModes.rawValue, work)
+            CFRunLoopWakeUp(runLoop)
+        } else {
+            work()
         }
     }
 
@@ -847,10 +810,18 @@ private final class MouseSmoothScrollAnimator: @unchecked Sendable {
         x: Double,
         speedMultiplier: Double
     ) -> Bool {
-        guard dispatchContext.capture(event: event, debugID: debugID) else {
+        guard let template = event.copy() else {
+            MouseScrollDebugLogger.shared.log("#\(debugID) capture failed reason=event-copy")
             return false
         }
-        os_unfair_lock_lock(&stateLock)
+        let pid = pid_t(event.getIntegerValueField(.eventTargetUnixProcessID))
+        guard pid != 0 else {
+            MouseScrollDebugLogger.shared.log("#\(debugID) capture failed reason=missing-target-pid")
+            return false
+        }
+        templateEvent = template
+        targetPID = pid
+
         let oldCurrent = current
         let oldDelta = delta
         let oldBuffer = buffer
@@ -864,7 +835,6 @@ private final class MouseSmoothScrollAnimator: @unchecked Sendable {
         let shouldStartFreshY = directionChangedY || momentumInterruptedY
         let shouldStartFreshX = directionChangedX || momentumInterruptedX
         if shouldStartFreshY || shouldStartFreshX {
-            dispatchContext.advanceGeneration()
             if shouldStartFreshY { filter.resetY() }
             if shouldStartFreshX { filter.resetX() }
         }
@@ -934,91 +904,54 @@ private final class MouseSmoothScrollAnimator: @unchecked Sendable {
             _ = post(immediateFrame)
         }
         MouseScrollDebugLogger.shared.log("#\(debugID) submit y=\(mouseDebugNumber(y)) x=\(mouseDebugNumber(x)) amplified=(\(mouseDebugPair((amplifiedY, amplifiedX)))) oldDelta=(\(mouseDebugPair(oldDelta))) newDelta=(\(mouseDebugPair(delta))) directionChangedY=\(directionChangedY) directionChangedX=\(directionChangedX) momentumInterruptedY=\(momentumInterruptedY) momentumInterruptedX=\(momentumInterruptedX) resetFilterY=\(shouldStartFreshY) resetFilterX=\(shouldStartFreshX) primedFilterY=\(shouldStartFreshY && shouldEmitImmediateFrame) primedFilterX=\(shouldStartFreshX && shouldEmitImmediateFrame) invalidatedQueuedFrames=\(shouldStartFreshY || shouldStartFreshX) immediateFrame=(\(mouseDebugPair(immediateFrame))) emittedImmediateFrame=\(shouldEmitImmediateFrame) combinedTrackingBegin=\(combineTrackingBeginWithImmediateFrame) oldBuffer=(\(mouseDebugPair(oldBuffer))) newBuffer=(\(mouseDebugPair(buffer))) oldCurrent=(\(mouseDebugPair(oldCurrent))) newCurrent=(\(mouseDebugPair(current))) duration=\(mouseDebugNumber(duration)) speedGain=\(mouseDebugNumber(profile.speedGain)) speedMultiplier=\(mouseDebugNumber(speedMultiplier)) interval=\(mouseDebugOptionalNumber(interval)) separatedByTime=\(separatedByTime) separatedPhase=\(separatedPhase) oldManualEnded=\(oldManualInputEnded) separated=\(separated) phase=\(oldPhase)->\(phaseState.phase) simulateTrackpad=\(simulateTrackpad)")
-        os_unfair_lock_unlock(&stateLock)
 
         tryStart()
         return isAvailable
     }
 
     func stop(_ requestedPhase: MouseScrollPhase = .momentumEnd) {
-        let wasRunning = displayLink.map { CVDisplayLinkIsRunning($0) } ?? false
-        if let displayLink {
-            CVDisplayLinkStop(displayLink)
-        }
-        dispatchContext.advanceGeneration()
-        os_unfair_lock_lock(&stateLock)
-        let debugID = activeDebugID
-        let oldPhase = phaseState.phase
+        onScrollThread { [self] in
+            let wasRunning = !(displayLink?.isPaused ?? true)
+            displayLink?.isPaused = true
+            let debugID = activeDebugID
+            let oldPhase = phaseState.phase
 
-        let plan = requestedPhase == .momentumEnd
-            ? phaseState.onMomentumFinish()
-            : phaseState.onManualInputEnded()
-        if simulateTrackpad {
-            perform(plan, emitTargetImmediately: true)
+            let plan = requestedPhase == .momentumEnd
+                ? phaseState.onMomentumFinish()
+                : phaseState.onManualInputEnded()
+            if simulateTrackpad {
+                perform(plan, emitTargetImmediately: true)
+            }
+            manualInputEnded = true
+            momentumActive = false
+            resetState()
+            MouseScrollDebugLogger.shared.log("#\(debugID) stop requested=\(requestedPhase) wasRunning=\(wasRunning) oldPhase=\(oldPhase) simulateTrackpad=\(simulateTrackpad)")
         }
-        manualInputEnded = true
-        momentumActive = false
-        resetUnlocked()
-        MouseScrollDebugLogger.shared.log("#\(debugID) stop requested=\(requestedPhase) wasRunning=\(wasRunning) oldPhase=\(oldPhase) simulateTrackpad=\(simulateTrackpad)")
-        os_unfair_lock_unlock(&stateLock)
     }
 
     func reset() {
-        dispatchContext.invalidateAll()
-        os_unfair_lock_lock(&stateLock)
-        let debugID = activeDebugID
-        resetUnlocked()
-        MouseScrollDebugLogger.shared.log("#\(debugID) reset")
-        os_unfair_lock_unlock(&stateLock)
+        onScrollThread { [self] in
+            let debugID = activeDebugID
+            resetState()
+            MouseScrollDebugLogger.shared.log("#\(debugID) reset")
+        }
     }
 
-    private func createDisplayLink() {
-        if let old = displayLink {
-            CVDisplayLinkStop(old)
-            displayLink = nil
-        }
-        var newDisplayLink: CVDisplayLink?
-        let result = CVDisplayLinkCreateWithActiveCGDisplays(&newDisplayLink)
-        guard result == kCVReturnSuccess, let newDisplayLink else {
-            NSLog("Velto mouse scroll: CVDisplayLink creation failed (%d)", result)
-            MouseScrollDebugLogger.shared.log("#\(activeDebugID) displayLink create failed result=\(result)")
-            return
-        }
-        let context = Unmanaged.passUnretained(self).toOpaque()
-        CVDisplayLinkSetOutputCallback(newDisplayLink, { _, _, _, _, _, context in
-            guard let context else { return kCVReturnSuccess }
-            let animator = Unmanaged<MouseSmoothScrollAnimator>.fromOpaque(context).takeUnretainedValue()
-            animator.processing()
-            return kCVReturnSuccess
-        }, context)
-        displayLink = newDisplayLink
-        MouseScrollDebugLogger.shared.log("#\(activeDebugID) displayLink created")
-    }
-
+    /// 滚动线程调用:CADisplayLink 已在 attach 时装好,这里只需取消暂停。
     private func tryStart() {
-        if displayLink == nil {
-            createDisplayLink()
-        }
-        guard let displayLink, !CVDisplayLinkIsRunning(displayLink) else {
-            MouseScrollDebugLogger.shared.log("#\(activeDebugID) displayLink start skipped available=\(displayLink != nil) running=\(displayLink.map { CVDisplayLinkIsRunning($0) } ?? false)")
+        guard let displayLink else {
+            MouseScrollDebugLogger.shared.log("#\(activeDebugID) displayLink start skipped reason=unavailable")
             return
         }
-        let result = CVDisplayLinkStart(displayLink)
-        if result != kCVReturnSuccess {
-            NSLog("Velto mouse scroll: CVDisplayLink start failed (%d)", result)
-            MouseScrollDebugLogger.shared.log("#\(activeDebugID) displayLink start failed result=\(result)")
-            createDisplayLink()
-            if let recreatedDisplayLink = self.displayLink {
-                _ = CVDisplayLinkStart(recreatedDisplayLink)
-                MouseScrollDebugLogger.shared.log("#\(activeDebugID) displayLink restarted after recreate running=\(CVDisplayLinkIsRunning(recreatedDisplayLink))")
-            }
-        } else {
+        if displayLink.isPaused {
+            displayLink.isPaused = false
             MouseScrollDebugLogger.shared.log("#\(activeDebugID) displayLink started")
         }
     }
 
-    private func resetUnlocked() {
-        dispatchContext.clearContext()
+    private func resetState() {
+        templateEvent = nil
+        targetPID = 0
         current = (y: 0, x: 0)
         delta = (y: 0, x: 0)
         buffer = (y: 0, x: 0)
@@ -1069,18 +1002,17 @@ private final class MouseSmoothScrollAnimator: @unchecked Sendable {
 
     private func emitPhase(_ item: (MouseScrollPhase, MouseScrollPhase?), delta: (y: Double, x: Double)) {
         phaseState.apply(phase: item.0, autoAdvance: item.1)
-        guard let snapshot = dispatchContext.preparePostingSnapshot() else {
-            MouseScrollDebugLogger.shared.log("#\(activeDebugID) emitPhase skipped phase=\(item.0) reason=missing-snapshot")
+        guard templateEvent != nil, targetPID != 0 else {
+            MouseScrollDebugLogger.shared.log("#\(activeDebugID) emitPhase skipped phase=\(item.0) reason=missing-context")
             phaseState.didDeliverFrame()
             return
         }
         let phaseOverride = simulateTrackpad ? phaseValues(for: item.0) : nil
-        _ = post(snapshot, delta, phaseOverride: phaseOverride, fallbackToCurrentPhase: false)
+        _ = post(delta, phaseOverride: phaseOverride, fallbackToCurrentPhase: false)
     }
 
     private func processing() {
         var pendingStopPhase: MouseScrollPhase?
-        os_unfair_lock_lock(&stateLock)
         let debugID = activeDebugID
         let phaseBefore = phaseState.phase
         var didEndManualInput = false
@@ -1163,7 +1095,6 @@ private final class MouseSmoothScrollAnimator: @unchecked Sendable {
             trackingEndScheduledTime = nil
         }
         MouseScrollDebugLogger.shared.log("#\(debugID) frame phase=\(phaseBefore)->\(phaseState.phase) frame=(\(mouseDebugPair(frame))) frameFactor=\(mouseDebugNumber(frameFactor)) current=(\(mouseDebugPair(current))) buffer=(\(mouseDebugPair(buffer))) filled=(\(mouseDebugPair(filledValue))) residual=(y=\(mouseDebugNumber(residualY)) x=\(mouseDebugNumber(residualX)) mag=\(mouseDebugNumber(residualMagnitude))) residualStop=\(mouseDebugNumber(residualStopThreshold)) outputMag=\(mouseDebugNumber(outputMagnitude)) outputDeadZone=\(mouseDebugNumber(outputDeadZone)) manualEnded=\(manualInputEnded) endedManualThisFrame=\(didEndManualInput) momentumActive=\(momentumActive) startedMomentum=\(didStartMomentum) continuedMomentum=\(didContinueMomentum) scheduledMomentumEnd=\(didScheduleMomentumEnd) momentumEndIn=\(mouseDebugOptionalNumber(momentumEndScheduledTime.map { $0 - now })) trackingEndIn=\(mouseDebugOptionalNumber(trackingEndScheduledTime.map { $0 - now })) pendingStop=\(String(describing: pendingStopPhase))")
-        os_unfair_lock_unlock(&stateLock)
 
         if let pendingStopPhase {
             stop(pendingStopPhase)
@@ -1178,49 +1109,36 @@ private final class MouseSmoothScrollAnimator: @unchecked Sendable {
         return (scroll: scrollValue, momentum: momentumValue)
     }
 
+    /// 复用单一 templateEvent:就地改写 delta/phase/marker 后直接 postToPid。
+    /// 全程在滚动线程同步执行,投递顺序确定,无 clone、无队列跳转。
     @discardableResult
     private func post(
-        _ snapshot: MouseScrollDispatchContext.PostingSnapshot,
         _ value: (y: Double, x: Double),
         phaseOverride: (scroll: Double, momentum: Double)? = nil,
         fallbackToCurrentPhase: Bool = true
     ) -> Bool {
+        guard let event = templateEvent, targetPID != 0 else {
+            MouseScrollDebugLogger.shared.log("#\(activeDebugID) post skipped reason=missing-context value=(\(mouseDebugPair(value)))")
+            return false
+        }
         let phaseBefore = phaseState.phase
         if let phaseOverride {
-            snapshot.event.setDoubleValueField(.scrollWheelEventScrollPhase, value: phaseOverride.scroll)
-            snapshot.event.setDoubleValueField(.scrollWheelEventMomentumPhase, value: phaseOverride.momentum)
+            event.setDoubleValueField(.scrollWheelEventScrollPhase, value: phaseOverride.scroll)
+            event.setDoubleValueField(.scrollWheelEventMomentumPhase, value: phaseOverride.momentum)
         } else if fallbackToCurrentPhase,
                   simulateTrackpad,
                   let currentPhaseValues = phaseValues(for: phaseState.phase) {
-            snapshot.event.setDoubleValueField(.scrollWheelEventScrollPhase, value: currentPhaseValues.scroll)
-            snapshot.event.setDoubleValueField(.scrollWheelEventMomentumPhase, value: currentPhaseValues.momentum)
+            event.setDoubleValueField(.scrollWheelEventScrollPhase, value: currentPhaseValues.scroll)
+            event.setDoubleValueField(.scrollWheelEventMomentumPhase, value: currentPhaseValues.momentum)
         }
 
-        snapshot.event.setDoubleValueField(.scrollWheelEventPointDeltaAxis1, value: value.y)
-        snapshot.event.setDoubleValueField(.scrollWheelEventPointDeltaAxis2, value: value.x)
-        snapshot.event.setDoubleValueField(.scrollWheelEventIsContinuous, value: 1)
-        snapshot.event.setIntegerValueField(.eventSourceUserData, value: MouseControlController.syntheticScrollMarker)
-        dispatchContext.enqueue(snapshot)
+        event.setDoubleValueField(.scrollWheelEventPointDeltaAxis1, value: value.y)
+        event.setDoubleValueField(.scrollWheelEventPointDeltaAxis2, value: value.x)
+        event.setDoubleValueField(.scrollWheelEventIsContinuous, value: 1)
+        event.setIntegerValueField(.eventSourceUserData, value: MouseControlController.syntheticScrollMarker)
+        event.postToPid(targetPID)
         phaseState.didDeliverFrame()
-        MouseScrollDebugLogger.shared.log("#\(snapshot.debugID) post enqueue value=(\(mouseDebugPair(value))) phaseBefore=\(phaseBefore) phaseAfter=\(phaseState.phase) phaseOverride=\(String(describing: phaseOverride)) fallback=\(fallbackToCurrentPhase) simulateTrackpad=\(simulateTrackpad) scrollPhase=\(mouseDebugNumber(snapshot.event.getDoubleValueField(.scrollWheelEventScrollPhase))) momentumPhase=\(mouseDebugNumber(snapshot.event.getDoubleValueField(.scrollWheelEventMomentumPhase))) targetPID=\(snapshot.targetPID)")
+        MouseScrollDebugLogger.shared.log("#\(activeDebugID) post value=(\(mouseDebugPair(value))) phaseBefore=\(phaseBefore) phaseAfter=\(phaseState.phase) phaseOverride=\(String(describing: phaseOverride)) fallback=\(fallbackToCurrentPhase) simulateTrackpad=\(simulateTrackpad) scrollPhase=\(mouseDebugNumber(event.getDoubleValueField(.scrollWheelEventScrollPhase))) momentumPhase=\(mouseDebugNumber(event.getDoubleValueField(.scrollWheelEventMomentumPhase))) targetPID=\(targetPID)")
         return true
-    }
-
-    @discardableResult
-    private func post(
-        _ value: (y: Double, x: Double),
-        phaseOverride: (scroll: Double, momentum: Double)? = nil,
-        fallbackToCurrentPhase: Bool = true
-    ) -> Bool {
-        guard let snapshot = dispatchContext.preparePostingSnapshot() else {
-            MouseScrollDebugLogger.shared.log("#\(activeDebugID) post skipped reason=missing-snapshot value=(\(mouseDebugPair(value)))")
-            return false
-        }
-        return post(
-            snapshot,
-            value,
-            phaseOverride: phaseOverride,
-            fallbackToCurrentPhase: fallbackToCurrentPhase
-        )
     }
 }

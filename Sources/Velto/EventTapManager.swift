@@ -56,6 +56,13 @@ enum RightClickPassThrough {
     }
 }
 
+/// 把非 Sendable 值一次性越过 `@Sendable` 闭包边界用的盒子。仅用于"主线程创建、
+/// 交给另一条线程独占"的单向交接,调用方负责保证之后不再从原线程触碰该值。
+private final class UncheckedSendableBox<T>: @unchecked Sendable {
+    let value: T
+    init(_ value: T) { self.value = value }
+}
+
 /// 跨线程协调器:主线程 (lifecycle / preferences observer) ↔ tap 线程
 /// (CGEvent callback)。因为存在主线程拥有的字段 (eventTap/tapRunLoop) 和
 /// tap-thread callback (`handle`) 同时存在,整类标 `@unchecked Sendable`,
@@ -82,6 +89,12 @@ final class EventTapManager: @unchecked Sendable {
     private var tapThread: Thread?
     private var scrollEventTap: CFMachPort?
     private var scrollRunLoopSource: CFRunLoopSource?
+    /// 滚动链路的专用高 QoS 线程 + runloop。scroll tap 回调、平滑滚动动画
+    /// (CADisplayLink) 与引擎可变状态都 affine 到这条线程,与 HID tap 线程对称,
+    /// 把最高频的滚动处理彻底移出主线程。写于 start(scroll 线程起步),读于
+    /// 主线程 (stop)。
+    private var scrollTapThread: Thread?
+    private var scrollTapRunLoop: CFRunLoop?
     /// 写于 tap 线程 (start 里 thread block 起步时),读于主线程 (performOnTapThread,
     /// stop)。启动期靠 `ready.wait()` 同步可见性;`stop()` 仅在主线程调用,所有
     /// `performOnTapThread` 调用点也都在主线程,串行化天然成立。类整体标
@@ -422,25 +435,62 @@ final class EventTapManager: @unchecked Sendable {
 
         scrollEventTap = tap
         scrollRunLoopSource = source
-        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
+
+        // CADisplayLink 必须在主线程访问 NSScreen 创建;创建后随线程一起带到滚动
+        // 线程,在那条 runloop 上 add(to:),回调即在滚动线程触发。一次性交接,用
+        // 盒子越过 @Sendable 线程闭包的边界(CADisplayLink 非 Sendable)。
+        let displayLinkBox = UncheckedSendableBox(mouseControlController.makeScrollDisplayLink())
+
+        let ready = DispatchSemaphore(value: 0)
+        let thread = Thread { [weak self] in
+            guard let runLoop = CFRunLoopGetCurrent() else {
+                ready.signal()
+                return
+            }
+            CFRunLoopAddSource(runLoop, source, .commonModes)
+            if let self {
+                self.scrollTapRunLoop = runLoop
+                self.mouseControlController.attachScrollRunLoop(
+                    runLoop,
+                    thread: Thread.current,
+                    displayLink: displayLinkBox.value
+                )
+            }
+            ready.signal()
+            CFRunLoopRun()
+            CFRunLoopRemoveSource(runLoop, source, .commonModes)
+            // runloop 已退出,在本线程打破 CADisplayLink ↔ animator 的引用环。
+            self?.mouseControlController.detachScrollRunLoop()
+        }
+        thread.name = "com.face.velto.scrolltap"
+        thread.qualityOfService = QualityOfService.userInteractive
+        scrollTapThread = thread
+        thread.start()
+        ready.wait()
+
         CGEvent.tapEnable(tap: tap, enable: true)
         return true
     }
 
     private func stopScrollEventTap() {
         mouseControlController.stopSmoothScroll()
+        let runLoop = scrollTapRunLoop
         if let tap = scrollEventTap {
             CGEvent.tapEnable(tap: tap, enable: false)
             CFMachPortInvalidate(tap)
         }
         if let source = scrollRunLoopSource {
             CFRunLoopSourceInvalidate(source)
-            if CFRunLoopContainsSource(CFRunLoopGetMain(), source, .commonModes) {
-                CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
-            }
+        }
+        // 唤醒并停止滚动线程的 runloop;线程块退出时会移除 source 并 detach
+        // CADisplayLink。
+        if let runLoop {
+            CFRunLoopStop(runLoop)
         }
         scrollEventTap = nil
         scrollRunLoopSource = nil
+        scrollTapRunLoop = nil
+        scrollTapThread = nil
     }
 
     // MARK: - Cross-thread helpers
