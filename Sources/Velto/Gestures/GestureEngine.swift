@@ -248,6 +248,9 @@ final class GestureEngine: @unchecked Sendable {
     }
 
     func handleRightMouseUp(at location: CGPoint) -> Bool {
+        // 本次 release 轨迹的 seq —— 仅 .gesturing 才会进入匹配,把它带给 runGesture,
+        // 让匹配判定日志与轨迹日志共享同一个 seq 互相对应。
+        var debugSeq: Int?
         if debugThisSession, state != .idle {
             debugTrace.append(at: location)
             let reason: String
@@ -257,7 +260,7 @@ final class GestureEngine: @unchecked Sendable {
             case .cleanupAwaitingUp: reason = debugReason.isEmpty ? "cancel" : debugReason
             case .idle: reason = "idle"
             }
-            debugTrace.flush(reason: reason)
+            debugSeq = debugTrace.flush(reason: reason)
             debugThisSession = false
         }
         switch state {
@@ -275,6 +278,7 @@ final class GestureEngine: @unchecked Sendable {
             let capturedVersion = gesturesVersion
             let capturedGestures = gestures
             let capturedPreferences = preferences
+            let capturedDebugSeq = debugSeq
             resetTracking()
 
             Task { @MainActor [weak self] in
@@ -284,7 +288,8 @@ final class GestureEngine: @unchecked Sendable {
                     frontmostApplicationAtGestureStart: capturedFrontmostApplication,
                     gestures: capturedGestures,
                     gesturesVersion: capturedVersion,
-                    preferences: capturedPreferences
+                    preferences: capturedPreferences,
+                    debugSeq: capturedDebugSeq
                 )
             }
             return true
@@ -323,11 +328,26 @@ final class GestureEngine: @unchecked Sendable {
         frontmostApplicationAtGestureStart: NSRunningApplication?,
         gestures: [GestureCommand],
         gesturesVersion: UInt64,
-        preferences: PreferencesSnapshot
+        preferences: PreferencesSnapshot,
+        debugSeq: Int?
     ) {
         let threshold = CGFloat(preferences.recognitionThreshold)
         let best = recognizer.bestCandidate(points: points, commands: gestures, version: gesturesVersion)
         let match = best.flatMap { $0.distance <= threshold ? $0 : nil }
+
+        // 与同 seq 的 `gesture` 轨迹日志对应:记录最近邻命令、距离、阈值与是否命中。
+        // `best` 为 nil 表示轨迹太短/无法归一化,根本没参与匹配。`hit=false` 表示
+        // 最近也超过阈值、不执行。`DebugLog.event` 内部再判一次开关,关掉即不写。
+        if let debugSeq {
+            DebugLog.event("match", [
+                "seq": debugSeq,
+                "best": best?.command.name ?? "<无候选>",
+                "shortcut": best?.command.shortcut?.displayName ?? "",
+                "distance": best.map { Double($0.distance) } ?? -1,
+                "threshold": Double(threshold),
+                "hit": match != nil
+            ])
+        }
 
         onGestureMatch?(match)
 
@@ -688,8 +708,10 @@ private struct GestureTraceRecorder {
         samples.append([t, Int(p.x.rounded()), Int(p.y.rounded())])
     }
 
-    mutating func flush(reason: String) {
-        guard !samples.isEmpty else { return }
+    /// 返回本条轨迹的 `seq`,供调用方把同 `seq` 的匹配判定日志关联上;无样本时返回 `nil`。
+    @discardableResult
+    mutating func flush(reason: String) -> Int? {
+        guard !samples.isEmpty else { return nil }
         seq += 1
         DebugLog.event("gesture", [
             "seq": seq,
@@ -699,5 +721,6 @@ private struct GestureTraceRecorder {
             "pts": samples
         ])
         samples = []
+        return seq
     }
 }
