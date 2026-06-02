@@ -95,10 +95,15 @@ echo "$INSTALLED_APP  (also at $APP_DIR)"
 # "系统设置 → 隐私与安全性 → 辅助功能 / 屏幕录制"列表里,手动删很烦。这里直接
 # 重置,清掉旧条目;新版启动后重新授权即可(ad-hoc 无法继承授权,这步只是自动
 # 替代"手动删旧条目")。tccutil 操作当前用户的 TCC,通常无需 sudo;失败不阻断。
-BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$ROOT_DIR/Resources/Info.plist" 2>/dev/null || echo com.face.myapp)"
-tccutil reset Accessibility "$BUNDLE_ID" >/dev/null 2>&1 || true
-tccutil reset ScreenCapture "$BUNDLE_ID" >/dev/null 2>&1 || true
-echo "已重置 TCC 授权(Accessibility / ScreenCapture): $BUNDLE_ID"
+# SKIP_TCC_RESET=1 可跳过重置(诊断迭代时不想反复清空授权列表)。
+if [ "${SKIP_TCC_RESET:-0}" = "1" ]; then
+    echo "(SKIP_TCC_RESET=1, 跳过 TCC 重置)"
+else
+    BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$ROOT_DIR/Resources/Info.plist" 2>/dev/null || echo com.face.myapp)"
+    tccutil reset Accessibility "$BUNDLE_ID" >/dev/null 2>&1 || true
+    tccutil reset ScreenCapture "$BUNDLE_ID" >/dev/null 2>&1 || true
+    echo "已重置 TCC 授权(Accessibility / ScreenCapture): $BUNDLE_ID"
+fi
 
 # ============ 6. --run:可选地直接启动 ============
 if [ "$DO_RUN" = "1" ]; then
