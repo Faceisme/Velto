@@ -6,6 +6,13 @@ struct GestureMatch: Sendable {
     var distance: CGFloat
 }
 
+/// 一次匹配的最近邻与次近邻信息。`runnerUpDistance` 为次近模板的距离
+/// (模板少于 2 个时为 `nil`),用于"最近/次近余量"判据。
+struct GestureCandidates: Sendable {
+    var best: GestureMatch
+    var runnerUpDistance: CGFloat?
+}
+
 /// 模板归一化 + 最近邻匹配。
 ///
 /// `@MainActor`:内部 `cachedVersion` / `cachedTemplates` 没有锁保护,但 Swift 6
@@ -39,22 +46,34 @@ final class GestureRecognizer {
     }
 
     func bestCandidate(points: [CGPoint], commands: [GestureCommand], version: UInt64) -> GestureMatch? {
+        bestCandidates(points: points, commands: commands, version: version)?.best
+    }
+
+    /// 同时求最近邻 `best` 与次近邻距离 `runnerUpDistance`(命令 <2 个时为 nil)。
+    /// 调用方据"次近 - 最近"的余量判断手势是否卡在两个命令之间而模糊。
+    ///
+    /// 关键:次近邻是"次近的**命令**",不是"次近的模板"。同一命令常有多条模板
+    /// (用户把同一手势录了多遍),它们彼此很近是正常的,绝不能算作歧义。先把每个
+    /// 命令压成它所有模板里的最小距离,再在命令层面取最近/次近。
+    func bestCandidates(points: [CGPoint], commands: [GestureCommand], version: UInt64) -> GestureCandidates? {
         let candidatePathLength = pathLength(points)
         guard candidatePathLength >= minimumPathLength,
               let candidate = normalize(points, knownPathLength: candidatePathLength) else {
             return nil
         }
 
-        var best: GestureMatch?
-
+        var perCommand: [GestureCommand.ID: GestureMatch] = [:]
         for template in normalizedTemplates(for: commands, version: version) {
             let distance = averageDistance(candidate, template.points)
-            if best == nil || distance < best!.distance {
-                best = GestureMatch(command: template.command, distance: distance)
+            if let existing = perCommand[template.command.id], existing.distance <= distance {
+                continue
             }
+            perCommand[template.command.id] = GestureMatch(command: template.command, distance: distance)
         }
 
-        return best
+        let ranked = perCommand.values.sorted { $0.distance < $1.distance }
+        guard let best = ranked.first else { return nil }
+        return GestureCandidates(best: best, runnerUpDistance: ranked.count > 1 ? ranked[1].distance : nil)
     }
 
     func normalize(_ points: [CGPoint]) -> [CGPoint]? {

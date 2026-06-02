@@ -119,6 +119,14 @@ final class GestureEngine: @unchecked Sendable {
     /// 累积转角达到此值即判为乱划/转圈取消。2π = 360° ≈ 转满一圈,或来回甩两下。
     /// 实测正常手势总转角 ≤176°,仍留约 2× 余量;转圈动作约半秒内即触发。
     private let scribbleTurnThreshold: CGFloat = 2 * .pi       // 360°
+
+    /// 最近邻命令与次近邻命令的距离余量门槛(命令层面 —— 同一命令的多条模板已各自
+    /// 取最小,不参与此比较)。两者差值小于此值时,手势被判为"卡在两个命令之间"而
+    /// 拒绝执行 —— 斜划/对号这类介于两个手势之间的笔画会同时接近相邻两个命令,谁略
+    /// 近就触发谁,极易在相邻命令间反复横跳。0.05 为初值:清晰手势的命令间余量通常
+    /// ≫0.05,模糊手势 ≈0.01~0.02。`match` 调试日志记录每次的 runnerUp/margin/
+    /// ambiguous,便于据实测微调。
+    private let ambiguityMargin: CGFloat = 0.05
     private let syntheticMarker: Int64 = 0x4D474C524550
 
     /// `@MainActor` — 内部要构造 `GestureRecognizer` / `GestureOverlayController`,
@@ -332,19 +340,30 @@ final class GestureEngine: @unchecked Sendable {
         debugSeq: Int?
     ) {
         let threshold = CGFloat(preferences.recognitionThreshold)
-        let best = recognizer.bestCandidate(points: points, commands: gestures, version: gesturesVersion)
-        let match = best.flatMap { $0.distance <= threshold ? $0 : nil }
+        let candidates = recognizer.bestCandidates(points: points, commands: gestures, version: gesturesVersion)
+        let best = candidates?.best
+        let runnerUp = candidates?.runnerUpDistance
 
-        // 与同 seq 的 `gesture` 轨迹日志对应:记录最近邻命令、距离、阈值与是否命中。
-        // `best` 为 nil 表示轨迹太短/无法归一化,根本没参与匹配。`hit=false` 表示
-        // 最近也超过阈值、不执行。`DebugLog.event` 内部再判一次开关,关掉即不写。
+        // 余量判据:次近 - 最近 < ambiguityMargin 即判为"模糊手势"。只有一个候选
+        // (runnerUp 为 nil)时不存在歧义。命中要求:距离过阈值 且 不模糊。
+        let margin = best.flatMap { b in runnerUp.map { $0 - b.distance } }
+        let ambiguous = margin.map { $0 < ambiguityMargin } ?? false
+        let match = best.flatMap { ($0.distance <= threshold && !ambiguous) ? $0 : nil }
+
+        // 与同 seq 的 `gesture` 轨迹日志对应:记录最近邻命令、距离、次近距离、余量、
+        // 阈值、是否模糊与是否命中。`best` 为 nil 表示轨迹太短/无法归一化,没参与
+        // 匹配;`ambiguous=true & hit=false` 表示卡在两命令之间被余量判据拦下。
+        // 缺省值用 -1 占位。`DebugLog.event` 内部再判一次开关,关掉即不写。
         if let debugSeq {
             DebugLog.event("match", [
                 "seq": debugSeq,
                 "best": best?.command.name ?? "<无候选>",
                 "shortcut": best?.command.shortcut?.displayName ?? "",
                 "distance": best.map { Double($0.distance) } ?? -1,
+                "runnerUp": runnerUp.map { Double($0) } ?? -1,
+                "margin": margin.map { Double($0) } ?? -1,
                 "threshold": Double(threshold),
+                "ambiguous": ambiguous,
                 "hit": match != nil
             ])
         }
