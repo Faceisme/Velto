@@ -90,7 +90,17 @@ fi
 
 echo "$INSTALLED_APP  (also at $APP_DIR)"
 
-# ============ 5. --run:可选地直接启动 ============
+# ============ 5. 重置 TCC 授权(辅助功能 / 录屏)============
+# ad-hoc 签名每次重签 cdhash 都变,系统把上一版的授权视为失效残留,堆在
+# "系统设置 → 隐私与安全性 → 辅助功能 / 屏幕录制"列表里,手动删很烦。这里直接
+# 重置,清掉旧条目;新版启动后重新授权即可(ad-hoc 无法继承授权,这步只是自动
+# 替代"手动删旧条目")。tccutil 操作当前用户的 TCC,通常无需 sudo;失败不阻断。
+BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$ROOT_DIR/Resources/Info.plist" 2>/dev/null || echo com.face.myapp)"
+tccutil reset Accessibility "$BUNDLE_ID" >/dev/null 2>&1 || true
+tccutil reset ScreenCapture "$BUNDLE_ID" >/dev/null 2>&1 || true
+echo "已重置 TCC 授权(Accessibility / ScreenCapture): $BUNDLE_ID"
+
+# ============ 6. --run:可选地直接启动 ============
 if [ "$DO_RUN" = "1" ]; then
     echo "启动中..."
     open -a "$INSTALLED_APP"
