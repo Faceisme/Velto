@@ -109,12 +109,38 @@ struct ShortcutRecorderField: View {
     }
 
     private func handle(_ event: NSEvent) {
+        let recognized = event.keyCode == VirtualKeyCode.escape
+            ? nil
+            : ShortcutFormatter.shortcut(from: event)
+
+        // 诊断:逐个记录录制期间收到的按键事件。关键用法是"看缺什么"——若按
+        // Ctrl+主键时日志里只有 Ctrl 的 flagsChanged、没有主键的 keyDown,说明
+        // 该组合被系统/输入法全局占用、事件没派发到本 app(local monitor 收不到),
+        // 这是配置问题而非 Velto 代码问题。只在调试模式开启时记录。
+        if DebugLog.isEnabled {
+            let typeStr: String
+            switch event.type {
+            case .keyDown: typeStr = "keyDown"
+            case .flagsChanged: typeStr = "flagsChanged"
+            default: typeStr = "other"
+            }
+            DebugLog.event("shortcutRec", [
+                "type": typeStr,
+                "keyCode": Int(event.keyCode),
+                "mods": ModifierFormatter.displayName(
+                    rawValue: ModifierFormatter.normalizedRawValue(from: event.modifierFlags)
+                ),
+                "recognized": recognized != nil,
+                "display": recognized?.displayName ?? ""
+            ])
+        }
+
         if event.keyCode == VirtualKeyCode.escape {
             endRecording()
             return
         }
-        if let sc = ShortcutFormatter.shortcut(from: event) {
-            shortcut = sc
+        if let recognized {
+            shortcut = recognized
             endRecording()
         }
     }
