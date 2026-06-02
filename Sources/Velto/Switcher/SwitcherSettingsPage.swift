@@ -45,8 +45,8 @@ struct SwitcherSettingsPage: View {
                         Toggle("", isOn: bind(\.enabled))
                             .labelsHidden()
                             .toggleStyle(.switch)
-                            .controlSize(.mini)
-                            .tint(.mgGreen)
+                            .controlSize(.small)
+                            .tint(.mgAccent)
                     )
                 }
 

@@ -4,7 +4,7 @@ import SwiftUI
 // MARK: - GesturesPage (v2)
 //
 // 三段布局:
-//   [SidebarView 220]  |  [List column 340 #FFF]  |  [Detail #FFF + bottom toolbar]
+//   [SidebarView 220]  |  [List column 360]  |  [Detail + bottom toolbar]
 // 这里只负责 List + Detail + BottomBar 三块,Sidebar 由 SettingsRootView 提供。
 
 struct GesturesPage: View {
@@ -24,14 +24,39 @@ struct GesturesPage: View {
         return draftGestures.first { $0.id == id }
     }
 
+    /// 每个手势的规范签名 —— 列表用它展示箭头 + 弧向(如 "↗⌣")并据此检测冲突。
+    private var canonicalByID: [UUID: GestureDirection.Signature] {
+        Dictionary(
+            uniqueKeysWithValues: draftGestures.map {
+                ($0.id, GestureDirection.canonical(for: $0.templates.map { $0.map(\.cgPoint) }))
+            }
+        )
+    }
+
+    /// 签名差异度过小(< 余量门槛)的手势互相冲突 —— 谁都可能识别不出。
+    /// 用与运行时一致的 `GestureDirection.distance`:方向相同且弧向不相反才算撞车;
+    /// 方向相同但一上弧一下弧则不算。返回涉及冲突的全部 id。
+    private func conflictSet(from canonical: [UUID: GestureDirection.Signature]) -> Set<UUID> {
+        let entries = canonical.filter { !$0.value.isEmpty }.map { ($0.key, $0.value) }
+        var conflicting: Set<UUID> = []
+        for i in entries.indices {
+            for j in entries.indices where j > i {
+                if GestureDirection.distance(entries[i].1, entries[j].1) < 0.05 {
+                    conflicting.insert(entries[i].0)
+                    conflicting.insert(entries[j].0)
+                }
+            }
+        }
+        return conflicting
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 0) {
                 listColumn
-                    .frame(width: 340)
-                    .background(Color.mgCard)
+                    .frame(width: 360)
+                    .background(Color.mgBg)
                     .overlay(
-                        // 0.5px 右分隔线
                         Rectangle()
                             .fill(Color.mgHair)
                             .frame(width: 0.5),
@@ -40,7 +65,7 @@ struct GesturesPage: View {
 
                 detailColumn
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(Color.mgCard)
+                    .background(Color.mgBg)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
@@ -66,9 +91,12 @@ struct GesturesPage: View {
     // MARK: List column
 
     private var listColumn: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        // 每次渲染只算一遍规范序列与冲突集,避免在 ForEach 里逐行重复计算。
+        let canonical = canonicalByID
+        let conflicts = conflictSet(from: canonical)
+        return VStack(alignment: .leading, spacing: 0) {
             // Header
-            HStack(spacing: 8) {
+            HStack(spacing: 10) {
                 Text("鼠标手势")
                     .font(.mgTitleM)
                     .foregroundStyle(Color.mgText1)
@@ -79,7 +107,7 @@ struct GesturesPage: View {
                     .foregroundStyle(Color.mgAccent)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 1)
-                    .background(Capsule().fill(Color.mgAccent.opacity(0.10)))
+                    .background(Capsule().fill(Color.mgAccentSoft))
 
                 Spacer()
 
@@ -90,25 +118,28 @@ struct GesturesPage: View {
                         Text("新建")
                     }
                 }
-                .buttonStyle(MGPrimaryButtonStyle(height: 26, hPad: 12, font: .mgButtonSm))
+                .buttonStyle(MGPrimaryButtonStyle(height: 30, hPad: 13, font: .mgButtonSm))
             }
-            .padding(.horizontal, 18)
-            .padding(.top, 18)
-            .padding(.bottom, 12)
+            .padding(.horizontal, 20)
+            .padding(.top, 22)
+            .padding(.bottom, 14)
 
             // List
             ScrollView {
-                LazyVStack(spacing: 2) {
+                LazyVStack(spacing: 6) {
                     ForEach(draftGestures) { g in
+                        let sig = canonical[g.id] ?? .empty
                         GestureListItem(
                             gesture: g,
+                            directionArrows: GestureDirection.arrows(sig.sequence) + GestureDirection.bowGlyph(sig.bow),
+                            conflict: conflicts.contains(g.id),
                             selected: g.id == selectedID,
                             onClick: { selectGesture(g.id) }
                         )
                     }
                 }
-                .padding(.horizontal, 8)
-                .padding(.bottom, 8)
+                .padding(.horizontal, 12)
+                .padding(.bottom, 14)
             }
         }
     }
@@ -127,8 +158,8 @@ struct GesturesPage: View {
                     onDelete: deleteSelectedGesture,
                     updateDraft: updateSelectedDraft
                 )
-                .padding(.horizontal, 28)
-                .padding(.top, 22)
+                .padding(.horizontal, 32)
+                .padding(.top, 28)
                 .padding(.bottom, 28)
             }
         } else {
@@ -249,6 +280,10 @@ struct GesturesPage: View {
 
 private struct GestureListItem: View {
     let gesture: GestureCommand
+    /// 该手势识别成的方向箭头串(如 "↗→"),空串表示还没录。
+    let directionArrows: String
+    /// 与别的手势撞了同一条方向序列。
+    let conflict: Bool
     let selected: Bool
     let onClick: () -> Void
 
@@ -259,7 +294,7 @@ private struct GestureListItem: View {
                 ZStack {
                     RoundedRectangle(cornerRadius: 9, style: .continuous)
                         .fill(selected
-                              ? Color.white.opacity(0.15)
+                              ? Color.white.opacity(0.18)
                               : Color.mgCardAlt)
                         .overlay(
                             RoundedRectangle(cornerRadius: 9, style: .continuous)
@@ -274,8 +309,8 @@ private struct GestureListItem: View {
                             templates: [gesture.templates.last!],  // 缩略图只渲染最后一个样本,免噪
                             stroke: 3,
                             colors: selected
-                                ? [.white, Color.mgAccentSoft]
-                                : [.mgAccent, .mgAccentEnd],
+                                ? [.white, Color.white.opacity(0.75)]
+                                : [.mgAccent, .mgAccent],
                             showStartDot: true,
                             showEndArrow: true,
                             maxGhosts: 0
@@ -297,9 +332,21 @@ private struct GestureListItem: View {
                         .font(.mgLabelStrong)
                         .foregroundStyle(selected ? .white : Color.mgText1)
                         .lineLimit(1)
-                    Text("\(gesture.templates.count) 样本")
-                        .font(.mgMeta)
-                        .foregroundStyle(selected ? Color.white.opacity(0.78) : Color.mgText2)
+                    HStack(spacing: 6) {
+                        if !directionArrows.isEmpty {
+                            Text(directionArrows)
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(selected ? .white : Color.mgText1)
+                        }
+                        Text("\(gesture.templates.count) 样本")
+                            .font(.mgMeta)
+                            .foregroundStyle(selected ? Color.white.opacity(0.78) : Color.mgText2)
+                        if conflict {
+                            Text("冲突")
+                                .font(.mgMeta)
+                                .foregroundStyle(selected ? Color.yellow : Color.orange)
+                        }
+                    }
                 }
 
                 Spacer(minLength: 4)
@@ -313,12 +360,16 @@ private struct GestureListItem: View {
                         .foregroundStyle(selected ? Color.white.opacity(0.7) : Color.mgText3)
                 }
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
+            .padding(.horizontal, 11)
+            .padding(.vertical, 9)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(selected ? Color.mgAccent : .clear)
+                    .fill(selected ? Color.mgAccent : Color.mgCard)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(selected ? Color.clear : Color.mgHair, lineWidth: 0.5)
             )
             .contentShape(Rectangle())
         }
@@ -379,10 +430,6 @@ private struct GestureDetailPanel: View {
                 Spacer(minLength: 12)
 
                 HStack(alignment: .center, spacing: 8) {
-                    if let sc = gesture.shortcut {
-                        Kbd(keys: sc.kbdKeys, size: .lg)
-                    }
-
                     Button {
                         isEditingName.toggle()
                     } label: {
@@ -428,7 +475,6 @@ private struct GestureDetailPanel: View {
             TextField("手势名称", text: $editingName)
                 .textFieldStyle(.plain)
                 .font(.mgPageTitle)
-                .tracking(-0.4)
                 .foregroundStyle(Color.mgText1)
                 .focused($nameFieldFocused)
                 .onSubmit { isEditingName = false }
@@ -438,7 +484,6 @@ private struct GestureDetailPanel: View {
         } else {
             Text(displayName)
                 .font(.mgPageTitle)
-                .tracking(-0.4)
                 .foregroundStyle(Color.mgText1)
                 .lineLimit(1)
                 .textSelection(.disabled)
@@ -565,7 +610,7 @@ struct BottomToolbar: View {
                     .opacity(hasUnsavedChanges ? 1 : 0.55)
             }
             .padding(.horizontal, 20)
-            .frame(height: 52)
+            .frame(height: 54)
         }
         .background(Color.mgCard)
     }

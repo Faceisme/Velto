@@ -1,34 +1,35 @@
+import AppKit
 import SwiftUI
 
 // MARK: - Colors (v2 Design Tokens)
 
 extension Color {
     // Surface
-    static let mgBg       = Color(red: 0xF5/255, green: 0xF5/255, blue: 0xF7/255) // 主背景
-    static let mgSidebar  = Color(red: 0xEC/255, green: 0xEC/255, blue: 0xEE/255) // 侧栏
-    static let mgCard     = Color.white                                            // 卡片
-    static let mgCardAlt  = Color(red: 0xF8/255, green: 0xF9/255, blue: 0xFB/255) // 卡片内嵌区
+    static let mgBg       = Color(nsColor: .windowBackgroundColor)
+    static let mgSidebar  = Color(nsColor: .controlBackgroundColor)
+    static let mgCard     = Color(nsColor: .controlBackgroundColor)
+    static let mgCardAlt  = Color(nsColor: .textBackgroundColor)
 
     // Text
-    static let mgText1 = Color(red: 0x1D/255, green: 0x1D/255, blue: 0x1F/255)
-    static let mgText2 = Color(red: 0x6B/255, green: 0x72/255, blue: 0x80/255)
-    static let mgText3 = Color(red: 0xA1/255, green: 0xA1/255, blue: 0xA6/255)
+    static let mgText1 = Color(nsColor: .labelColor)
+    static let mgText2 = Color(nsColor: .secondaryLabelColor)
+    static let mgText3 = Color(nsColor: .tertiaryLabelColor)
 
     // Accent
-    static let mgAccent     = Color(red: 0x0A/255, green: 0x84/255, blue: 0xFF/255)
-    static let mgAccentEnd  = Color(red: 0x5E/255, green: 0x5C/255, blue: 0xE6/255)
-    static let mgAccentDeep = Color(red: 0x00/255, green: 0x6F/255, blue: 0xE0/255) // 蓝色按钮渐变末端
-    static let mgAccentSoft = Color(red: 0xE6/255, green: 0xF0/255, blue: 0xFF/255)
+    static let mgAccent     = Color(nsColor: .controlAccentColor)
+    static let mgAccentEnd  = Color(nsColor: .controlAccentColor)
+    static let mgAccentDeep = Color(nsColor: .controlAccentColor)
+    static let mgAccentSoft = Color(nsColor: .controlAccentColor).opacity(0.12)
     static let mgGreen      = Color(red: 0x34/255, green: 0xC7/255, blue: 0x59/255)
     static let mgDanger     = Color(red: 0xFF/255, green: 0x3B/255, blue: 0x30/255)
 
-    // Borders / hairlines (rgba(15,30,60,*))
-    static let mgHair       = Color(red: 15/255, green: 30/255, blue: 60/255).opacity(0.06)
-    static let mgHairStrong = Color(red: 15/255, green: 30/255, blue: 60/255).opacity(0.10)
+    // Borders / hairlines
+    static let mgHair       = Color(nsColor: .separatorColor).opacity(0.45)
+    static let mgHairStrong = Color(nsColor: .separatorColor).opacity(0.70)
 
-    // Gradient helper for the primary blue button.
+    // Kept for existing call sites; visually resolves to the current macOS accent.
     static var mgPrimaryButtonGradient: LinearGradient {
-        LinearGradient(colors: [.mgAccent, .mgAccentDeep],
+        LinearGradient(colors: [.mgAccent, .mgAccent],
                        startPoint: .top, endPoint: .bottom)
     }
 }
@@ -37,11 +38,11 @@ extension Color {
 
 enum MGRadius {
     static let window: CGFloat   = 12
-    static let cardLg: CGFloat   = 14   // 大卡片
-    static let card: CGFloat     = 12   // 中卡片
-    static let cardSm: CGFloat   = 10   // 小卡片 / 嵌入画布
-    static let control: CGFloat  = 9    // 控件
-    static let controlSm: CGFloat = 7   // 段控件 / 小按钮
+    static let cardLg: CGFloat   = 12
+    static let card: CGFloat     = 10
+    static let cardSm: CGFloat   = 8
+    static let control: CGFloat  = 8
+    static let controlSm: CGFloat = 7
     static let kbd: CGFloat      = 5    // 小键帽
     static let kbdMd: CGFloat    = 6    // 中键帽
     static let kbdLg: CGFloat    = 7    // 大键帽
@@ -51,8 +52,8 @@ enum MGRadius {
 // MARK: - Typography (system font + PingFang SC fallback)
 
 extension Font {
-    static let mgPageTitle = Font.system(size: 26, weight: .bold)      // 26/700/-0.4
-    static let mgTitleM    = Font.system(size: 17, weight: .bold)      // 17/700/-0.2
+    static let mgPageTitle = Font.system(size: 24, weight: .semibold)
+    static let mgTitleM    = Font.system(size: 17, weight: .semibold)
     static let mgLabelStrong = Font.system(size: 13, weight: .semibold) // 13/600
     static let mgBody      = Font.system(size: 13, weight: .regular)    // 13/400
     static let mgBodyMedium = Font.system(size: 13, weight: .medium)    // 13/500
@@ -89,13 +90,10 @@ struct MGCardBackground: ViewModifier {
                     .fill(fill)
             )
             .overlay(
-                // 0.5px hairline
                 RoundedRectangle(cornerRadius: radius, style: .continuous)
                     .strokeBorder(Color.mgHair, lineWidth: 0.5)
             )
-            // 0 1px 2px rgba(15,30,60,0.03)
-            .shadow(color: Color(red: 15/255, green: 30/255, blue: 60/255).opacity(0.03),
-                    radius: 1, x: 0, y: 1)
+            .shadow(color: Color.black.opacity(0.035), radius: 3, x: 0, y: 1)
     }
 }
 

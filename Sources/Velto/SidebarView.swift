@@ -11,13 +11,13 @@ struct SidebarView: View {
         ZStack {
             SettingsSidebarGlassView(
                 cornerRadius: 0,
-                tintColor: NSColor.windowBackgroundColor.withAlphaComponent(0.18),
+                tintColor: NSColor.windowBackgroundColor.withAlphaComponent(0.06),
                 style: .regular
             )
             .ignoresSafeArea(.container, edges: [.top, .bottom, .leading])
 
             VStack(alignment: .leading, spacing: 0) {
-                Spacer().frame(height: 58)
+                Spacer().frame(height: 54)
 
                 SidebarGroup(title: "功能") {
                     SidebarItem(
@@ -61,8 +61,6 @@ struct SidebarView: View {
                 }
 
                 Spacer()
-
-                StatusCard()
             }
             .padding(.horizontal, 12)
             .padding(.bottom, 12)
@@ -102,9 +100,9 @@ private struct SidebarGroup<Content: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 1) {
             Text(title)
-                .font(.mgSubLabel)
+                .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(Color.mgText3)
-                .padding(.horizontal, 10)
+                .padding(.horizontal, 12)
                 .padding(.top, 8)
                 .padding(.bottom, 6)
             content()
@@ -128,12 +126,12 @@ private struct SidebarItem: View {
         } label: {
             HStack(spacing: 10) {
                 Image(systemName: icon)
-                    .font(.system(size: 15, weight: .medium))
+                    .font(.system(size: 15, weight: active ? .semibold : .regular))
                     .frame(width: 18, height: 18)
                     .foregroundStyle(active ? Color.white : Color.mgText2)
 
                 Text(label)
-                    .font(.system(size: 15, weight: active ? .semibold : .medium))
+                    .font(.system(size: 14, weight: active ? .semibold : .regular))
                     .foregroundStyle(active ? Color.white : Color.mgText1)
 
                 Spacer(minLength: 0)
@@ -147,17 +145,15 @@ private struct SidebarItem: View {
                         .padding(.vertical, 1)
                         .background(
                             Capsule()
-                                .fill(active
-                                      ? Color.white.opacity(0.22)
-                                      : Color(red: 15/255, green: 30/255, blue: 60/255).opacity(0.06))
+                                .fill(active ? Color.white.opacity(0.22) : Color.mgHair)
                         )
                 }
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 9)
+            .padding(.horizontal, 11)
+            .padding(.vertical, 8)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                RoundedRectangle(cornerRadius: MGRadius.control, style: .continuous)
                     .fill(active ? Color.mgAccent : .clear)
             )
             .contentShape(Rectangle())
@@ -177,7 +173,7 @@ struct StatusCard: View {
     private let store = GestureStore.shared
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
                 Text("手势监听")
                     .font(.mgLabelStrong)
@@ -189,19 +185,19 @@ struct StatusCard: View {
                 ))
                 .labelsHidden()
                 .toggleStyle(.switch)
-                .controlSize(.mini)
-                .tint(.mgGreen)
+                .controlSize(.small)
+                .tint(.mgAccent)
             }
 
             HStack(spacing: 6) {
                 ZStack {
                     Circle()
                         .fill(store.preferences.gesturesEnabled
-                              ? Color.mgGreen.opacity(0.18)
+                              ? Color.mgAccentSoft
                               : Color.orange.opacity(0.18))
                         .frame(width: 12, height: 12)
                     Circle()
-                        .fill(store.preferences.gesturesEnabled ? Color.mgGreen : .orange)
+                        .fill(store.preferences.gesturesEnabled ? Color.mgAccent : .orange)
                         .frame(width: 6, height: 6)
                 }
                 Text(store.preferences.gesturesEnabled ? "正在监听右键手势" : "已暂停")
@@ -213,14 +209,13 @@ struct StatusCard: View {
         .padding(.vertical, 10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
+            RoundedRectangle(cornerRadius: MGRadius.card, style: .continuous)
                 .fill(Color.mgCard)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
+            RoundedRectangle(cornerRadius: MGRadius.card, style: .continuous)
                 .strokeBorder(Color.mgHair, lineWidth: 0.5)
         )
-        .shadow(color: Color(red: 15/255, green: 30/255, blue: 60/255).opacity(0.04),
-                radius: 1, x: 0, y: 1)
+        .shadow(color: Color.black.opacity(0.035), radius: 3, x: 0, y: 1)
     }
 }

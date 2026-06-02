@@ -34,15 +34,12 @@ struct Kbd: View {
     private func singleCap(_ key: String) -> some View {
         let bg: Color = inverted
             ? Color.white.opacity(0.18)
-            : .white
+            : Color.mgCardAlt
         let fg: Color = inverted ? .white : .mgText1
         let borderColor: Color = inverted
             ? Color.white.opacity(0.20)
-            : Color(red: 15/255, green: 30/255, blue: 60/255).opacity(0.10)
-        let insetBottomColor: Color = inverted
-            ? Color.white.opacity(0.10)
-            : Color(red: 15/255, green: 30/255, blue: 60/255).opacity(0.08)
-        let dropOpacity: Double = (inverted || muted) ? 0 : 0.10
+            : Color.mgHairStrong
+        let dropOpacity: Double = (inverted || muted) ? 0 : 0.04
 
         Text(key)
             .font(.system(size: size.fontSize, weight: .semibold))
@@ -55,22 +52,10 @@ struct Kbd: View {
                     .fill(bg)
             )
             .overlay(
-                // 底部内阴影 — 立体感 (1pt 横线贴在底部内侧)
-                RoundedRectangle(cornerRadius: size.radius, style: .continuous)
-                    .fill(insetBottomColor)
-                    .frame(height: 1)
-                    .frame(maxHeight: .infinity, alignment: .bottom)
-                    .clipShape(RoundedRectangle(cornerRadius: size.radius, style: .continuous))
-                    .allowsHitTesting(false)
-            )
-            .overlay(
-                // 0.5px 边框
                 RoundedRectangle(cornerRadius: size.radius, style: .continuous)
                     .strokeBorder(borderColor, lineWidth: 0.5)
             )
-            // 下方阴影
-            .shadow(color: Color(red: 15/255, green: 30/255, blue: 60/255).opacity(dropOpacity),
-                    radius: 0.75, x: 0, y: 1)
+            .shadow(color: Color.black.opacity(dropOpacity), radius: 1, x: 0, y: 1)
     }
 }
 
@@ -130,8 +115,7 @@ struct KeyCapSlot<Content: View>: View {
             )
             .overlay(
                 RoundedRectangle(cornerRadius: MGRadius.control, style: .continuous)
-                    .strokeBorder(Color(red: 15/255, green: 30/255, blue: 60/255).opacity(0.08),
-                                  lineWidth: 0.5)
+                    .strokeBorder(Color.mgHair, lineWidth: 0.5)
             )
     }
 }
@@ -147,26 +131,13 @@ struct ActionIcon: View {
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: radius, style: .continuous)
-                .fill(LinearGradient(
-                    colors: [.mgAccent, .mgAccentEnd],
-                    startPoint: .topLeading, endPoint: .bottomTrailing
-                ))
-
-            // 顶部 0.5pt 高光
-            VStack(spacing: 0) {
-                Rectangle()
-                    .fill(Color.white.opacity(0.30))
-                    .frame(height: 0.5)
-                Spacer(minLength: 0)
-            }
-            .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
+                .fill(Color.mgAccentSoft)
 
             Image(systemName: systemName)
                 .font(.system(size: size * 0.475, weight: .semibold))
-                .foregroundStyle(.white)
+                .foregroundStyle(Color.mgAccent)
         }
         .frame(width: size, height: size)
-        .shadow(color: Color.mgAccent.opacity(0.28), radius: 3, x: 0, y: 2)
     }
 }
 
@@ -192,7 +163,6 @@ struct PageHeader: View {
                 .padding(.bottom, 6)
             Text(title)
                 .font(.mgPageTitle)
-                .tracking(-0.4)
                 .foregroundStyle(Color.mgText1)
             if let subtitle {
                 Text(subtitle)
@@ -258,16 +228,16 @@ struct GroupRow<Trailing: View>: View {
                 trailing()
             }
             .padding(.horizontal, 16)
-            .padding(.vertical, 13)
+            .padding(.vertical, 12)
             .frame(minHeight: 44)
         }
     }
 }
 
-// MARK: - Primary blue button style (linear gradient + glow)
+// MARK: - Primary button style
 
 struct MGPrimaryButtonStyle: ButtonStyle {
-    var height: CGFloat = 30
+    var height: CGFloat = 32
     var hPad: CGFloat = 16
     var font: Font = .mgLabelStrong
 
@@ -278,20 +248,10 @@ struct MGPrimaryButtonStyle: ButtonStyle {
             .padding(.horizontal, hPad)
             .frame(height: height)
             .background(
-                ZStack {
-                    RoundedRectangle(cornerRadius: MGRadius.controlSm, style: .continuous)
-                        .fill(Color.mgPrimaryButtonGradient)
-                    // 顶部内高光
-                    VStack(spacing: 0) {
-                        Rectangle()
-                            .fill(Color.white.opacity(0.30))
-                            .frame(height: 0.5)
-                        Spacer(minLength: 0)
-                    }
-                    .clipShape(RoundedRectangle(cornerRadius: MGRadius.controlSm, style: .continuous))
-                }
+                RoundedRectangle(cornerRadius: MGRadius.control, style: .continuous)
+                    .fill(Color.mgAccent)
             )
-            .shadow(color: Color.mgAccent.opacity(0.40), radius: 1.5, x: 0, y: 1)
+            .shadow(color: Color.black.opacity(0.08), radius: 2, x: 0, y: 1)
             .opacity(configuration.isPressed ? 0.85 : 1.0)
     }
 }
@@ -312,15 +272,12 @@ struct MGSecondaryButtonStyle: ButtonStyle {
             .frame(height: height)
             .background(
                 RoundedRectangle(cornerRadius: MGRadius.controlSm, style: .continuous)
-                    .fill(Color.white)
+                    .fill(Color.mgCardAlt)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: MGRadius.controlSm, style: .continuous)
-                    .strokeBorder(Color(red: 15/255, green: 30/255, blue: 60/255).opacity(0.12),
-                                  lineWidth: 0.5)
+                    .strokeBorder(Color.mgHairStrong, lineWidth: 0.5)
             )
-            .shadow(color: Color(red: 15/255, green: 30/255, blue: 60/255).opacity(0.03),
-                    radius: 0.75, x: 0, y: 1)
             .opacity(configuration.isPressed ? 0.7 : 1.0)
     }
 }
@@ -356,14 +313,13 @@ struct MGDestructiveButtonStyle: ButtonStyle {
             .frame(height: height)
             .background(
                 RoundedRectangle(cornerRadius: MGRadius.controlSm, style: .continuous)
-                    .fill(Color.white)
+                    .fill(Color.mgCardAlt)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: MGRadius.controlSm, style: .continuous)
                     .strokeBorder(Color.mgDanger.opacity(0.22), lineWidth: 0.5)
             )
-            .shadow(color: Color(red: 15/255, green: 30/255, blue: 60/255).opacity(0.04),
-                    radius: 0.75, x: 0, y: 1)
+            .shadow(color: Color.black.opacity(0.035), radius: 2, x: 0, y: 1)
             .opacity(configuration.isPressed ? 0.7 : 1.0)
     }
 }
@@ -394,12 +350,11 @@ struct MGStepperField<Value: Strideable>: View where Value: BinaryFloatingPoint 
         .padding(.vertical, 3)
         .background(
             RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(Color.white)
+                .fill(Color.mgCardAlt)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .strokeBorder(Color(red: 15/255, green: 30/255, blue: 60/255).opacity(0.12),
-                              lineWidth: 0.5)
+                .strokeBorder(Color.mgHairStrong, lineWidth: 0.5)
         )
     }
 }
