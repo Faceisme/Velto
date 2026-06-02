@@ -380,13 +380,14 @@ final class GestureEngine: @unchecked Sendable {
         // 匹配;`ambiguous=true & hit=false` 表示卡在两命令之间被余量判据拦下。
         // 缺省值用 -1 占位。`DebugLog.event` 内部再判一次开关,关掉即不写。
         if let debugSeq {
-            // `drawn` = 本次画出来的签名(方向 + 弧向);`bestSeq` = 最近邻命令的规范签名。
+            // `drawn` = 本次画出来的签名;`bestSeq` = 最近邻命令的规范签名。
+            // 单段手势显示方向 + 弧向,多段折返只显示方向序列。
             // 两者并排,一眼就能看出"画成了什么 / 该命中谁",取代旧版只能看浮点距离。
             let candidate = GestureDirection.signature(from: points)
-            let drawn = GestureDirection.arrows(candidate.sequence) + GestureDirection.bowGlyph(candidate.bowSign)
+            let drawn = GestureDirection.displayString(candidate)
             let bestSeq = best.map { match -> String in
                 let sig = recognizer.canonicalSignature(for: match.command)
-                return GestureDirection.arrows(sig.sequence) + GestureDirection.bowGlyph(sig.bowSign)
+                return GestureDirection.displayString(sig)
             } ?? ""
             DebugLog.event("match", [
                 "seq": debugSeq,

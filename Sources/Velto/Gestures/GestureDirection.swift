@@ -99,7 +99,8 @@ enum GestureDirection {
         return Signature(sequence: canonicalSeq, bow: averageBow)
     }
 
-    /// 两个签名的「差异度」,0 = 完全一致。= 方向序列差异度 + 弧向惩罚。
+    /// 两个签名的「差异度」,0 = 完全一致。单段手势比较方向 + 弧向;多段折返手势
+    /// 只比较方向序列,避免「←→」因为保存样本略带弧度而被误判成不命中。
     static func distance(_ lhs: Signature, _ rhs: Signature) -> CGFloat {
         let seqDistance: CGFloat
         if lhs.sequence.count == 1, rhs.sequence.count == 1,
@@ -113,6 +114,9 @@ enum GestureDirection {
         } else {
             seqDistance = sequenceDistance(lhs.sequence, rhs.sequence)
         }
+        guard lhs.sequence.count == 1, rhs.sequence.count == 1 else {
+            return seqDistance
+        }
         return seqDistance + bowPenalty(lhs.bow, rhs.bow)
     }
 
@@ -125,6 +129,11 @@ enum GestureDirection {
     /// 人类可读箭头串(如 "↗→"),用于设置页展示与调试日志。
     static func arrows(_ sequence: [Int]) -> String {
         sequence.map { glyphs[$0] }.joined()
+    }
+
+    /// 人类可读签名。单段弧线显示弧向;多段折返只显示方向序列。
+    static func displayString(_ signature: Signature) -> String {
+        arrows(signature.sequence) + (signature.sequence.count == 1 ? bowGlyph(signature.bowSign) : "")
     }
 
     /// 弧向标记:⌢ 上弧 / ⌣ 下弧 / 空(直)。入参为 `Signature.bowSign`。

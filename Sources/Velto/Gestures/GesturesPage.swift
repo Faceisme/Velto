@@ -130,7 +130,7 @@ struct GesturesPage: View {
                         let sig = canonical[g.id] ?? .empty
                         GestureListItem(
                             gesture: g,
-                            directionArrows: GestureDirection.arrows(sig.sequence) + GestureDirection.bowGlyph(sig.bowSign),
+                            directionArrows: GestureDirection.displayString(sig),
                             conflict: conflicts.contains(g.id),
                             selected: g.id == selectedID,
                             onClick: { selectGesture(g.id) }
