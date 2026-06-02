@@ -68,11 +68,16 @@ final class GestureCaptureView: NSView {
         if window == nil {
             // 视图被摘下:清掉透传区,解绑 observer。
             unbindFrameObservers()
-            RightClickPassThrough.setRegion(nil)
+            RightClickPassThrough.clear(owner: ObjectIdentifier(self))
             return
         }
         rebindFrameObservers()
         republishPassThroughRegion()
+        // 挂载瞬间 bounds / window 可能尚未就绪(首次 republish 的 guard 会失败),
+        // 下一个 runloop 再补一次,确保布局完成后 region 一定被注册。
+        DispatchQueue.main.async { [weak self] in
+            self?.republishPassThroughRegion()
+        }
     }
 
     private func unbindFrameObservers() {
@@ -87,7 +92,7 @@ final class GestureCaptureView: NSView {
 
     override func viewDidHide() {
         super.viewDidHide()
-        RightClickPassThrough.setRegion(nil)
+        RightClickPassThrough.clear(owner: ObjectIdentifier(self))
     }
 
     private func rebindFrameObservers() {
@@ -114,10 +119,11 @@ final class GestureCaptureView: NSView {
             let isClose = (name == NSWindow.willCloseNotification)
             let obs = nc.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated {
+                    guard let self else { return }
                     if isClose {
-                        RightClickPassThrough.setRegion(nil)
+                        RightClickPassThrough.clear(owner: ObjectIdentifier(self))
                     } else {
-                        self?.republishPassThroughRegion()
+                        self.republishPassThroughRegion()
                     }
                 }
             }
@@ -126,8 +132,12 @@ final class GestureCaptureView: NSView {
     }
 
     private func republishPassThroughRegion() {
+        // 暂态不可见(挂载瞬间 window 未就绪 / 布局动画里的一帧)不主动清除已注册
+        // 区域 —— 真正的离场由 viewDidMoveToWindow(nil)/viewDidHide/willClose 负责
+        // 清。否则窗口布局收敛期间偶发的不可见瞬间会把刚注册的 region 抹掉、又没有
+        // 后续 frameDidChange 补注册,导致 region 永久为空、右键被 GestureEngine
+        // 抢走而无法录制(就是"新建手势后偶尔录不进"的根因)。
         guard let window, !isHidden, window.isVisible else {
-            RightClickPassThrough.setRegion(nil)
             return
         }
         // 自身 bounds → window 坐标 → 屏幕(AppKit,左下原点)→ CGEvent(左上原点)
@@ -140,7 +150,7 @@ final class GestureCaptureView: NSView {
             width: viewInScreen.width,
             height: viewInScreen.height
         )
-        RightClickPassThrough.setRegion(cgRect)
+        RightClickPassThrough.setRegion(cgRect, owner: ObjectIdentifier(self))
     }
 
     private func invalidateForPointChange(from oldPoints: [CGPoint], to newPoints: [CGPoint]) {

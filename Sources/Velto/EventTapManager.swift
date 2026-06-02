@@ -43,16 +43,38 @@ private let veltoScrollEventTapCallback: CGEventTapCallBack = { proxy, type, eve
 enum RightClickPassThrough {
     private static let lock = NSLock()
     nonisolated(unsafe) private static var _region: CGRect?
+    nonisolated(unsafe) private static var _owner: ObjectIdentifier?
 
-    static func setRegion(_ region: CGRect?) {
+    /// 注册透传区并标记归属者。SwiftUI 切换/新建手势时,新旧 `GestureCaptureView`
+    /// 实例的创建与销毁会交错(常常旧实例的销毁晚于新实例的创建);用 owner 标识
+    /// "当前有效注册者",销毁旧实例时只能清掉自己的注册(见 `clear(owner:)`),
+    /// 不会误抹掉新实例刚注册的区域。
+    static func setRegion(_ region: CGRect, owner: ObjectIdentifier) {
         lock.lock(); defer { lock.unlock() }
         _region = region
+        _owner = owner
+    }
+
+    /// 撤销注册:仅当 `owner` 正是当前注册者时才真正清空 —— 避免旧实例 teardown
+    /// 抹掉新实例的注册。
+    static func clear(owner: ObjectIdentifier) {
+        lock.lock(); defer { lock.unlock() }
+        if _owner == owner {
+            _region = nil
+            _owner = nil
+        }
     }
 
     static func contains(_ point: CGPoint) -> Bool {
         lock.lock(); defer { lock.unlock() }
         guard let r = _region else { return false }
         return r.contains(point)
+    }
+
+    /// 仅供调试日志读取当前透传区(可能为 nil)。
+    static func regionForDebug() -> CGRect? {
+        lock.lock(); defer { lock.unlock() }
+        return _region
     }
 }
 
@@ -290,7 +312,22 @@ final class EventTapManager: @unchecked Sendable {
             }
             // 录制手势卡片这种自己想吃右键的 view 已经把屏幕区域登记进来 ——
             // 让事件原样透传,GestureEngine 完全不介入。
-            if RightClickPassThrough.contains(event.location) {
+            let inPassThrough = RightClickPassThrough.contains(event.location)
+            // 诊断:右键按下时记录点击坐标 + 当前透传区,定位"录制无反应"是区域
+            // 没注册(rw=-1)还是坐标对不上(pass=false 但点其实在卡片内)。
+            if DebugLog.isEnabled {
+                let r = RightClickPassThrough.regionForDebug()
+                DebugLog.event("rclick", [
+                    "x": Double(event.location.x),
+                    "y": Double(event.location.y),
+                    "pass": inPassThrough,
+                    "rx": r.map { Double($0.minX) } ?? -1,
+                    "ry": r.map { Double($0.minY) } ?? -1,
+                    "rw": r.map { Double($0.width) } ?? -1,
+                    "rh": r.map { Double($0.height) } ?? -1
+                ])
+            }
+            if inPassThrough {
                 return Unmanaged.passUnretained(event)
             }
             if mouseControlController.handleTriggerEvent(type: type, event: event, normalizedFlags: raw) {
