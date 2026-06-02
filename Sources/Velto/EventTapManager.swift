@@ -292,9 +292,18 @@ final class EventTapManager: @unchecked Sendable {
 
     func handle(proxy: CGEventTapProxy, type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+            // tap 被系统禁用期间事件全丢(含 rightMouseUp)。重启后必须把手势引擎也复位,
+            // 否则它会卡在 .gesturing 半路,导致之后的手势连环判为 abandoned、整片失灵。
             mouseControlController.resetTransientState()
+            gestureEngine.abortForTapRestart()
             if let eventTap {
                 CGEvent.tapEnable(tap: eventTap, enable: true)
+            }
+            if DebugLog.isEnabled {
+                DebugLog.event("tap", [
+                    "event": "reenabled",
+                    "kind": type == .tapDisabledByTimeout ? "timeout" : "userInput"
+                ])
             }
             onStatusChange?("监听中(tap 已重启)")
             return nil
@@ -340,7 +349,9 @@ final class EventTapManager: @unchecked Sendable {
             if event.getIntegerValueField(.eventSourceUserData) == gestureEngine.rightClickSyntheticMarker {
                 return Unmanaged.passUnretained(event)
             }
-            if RightClickPassThrough.contains(event.location) {
+            // 透传区只在引擎"未在手势中"时生效。一旦手势已经在卡片外起手(引擎接管),
+            // 后续 drag/up 即便飘进透传区也必须继续交给引擎,否则 up 被透传走、引擎卡死。
+            if !gestureEngine.isHandlingRightMouse, RightClickPassThrough.contains(event.location) {
                 return Unmanaged.passUnretained(event)
             }
             return gestureEngine.handleRightMouseDragged(at: event.location)
@@ -351,7 +362,7 @@ final class EventTapManager: @unchecked Sendable {
             if event.getIntegerValueField(.eventSourceUserData) == gestureEngine.rightClickSyntheticMarker {
                 return Unmanaged.passUnretained(event)
             }
-            if RightClickPassThrough.contains(event.location) {
+            if !gestureEngine.isHandlingRightMouse, RightClickPassThrough.contains(event.location) {
                 return Unmanaged.passUnretained(event)
             }
             if mouseControlController.handleTriggerEvent(type: type, event: event, normalizedFlags: raw) {

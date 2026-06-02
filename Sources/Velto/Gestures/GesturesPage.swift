@@ -34,8 +34,7 @@ struct GesturesPage: View {
     }
 
     /// 签名差异度过小(< 余量门槛)的手势互相冲突 —— 谁都可能识别不出。
-    /// 用与运行时一致的 `GestureDirection.distance`:方向相同且弧向不相反才算撞车;
-    /// 方向相同但一上弧一下弧则不算。返回涉及冲突的全部 id。
+    /// 用与运行时一致的 `GestureDirection.distance`。返回涉及冲突的全部 id。
     private func conflictSet(from canonical: [UUID: GestureDirection.Signature]) -> Set<UUID> {
         let entries = canonical.filter { !$0.value.isEmpty }.map { ($0.key, $0.value) }
         var conflicting: Set<UUID> = []
@@ -131,7 +130,7 @@ struct GesturesPage: View {
                         let sig = canonical[g.id] ?? .empty
                         GestureListItem(
                             gesture: g,
-                            directionArrows: GestureDirection.arrows(sig.sequence) + GestureDirection.bowGlyph(sig.bow),
+                            directionArrows: GestureDirection.arrows(sig.sequence) + GestureDirection.bowGlyph(sig.bowSign),
                             conflict: conflicts.contains(g.id),
                             selected: g.id == selectedID,
                             onClick: { selectGesture(g.id) }
