@@ -110,21 +110,19 @@ final class GestureCaptureView: NSView {
         frameObservers.append(viewObs)
 
         guard let window else { return }
+        // 注意:不监听 willClose 来清除 region。SwiftUI 在测量/过渡时会把录制视图
+        // 临时挂到不可见的辅助窗口,那些窗口的 willClose 会误清掉有效实例已注册的
+        // region(owner 恰好匹配),而恢复 republish 又受 window.isVisible 限制、存在
+        // 空窗期,用户恰在空窗期右键就"无法录制"。真正的窗口关闭由 viewDidMoveTo
+        // Window(nil) 兜底清理,这里只监听位置/尺寸变化来刷新 region。
         for name in [
             NSWindow.didMoveNotification,
             NSWindow.didResizeNotification,
             NSWindow.didEndLiveResizeNotification,
-            NSWindow.willCloseNotification,
         ] {
-            let isClose = (name == NSWindow.willCloseNotification)
             let obs = nc.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated {
-                    guard let self else { return }
-                    if isClose {
-                        RightClickPassThrough.clear(owner: ObjectIdentifier(self))
-                    } else {
-                        self.republishPassThroughRegion()
-                    }
+                    self?.republishPassThroughRegion()
                 }
             }
             frameObservers.append(obs)
