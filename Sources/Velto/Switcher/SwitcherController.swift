@@ -51,6 +51,8 @@ final class SwitcherController {
 
     @discardableResult
     func start() -> Bool {
+        // 在 windowList.start() 之前定好维护开关:切换器禁用时连首次全量扫描都跳过。
+        windowList.setMaintainsIndex(GestureStore.shared.preferences.switcher.enabled)
         windowList.start()
         keyTap.onEvent = { [weak self] event in
             // KeyTap 回调在 tap 线程,所有 UI / 状态修改必须跳回 main
@@ -82,6 +84,8 @@ final class SwitcherController {
         keyTap.setSwitcherEnabled(prefs.enabled)
         keyTap.setTriggerShortcut(prefs.triggerShortcut)
         SwitcherDebugLog.setEnabled(prefs.debugLoggingEnabled)
+        // 禁用时停后台 AX 扫描 / 缩略图预热;重新启用时全量补一次。
+        windowList.setMaintainsIndex(prefs.enabled)
     }
 
     /// 按用户偏好算 panel 即将出现的屏幕 —— 用于"屏幕过滤"过滤窗口、以及

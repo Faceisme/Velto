@@ -23,7 +23,7 @@ enum SwitcherFocus {
         // 路径 1:在某些场景下我们不应该用 SLPS —— 比如自己的 app(避免把自己
         // 当前焦点弄丢),或者窗口属于 windowless app(我们 P1 不处理)。
         // P1 阶段两个都不命中,留个 hook。
-        AXCallQueue.shared.submit {
+        AXCallQueue.shared.submitFocus {
             raiseUnsafe(
                 pid: window.application.pid,
                 cgWindowId: window.cgWindowId,

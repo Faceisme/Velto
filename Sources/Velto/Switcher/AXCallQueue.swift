@@ -23,6 +23,17 @@ final class AXCallQueue: @unchecked Sendable {
         return q
     }()
 
+    /// 确认切换(`SwitcherFocus.raise`)专用的独立队列。聚焦是用户松手后的直接动作,
+    /// 不能排在后台窗口扫描 / 标题读取后面 —— 否则前面有卡住的 app AX 调用时,
+    /// 会出现"松手后没切过去、过会儿才跳"。用更高 QoS,与后台读取物理隔离。
+    private let focusQueue: OperationQueue = {
+        let q = OperationQueue()
+        q.name = "Velto.Switcher.AXCallQueue.focus"
+        q.maxConcurrentOperationCount = 1
+        q.qualityOfService = .userInteractive
+        return q
+    }()
+
     /// 同 key 在 queue 上 pending 的 operation。新来的同 key 任务会先 cancel
     /// 老的;cancel 不一定真停(operation 可能已经 isExecuting),但至少不会
     /// 再额外排一个进去。
@@ -74,6 +85,15 @@ final class AXCallQueue: @unchecked Sendable {
     /// 用于无需节流的一次性后台调用(初次全量扫描等)。
     func submit(_ block: @escaping @Sendable () throws -> Void) {
         queue.addOperation {
+            do {
+                try block()
+            } catch {}
+        }
+    }
+
+    /// 确认切换专用:走独立高优队列,不和后台索引读取共线。
+    func submitFocus(_ block: @escaping @Sendable () throws -> Void) {
+        focusQueue.addOperation {
             do {
                 try block()
             } catch {}

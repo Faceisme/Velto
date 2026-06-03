@@ -131,6 +131,11 @@ final class SwitcherWindowList {
     /// 当前最前台 app 的 pid
     var frontmostPid: pid_t?
 
+    /// 是否维护窗口索引。切换器关闭时置 false —— 跳过 AX 全量扫描与缩略图预热这些重活
+    /// (观察者仍在,但回调里直接 return,几乎零开销);重新开启时全量补一次。
+    /// 只在主线程(AX 回调 / 偏好变更都在主线程)读写。
+    private(set) var maintainsIndex = true
+
     private var didInitialize = false
     private var lastGhostProbeTime: TimeInterval = 0
     /// 已经派发了 ghost probe 还没回来。AXCallQueue 串行所以不会真并发,
@@ -206,7 +211,20 @@ final class SwitcherWindowList {
 
     // MARK: - 窗口同步
 
+    /// 由 SwitcherController 按"切换器是否启用"驱动。关闭时停掉后台扫描/缩略图预热;
+    /// 重新开启时全量补一次(把禁用期间漏掉的窗口变化补回来)。主线程调用。
+    func setMaintainsIndex(_ enabled: Bool) {
+        guard maintainsIndex != enabled else { return }
+        maintainsIndex = enabled
+        if enabled {
+            for pid in apps.keys {
+                syncWindowsForApp(pid: pid, includeBruteForce: true)
+            }
+        }
+    }
+
     private func syncWindowsForApp(pid: pid_t, includeBruteForce: Bool = false) {
+        guard maintainsIndex else { return }
         guard let app = apps[pid] else { return }
         AXCallQueue.shared.schedule("sync-\(pid)") { [weak self] in
             guard let axWindows = app.copyAxWindows(includeBruteForce: includeBruteForce) else { return }
@@ -302,6 +320,7 @@ final class SwitcherWindowList {
                 appLocalizedName: app.localizedName
             )
             if let existing = windows[probe.wid] {
+                existing.missCount = 0   // 本轮扫描到了 → 清零两阶段移除计数
                 if existing.title != resolvedTitle { existing.title = resolvedTitle }
                 if existing.isMinimized != probe.isMinimized { existing.isMinimized = probe.isMinimized }
                 if existing.isFullscreen != probe.isFullscreen { existing.isFullscreen = probe.isFullscreen }
@@ -332,11 +351,18 @@ final class SwitcherWindowList {
                 setChanged = true
             }
         }
-        let stale = windows.values.filter { $0.application.pid == pid && !seenWids.contains($0.cgWindowId) }
-        for w in stale {
-            unsubscribeWindowNotifications(w)
-            windows.removeValue(forKey: w.cgWindowId)
-            setChanged = true
+        // 两阶段移除:本轮没扫到的现有窗口先累加 missCount,连续 staleThreshold 次没出现
+        // 才真正删。治"目标 app 短暂不响应 / AX 字段瞬时为空"导致真实窗口被误删、列表闪烁、
+        // MRU 被重排、缩略图重抓。明确的 destroyed 通知仍走即时移除(见 handleAxNotification)。
+        let staleThreshold = 2
+        let missed = windows.values.filter { $0.application.pid == pid && !seenWids.contains($0.cgWindowId) }
+        for w in missed {
+            w.missCount += 1
+            if w.missCount >= staleThreshold {
+                unsubscribeWindowNotifications(w)
+                windows.removeValue(forKey: w.cgWindowId)
+                setChanged = true
+            }
         }
         if setChanged {
             compactMRUOrdering()
@@ -379,6 +405,14 @@ final class SwitcherWindowList {
         list.handleAxNotification(type, element: element)
     }
 
+    /// 取触发通知的 AX element 所属进程 pid。AXObserver 是按 app 装的,element 归属
+    /// 哪个 app 是确定的 —— 用它而不是 frontmostPid,后台 app 建/删窗口才不会同步错对象。
+    /// `AXUIElementGetPid` 只读 element 内部 token,不向 app 发消息,销毁的 element 也能拿到。
+    private func pidOfElement(_ element: AXUIElement) -> pid_t? {
+        var pid: pid_t = 0
+        return AXUIElementGetPid(element, &pid) == .success ? pid : nil
+    }
+
     private func handleAxNotification(_ type: String, element: AXUIElement) {
         // 只处理 SwitcherApp.observedNotifications / SwitcherWindow.observedNotifications
         // 里明确订阅的通知,其他都不可能到这。不写 default 分支,免得未来加新订阅
@@ -403,7 +437,7 @@ final class SwitcherWindowList {
                 unsubscribeWindowNotifications(w)
                 windows.removeValue(forKey: wid)
                 compactMRUOrdering()
-            } else if let pid = frontmostPid {
+            } else if let pid = pidOfElement(element) ?? frontmostPid {
                 syncWindowsForApp(pid: pid)
             }
         case kAXTitleChangedNotification:
@@ -415,7 +449,7 @@ final class SwitcherWindowList {
         // ---- 应用级别通知 ----
         case kAXFocusedWindowChangedNotification, kAXApplicationActivatedNotification:
             updateFocusedWindowMRU()
-            if let pid = frontmostPid {
+            if let pid = pidOfElement(element) ?? frontmostPid {
                 syncWindowsForApp(pid: pid)
             }
         case kAXApplicationHiddenNotification, kAXApplicationShownNotification:
@@ -423,7 +457,8 @@ final class SwitcherWindowList {
         case kAXWindowCreatedNotification:
             // 新窗口有可能直接开在别的 Space 上(用户从菜单栏新建窗口时常见),
             // 标准 AX 路径只拿当前 Space —— 这种 case 必须叠上暴力枚举才能抓到。
-            if let pid = frontmostPid {
+            // 用事件来源 app 的 pid:后台 app 新建窗口也能同步到正确的 app。
+            if let pid = pidOfElement(element) ?? frontmostPid {
                 syncWindowsForApp(pid: pid, includeBruteForce: true)
             }
 
