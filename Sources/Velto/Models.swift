@@ -44,6 +44,9 @@ enum GestureTargetPolicy: String, Codable, Equatable {
 
 struct AppPreferences: Codable, Equatable {
     var gesturesEnabled: Bool
+    /// 窗口管理(拖窗 / 内容缩放 / 窗口快捷键)总开关。关掉只停这三项,不影响手势 /
+    /// 鼠标控制。带默认值,旧配置(无此字段)解码时按 `decodeIfPresent` 回退到 true。
+    var windowManagementEnabled: Bool = true
     var showTrail: Bool
     var showMenuBarIcon: Bool
     var recognitionThreshold: Double
@@ -98,6 +101,7 @@ struct AppPreferences: Codable, Equatable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         gesturesEnabled = try container.decodeIfPresent(Bool.self, forKey: .gesturesEnabled) ?? Self.defaults.gesturesEnabled
+        windowManagementEnabled = try container.decodeIfPresent(Bool.self, forKey: .windowManagementEnabled) ?? Self.defaults.windowManagementEnabled
         showTrail = try container.decodeIfPresent(Bool.self, forKey: .showTrail) ?? Self.defaults.showTrail
         showMenuBarIcon = try container.decodeIfPresent(Bool.self, forKey: .showMenuBarIcon) ?? Self.defaults.showMenuBarIcon
         recognitionThreshold = try container.decodeIfPresent(Double.self, forKey: .recognitionThreshold) ?? Self.defaults.recognitionThreshold
@@ -235,13 +239,9 @@ final class GestureStore {
             key: preferencesKey,
             decoder: decoder
         ) ?? .defaults
-        let needsPreferencesWrite = !preferences.gesturesEnabled
-        preferences.gesturesEnabled = true
+        // 不再强制开启手势:用户在 UI 里的暂停状态应当跨重启持久化(解耦总开关)。
         localizeBuiltInGestureNames()
         gesturesVersion = 1
-        if needsPreferencesWrite {
-            savePreferences()
-        }
         syncDebugLog()
     }
 
@@ -288,7 +288,7 @@ final class GestureStore {
 
         gestures = backup.gestures
         preferences = backup.preferences
-        preferences.gesturesEnabled = true
+        // 尊重备份里的开关状态,不再强制开启(与启动逻辑一致)。
         localizeBuiltInGestureNames()
         gesturesVersion &+= 1
         saveGestures()

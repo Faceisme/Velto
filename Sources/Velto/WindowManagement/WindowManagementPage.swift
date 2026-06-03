@@ -33,6 +33,32 @@ struct WindowManagementPage: View {
                         subtitle: "按住修饰键 + 拖动鼠标即可移动或缩放当前窗口。"
                     )
 
+                    // 模块总开关:即时生效,不走下面的"保存"。关掉则移动/缩放/滚轮缩放/
+                    // 窗口快捷键全部停用,但不影响手势与鼠标控制(各模块开关已解耦)。
+                    GroupCard(radius: MGRadius.cardLg) {
+                        HStack(spacing: 10) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("启用窗口管理")
+                                    .font(.mgLabelStrong)
+                                    .foregroundStyle(Color.mgText1)
+                                Text("关闭后,移动/缩放窗口、滚轮缩放、窗口快捷键全部停用,不影响手势与鼠标控制。")
+                                    .font(.mgMeta)
+                                    .foregroundStyle(Color.mgText2)
+                            }
+                            Spacer(minLength: 12)
+                            Toggle("", isOn: Binding(
+                                get: { store.preferences.windowManagementEnabled },
+                                set: { v in store.updatePreferences { $0.windowManagementEnabled = v } }
+                            ))
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .controlSize(.small)
+                            .tint(.mgAccent)
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 14)
+                    }
+
                     GroupCard(radius: MGRadius.cardLg) {
                         VStack(spacing: 0) {
                             WindowRow(

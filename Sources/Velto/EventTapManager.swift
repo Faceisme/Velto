@@ -106,6 +106,12 @@ final class EventTapManager: @unchecked Sendable {
     private let contentZoomController = ContentZoomController()
     private let windowShortcutController = WindowShortcutController()
 
+    /// 手势 / 窗口管理是否启用的 tap 线程快照。只在 tap 线程读写(`handle` 与
+    /// `performOnTapThread` 块都在 tap 线程;`init` 在 `start()` 之前于主线程设初值,
+    /// 此时无并发)。tap 已和功能开关解耦、常驻运行,各分支靠这两个快照决定是否生效。
+    private var gesturesEnabledForTap = true
+    private var windowManagementEnabledForTap = true
+
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
     private var tapThread: Thread?
@@ -136,6 +142,8 @@ final class EventTapManager: @unchecked Sendable {
             gesturesVersion: store.gesturesVersion
         )
         applyPreferenceSnapshots(store.preferences)
+        gesturesEnabledForTap = store.preferences.gesturesEnabled
+        windowManagementEnabledForTap = store.preferences.windowManagementEnabled
 
         activationObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification,
@@ -164,6 +172,8 @@ final class EventTapManager: @unchecked Sendable {
                 let version = store.gesturesVersion
                 self.applyPreferenceSnapshots(preferences)
                 self.performOnTapThread { [weak self] in
+                    self?.gesturesEnabledForTap = preferences.gesturesEnabled
+                    self?.windowManagementEnabledForTap = preferences.windowManagementEnabled
                     self?.gestureEngine.updatePreferences(preferences)
                     self?.gestureEngine.updateGestures(gestures, version: version)
                 }
@@ -342,6 +352,11 @@ final class EventTapManager: @unchecked Sendable {
             if mouseControlController.handleTriggerEvent(type: type, event: event, normalizedFlags: raw) {
                 return nil
             }
+            // 手势关闭:不起手,直接放行(系统右键菜单正常)。只挡 down 即可——没有起手,
+            // 后续 dragged/up 时引擎处于 idle 会返回 false 自然透传,不会卡半路。
+            guard gesturesEnabledForTap else {
+                return Unmanaged.passUnretained(event)
+            }
             _ = gestureEngine.handleRightMouseDown(at: event.location)
             return nil
 
@@ -381,6 +396,10 @@ final class EventTapManager: @unchecked Sendable {
             guard !gestureEngine.isHandlingRightMouse else {
                 return Unmanaged.passUnretained(event)
             }
+            // 拖窗属于窗口管理:总开关关掉则不处理,原样放行。
+            guard windowManagementEnabledForTap else {
+                return Unmanaged.passUnretained(event)
+            }
             if raw == 0 { return Unmanaged.passUnretained(event) }
             guard let mode = windowDragController.dragMode(forNormalizedFlags: raw) else {
                 return Unmanaged.passUnretained(event)
@@ -392,9 +411,13 @@ final class EventTapManager: @unchecked Sendable {
             guard !gestureEngine.isHandlingRightMouse else {
                 return Unmanaged.passUnretained(event)
             }
+            // 鼠标控制不受窗口管理开关影响,先处理;内容缩放 / 拖窗修饰键归窗口管理,
+            // 受总开关门控。
             let consumed = mouseControlController.handleTriggerEvent(type: type, event: event, normalizedFlags: raw)
-            contentZoomController.handleFlagsChanged(normalizedFlags: raw)
-            windowDragController.handleFlagsChanged(event: event, normalizedFlags: raw)
+            if windowManagementEnabledForTap {
+                contentZoomController.handleFlagsChanged(normalizedFlags: raw)
+                windowDragController.handleFlagsChanged(event: event, normalizedFlags: raw)
+            }
             return consumed ? nil : Unmanaged.passUnretained(event)
 
         case .keyDown:
@@ -406,6 +429,10 @@ final class EventTapManager: @unchecked Sendable {
             }
             if mouseControlController.handleTriggerEvent(type: type, event: event, normalizedFlags: raw) {
                 return nil
+            }
+            // 窗口快捷键(如最大化)归窗口管理,受总开关门控。
+            guard windowManagementEnabledForTap else {
+                return Unmanaged.passUnretained(event)
             }
             return windowShortcutController.handleKeyDown(event: event, normalizedFlags: raw)
                 ? nil

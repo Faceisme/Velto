@@ -116,9 +116,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        if store.preferences.gesturesEnabled {
-            startListener()
-        }
+        // event tap 常驻:它同时承载手势、鼠标控制、窗口管理三套功能,生命周期不再
+        // 绑定任何单个功能的开关。各功能是否生效由各自的 enabled 在事件分发处判定。
+        startListener()
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -169,12 +169,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func storeDidChange() {
-        if store.preferences.gesturesEnabled && !isListenerRunning {
-            startListener()
-        } else if !store.preferences.gesturesEnabled && isListenerRunning {
-            stopListener()
-            lastStatus = "手势监听已关闭"
-        }
+        // tap 常驻,不再随手势开关启停。各功能开关的生效由 EventTapManager 自己的
+        // storeObserver 推快照到分发处处理;这里只刷新菜单栏图标。
         configureStatusItem()
     }
 
@@ -204,7 +200,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func restartListener() {
-        guard store.preferences.gesturesEnabled else { return }
+        // 诊断用:无条件重启 tap(不再受手势开关限制)。
         stopListener()
         lastStatus = "正在重启监听"
         startListener()
