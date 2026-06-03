@@ -417,6 +417,12 @@ final class GestureEngine: @unchecked Sendable {
         }
     }
 
+    /// 每次匹配执行自增。`windowUnderPointer` 的 AX 查找在 detached task 上跑,回主线程
+    /// 前用它判断"我还是不是最新的那次手势"——若用户期间又画了新手势,旧的 AX 结果
+    /// (尤其遇到慢/卡的 App、晚返回时)直接丢弃,避免"过一会儿才补发上一个手势"。
+    /// 只在主线程读写。
+    @MainActor private var gestureExecutionID: UInt64 = 0
+
     @MainActor
     private func resolveTargetAndExecute(
         shortcut: Shortcut,
@@ -424,6 +430,9 @@ final class GestureEngine: @unchecked Sendable {
         policy: GestureTargetPolicy,
         frontmostApplicationAtGestureStart: NSRunningApplication?
     ) {
+        gestureExecutionID &+= 1
+        let executionID = gestureExecutionID
+
         switch policy {
         case .activeWindow:
             let target = GestureTargetController.executionTarget(
@@ -438,7 +447,8 @@ final class GestureEngine: @unchecked Sendable {
             )
 
         case .windowUnderPointer:
-            // AX 查找可能阻塞,在 detached task 上跑,完成后切回主线程。
+            // AX 查找可能阻塞,在 detached task 上跑(AX 调用本身已设消息超时,见
+            // GestureTargetController),完成后切回主线程。
             Task.detached(priority: .userInitiated) { [weak self] in
                 let target = GestureTargetController.executionTarget(
                     at: targetPoint,
@@ -446,7 +456,15 @@ final class GestureEngine: @unchecked Sendable {
                     frontmostApplicationAtGestureStart: nil
                 )
                 await MainActor.run {
-                    self?.executeMatchedGesture(
+                    guard let self else { return }
+                    // 期间又有新手势触发 → 这次 AX 结果已过期,丢弃。
+                    guard executionID == self.gestureExecutionID else {
+                        if DebugLog.isEnabled {
+                            DebugLog.event("exec", ["dropped": "stale", "id": Double(executionID)])
+                        }
+                        return
+                    }
+                    self.executeMatchedGesture(
                         shortcut: shortcut,
                         target: target,
                         frontmostApplicationAtGestureStart: frontmostApplicationAtGestureStart

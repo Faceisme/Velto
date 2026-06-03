@@ -49,8 +49,34 @@ struct GesturesPage: View {
         return conflicting
     }
 
+    /// 保存前校验。`block` 非空时**阻止保存**(列表里有手势互相重复 —— 这是最隐蔽、
+    /// 最让人困惑的状态:存了却谁都不触发);`warning` 是不阻止保存的提示(半配置手势,
+    /// 有快捷键没样本 / 有样本没快捷键,存下来也不会生效)。canonical 只算一遍。
+    private var saveValidation: (block: String?, warning: String?) {
+        let canonical = canonicalByID
+        let conflicts = conflictSet(from: canonical)
+        let conflictNames = draftGestures.filter { conflicts.contains($0.id) }.map(\.name)
+        let block = conflictNames.isEmpty
+            ? nil
+            : "手势重复:\(conflictNames.joined(separator: "、")) —— 改成不同形状后才能保存"
+
+        var warnings: [String] = []
+        for gesture in draftGestures {
+            let hasTemplate = !(canonical[gesture.id] ?? .empty).isEmpty
+            let hasShortcut = gesture.shortcut != nil
+            if hasShortcut, !hasTemplate {
+                warnings.append("「\(gesture.name)」缺少有效样本")
+            } else if hasTemplate, !hasShortcut {
+                warnings.append("「\(gesture.name)」未设置快捷键")
+            }
+        }
+        let warning = warnings.isEmpty ? nil : "\(warnings.joined(separator: ";")),不会触发"
+        return (block, warning)
+    }
+
     var body: some View {
-        VStack(spacing: 0) {
+        let validation = saveValidation
+        return VStack(spacing: 0) {
             HStack(spacing: 0) {
                 listColumn
                     .frame(width: 360)
@@ -71,6 +97,8 @@ struct GesturesPage: View {
             BottomToolbar(
                 hasUnsavedChanges: hasUnsavedChanges,
                 statusMessage: statusMessage,
+                saveBlockReason: validation.block,
+                saveWarning: validation.warning,
                 onDiscard: { reloadFromStore() },
                 onSave: saveChanges
             )
@@ -230,16 +258,23 @@ struct GesturesPage: View {
     }
 
     private func saveChanges() {
+        // 阻止保存重复手势(保存按钮平时已禁用,这里兜底防回车等路径)。
+        if let block = saveValidation.block {
+            statusMessage = "无法保存 —— \(block)"
+            return
+        }
         let normalized = draftGestures.map { g -> GestureCommand in
             var n = g
             let trimmed = n.name.trimmingCharacters(in: .whitespacesAndNewlines)
             n.name = trimmed.isEmpty ? "未命名" : trimmed
             return n
         }
-        store.updateGestures { $0 = normalized }
+        let persisted = store.updateGestures { $0 = normalized }
         draftGestures = normalized
         hasUnsavedChanges = false
-        statusMessage = "已保存。"
+        statusMessage = persisted
+            ? "已保存。"
+            : "保存失败:无法写入配置(本次更改本会话有效,重启后会丢失)。"
     }
 
     private func reloadFromStore(silent: Bool = false) {
@@ -570,8 +605,14 @@ private struct GestureDetailPanel: View {
 struct BottomToolbar: View {
     let hasUnsavedChanges: Bool
     let statusMessage: String
+    /// 非空 = 存在冲突,阻止保存(红色提示 + 禁用保存按钮)。
+    var saveBlockReason: String? = nil
+    /// 非空 = 半配置手势,不阻止保存(橙色提示)。
+    var saveWarning: String? = nil
     let onDiscard: () -> Void
     let onSave: () -> Void
+
+    private var saveDisabled: Bool { !hasUnsavedChanges || saveBlockReason != nil }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -580,20 +621,7 @@ struct BottomToolbar: View {
                 .frame(height: 0.5)
 
             HStack(spacing: 10) {
-                if hasUnsavedChanges {
-                    HStack(spacing: 6) {
-                        Circle()
-                            .fill(Color.orange)
-                            .frame(width: 6, height: 6)
-                        Text("有未保存的更改")
-                            .font(.mgMeta)
-                            .foregroundStyle(Color.mgText2)
-                    }
-                } else if !statusMessage.isEmpty {
-                    Text(statusMessage)
-                        .font(.mgMeta)
-                        .foregroundStyle(Color.mgText2)
-                }
+                statusArea
 
                 Spacer()
 
@@ -605,12 +633,38 @@ struct BottomToolbar: View {
                 Button("保存", action: onSave)
                     .buttonStyle(MGPrimaryButtonStyle())
                     .keyboardShortcut(.return)
-                    .disabled(!hasUnsavedChanges)
-                    .opacity(hasUnsavedChanges ? 1 : 0.55)
+                    .disabled(saveDisabled)
+                    .opacity(saveDisabled ? 0.55 : 1)
             }
             .padding(.horizontal, 20)
             .frame(height: 54)
         }
         .background(Color.mgCard)
+    }
+
+    @ViewBuilder
+    private var statusArea: some View {
+        if let block = saveBlockReason {
+            // 冲突优先,红色,且会禁用保存。
+            label(text: block, dot: .red, color: .red)
+        } else if let warning = saveWarning {
+            label(text: warning, dot: .orange, color: Color.mgText2)
+        } else if hasUnsavedChanges {
+            label(text: "有未保存的更改", dot: .orange, color: Color.mgText2)
+        } else if !statusMessage.isEmpty {
+            Text(statusMessage)
+                .font(.mgMeta)
+                .foregroundStyle(Color.mgText2)
+        }
+    }
+
+    private func label(text: String, dot: Color, color: Color) -> some View {
+        HStack(spacing: 6) {
+            Circle().fill(dot).frame(width: 6, height: 6)
+            Text(text)
+                .font(.mgMeta)
+                .foregroundStyle(color)
+                .lineLimit(1)
+        }
     }
 }

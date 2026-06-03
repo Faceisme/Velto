@@ -255,8 +255,14 @@ enum GestureTargetController {
         return nil
     }
 
+    /// 跨进程 AX 查询:遇到卡死 / 无响应的目标 App 可能长时间阻塞。给它设一个消息
+    /// 超时,超时后调用快速失败(返回非 .success),上层回退到 frontmost App,避免
+    /// detached task 长期挂住、最终晚回来补发旧手势。
+    private static let axMessagingTimeout: Float = 0.25
+
     private static func elementAtPosition(_ point: CGPoint) -> AXUIElement? {
         let systemWide = AXUIElementCreateSystemWide()
+        AXUIElementSetMessagingTimeout(systemWide, axMessagingTimeout)
         var element: AXUIElement?
         let result = AXUIElementCopyElementAtPosition(
             systemWide,

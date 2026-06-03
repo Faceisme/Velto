@@ -245,11 +245,15 @@ final class GestureStore {
         syncDebugLog()
     }
 
-    func updateGestures(_ update: (inout [GestureCommand]) -> Void) {
+    /// 返回是否成功写盘。失败时内存状态仍已更新并通知(本次会话有效),但调用方应
+    /// 据此提示用户"重启后会丢失",而不是像以前那样静默吞掉、UI 仍显示已保存。
+    @discardableResult
+    func updateGestures(_ update: (inout [GestureCommand]) -> Void) -> Bool {
         update(&gestures)
         gesturesVersion &+= 1
-        saveGestures()
+        let persisted = saveGestures()
         notifyChanged(reason: .gestures)
+        return persisted
     }
 
     func updatePreferences(_ update: (inout AppPreferences) -> Void) {
@@ -293,10 +297,11 @@ final class GestureStore {
         notifyChanged(reason: .backupImport)
     }
 
-    private func saveGestures() {
-        if let data = try? encoder.encode(gestures) {
-            UserDefaults.standard.set(data, forKey: gesturesKey)
-        }
+    @discardableResult
+    private func saveGestures() -> Bool {
+        guard let data = try? encoder.encode(gestures) else { return false }
+        UserDefaults.standard.set(data, forKey: gesturesKey)
+        return true
     }
 
     private func savePreferences() {

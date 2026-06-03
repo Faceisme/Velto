@@ -21,6 +21,11 @@ final class GestureCaptureView: NSView {
         didSet { invalidateForPointChange(from: oldValue, to: points) }
     }
 
+    /// 录制采样与运行时(`GestureEngine`)对齐:低于此位移的点不追加,滤手抖噪声。
+    private let minimumPointDistance: CGFloat = 2
+    /// 点数上限,防止长时间按住右键拖出超大模板写进配置;超限后只更新末点。
+    private let maximumPointCount = 512
+
     private var frameObservers: [NSObjectProtocol] = []
 
     override var acceptsFirstResponder: Bool { true }
@@ -49,15 +54,30 @@ final class GestureCaptureView: NSView {
     }
 
     override func rightMouseDragged(with event: NSEvent) {
-        points.append(convert(event.locationInWindow, from: nil))
+        appendSamplePoint(convert(event.locationInWindow, from: nil))
     }
 
     override func rightMouseUp(with event: NSEvent) {
-        points.append(convert(event.locationInWindow, from: nil))
+        appendSamplePoint(convert(event.locationInWindow, from: nil))
         let finished = points
         points = []
-        if finished.count >= 2 {
-            onStrokeFinished?(finished)
+        // 用与识别一致的判据兜底:太短 / 无法归一化成签名的噪声笔迹直接丢弃,不写进
+        // 模板(否则会产生空 / 不稳定的 canonical,污染列表、冲突检测与备份)。
+        guard finished.count >= 2,
+              !GestureDirection.signature(from: finished).isEmpty else { return }
+        onStrokeFinished?(finished)
+    }
+
+    /// 追加采样点:滤掉低于 `minimumPointDistance` 的微动;超过 `maximumPointCount`
+    /// 后不再增长,只更新末点。和运行时 `GestureEngine` 的采样规则保持一致。
+    private func appendSamplePoint(_ point: CGPoint) {
+        if let last = points.last, hypot(point.x - last.x, point.y - last.y) < minimumPointDistance {
+            return
+        }
+        if points.count >= maximumPointCount {
+            points[points.count - 1] = point
+        } else {
+            points.append(point)
         }
     }
 
