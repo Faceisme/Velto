@@ -81,6 +81,7 @@ final class SwitcherController {
         let prefs = GestureStore.shared.preferences.switcher
         keyTap.setSwitcherEnabled(prefs.enabled)
         keyTap.setTriggerShortcut(prefs.triggerShortcut)
+        SwitcherDebugLog.setEnabled(prefs.debugLoggingEnabled)
     }
 
     /// 按用户偏好算 panel 即将出现的屏幕 —— 用于"屏幕过滤"过滤窗口、以及
@@ -125,6 +126,7 @@ final class SwitcherController {
         // 注意:KeyTap 本身已经禁了系统 Cmd+Tab,所以"透传"在用户视角就是
         // ⌘+Tab 没反应。P3 第一版接受这个行为;P4 可以加"切回系统 switcher"。
         guard prefs.enabled else { return }
+        SwitcherDebugLog.log("trigger reverse=\(reverse) sessionActive=\(SwitcherSession.isActive)")
 
         if SwitcherSession.isActive {
             stepSelection(reverse: reverse)
@@ -138,9 +140,11 @@ final class SwitcherController {
         let panelScreen = Self.resolvePanelScreen(for: prefs.showOnScreen)
         let snapshot = windowList.snapshot(applying: prefs, panelScreen: panelScreen)
         guard !snapshot.isEmpty else {
+            SwitcherDebugLog.log("summon aborted: 没有可切换的窗口")
             NSSound.beep()
             return
         }
+        SwitcherDebugLog.log("summon windowCount=\(snapshot.count) style=\(prefs.appearanceStyle) groupBy=\(prefs.groupBy) screen=\(prefs.showOnScreen)")
         // 初始选中下一个/上一个,而不是当前最前的(MRU=0 是用户当前在用的)
         let initialSelection: Int
         if snapshot.count == 1 {

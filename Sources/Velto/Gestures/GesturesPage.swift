@@ -168,6 +168,35 @@ struct GesturesPage: View {
                 .padding(.horizontal, 12)
                 .padding(.bottom, 14)
             }
+
+            // 模块级调试开关:只点亮手势日志(velto-debug.jsonl),不影响其它模块。
+            Rectangle()
+                .fill(Color.mgHair)
+                .frame(height: 0.5)
+            HStack(spacing: 8) {
+                Image(systemName: "ladybug")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.mgText2)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("调试日志")
+                        .font(.mgLabelStrong)
+                        .foregroundStyle(Color.mgText1)
+                    Text("记录手势轨迹/匹配诊断,排查时打开")
+                        .font(.mgMeta)
+                        .foregroundStyle(Color.mgText2)
+                }
+                Spacer(minLength: 8)
+                Toggle("", isOn: Binding(
+                    get: { store.preferences.debugLoggingEnabled },
+                    set: { v in store.updatePreferences { $0.debugLoggingEnabled = v } }
+                ))
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .tint(.mgAccent)
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 12)
         }
     }
 

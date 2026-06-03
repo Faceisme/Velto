@@ -13,9 +13,16 @@ import Foundation
 /// 只对 `AppQuirks.hidesSyntheticSwitcherWindows` 名单里的 app 打日志
 /// (当前是:微信、Dropbox、1Password)—— 别的 app 静默,免得日志噪音。
 enum SwitcherDebugLog {
-    static let isEnabled: Bool = {
+    // 运行时可切换:由切换器设置页的"调试日志"开关经 SwitcherController.setEnabled 驱动,
+    // 同时保留环境变量 VELTO_SWITCHER_DEBUG=1 作为开发期强制开启入口。状态只在
+    // stateQueue 内触碰,nonisolated(unsafe) 是经串行化保证的安全例外(与 DebugLog 同款)。
+    private static let stateQueue = DispatchQueue(label: "com.velto.switcher.debuglog.state")
+    private nonisolated(unsafe) static var _enabled =
         ProcessInfo.processInfo.environment["VELTO_SWITCHER_DEBUG"] == "1"
-    }()
+    private nonisolated(unsafe) static var _handle: FileHandle?
+    private nonisolated(unsafe) static var _handleOpened = false
+
+    private static let envForced = ProcessInfo.processInfo.environment["VELTO_SWITCHER_DEBUG"] == "1"
 
     private static let dateFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -23,8 +30,27 @@ enum SwitcherDebugLog {
         return f
     }()
 
-    private static let logFileHandle: FileHandle? = {
-        guard isEnabled else { return nil }
+    static var isEnabled: Bool {
+        stateQueue.sync { _enabled }
+    }
+
+    /// 由 `SwitcherController` 在启动 / 偏好变更时调用。环境变量为真时强制保持开启。
+    static func setEnabled(_ enabled: Bool) {
+        stateQueue.sync { _enabled = enabled || envForced }
+    }
+
+    /// 首次需要写入时才打开文件句柄(关闭状态下零文件开销;运行时打开也支持)。
+    private static func fileHandle() -> FileHandle? {
+        stateQueue.sync {
+            if !_handleOpened {
+                _handleOpened = true
+                _handle = Self.openLogFile()
+            }
+            return _handle
+        }
+    }
+
+    private static func openLogFile() -> FileHandle? {
         let fm = FileManager.default
         guard let logsDir = fm.urls(for: .libraryDirectory, in: .userDomainMask).first?
             .appendingPathComponent("Logs", isDirectory: true)
@@ -42,13 +68,13 @@ enum SwitcherDebugLog {
             try? handle?.write(contentsOf: data)
         }
         return handle
-    }()
+    }
 
     static func log(_ message: @autoclosure () -> String) {
         guard isEnabled else { return }
         let line = "[\(dateFormatter.string(from: Date()))] \(message())\n"
         FileHandle.standardError.write(Data(line.utf8))
-        if let handle = logFileHandle, let data = line.data(using: .utf8) {
+        if let handle = fileHandle(), let data = line.data(using: .utf8) {
             try? handle.write(contentsOf: data)
         }
     }

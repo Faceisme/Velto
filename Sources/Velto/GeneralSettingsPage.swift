@@ -194,28 +194,14 @@ struct GeneralSettingsPage: View {
                     }
                 }
 
-                // 调试
+                // 日志
                 VStack(alignment: .leading, spacing: 0) {
-                    MGSectionLabel(text: "调试")
+                    MGSectionLabel(text: "日志")
                     GroupCard {
                         VStack(spacing: 0) {
                             GroupRow(
-                                label: "调试模式",
-                                sub: "记录手势轨迹等诊断日志,排查问题时打开,平时保持关闭"
-                            ) {
-                                Toggle("", isOn: Binding(
-                                    get: { store.preferences.debugLoggingEnabled },
-                                    set: { v in store.updatePreferences { $0.debugLoggingEnabled = v } }
-                                ))
-                                .labelsHidden()
-                                .toggleStyle(.switch)
-                                .controlSize(.small)
-                                .tint(.mgAccent)
-                            }
-                            GroupRow(
-                                label: "诊断日志",
-                                sub: "~/Library/Logs/Velto/velto-debug.jsonl",
-                                showDivider: true
+                                label: "日志文件夹",
+                                sub: "各模块的调试开关已移至各自页面;打开后日志都写在这里"
                             ) {
                                 Button("在访达中显示", action: revealDebugLog)
                                     .buttonStyle(MGSecondaryButtonStyle())

@@ -39,14 +39,22 @@ struct MouseControlPage: View {
                                 }
                                 GroupRow(
                                     label: "滚轮调试日志",
-                                    sub: "仅排查滚动手感时打开,日常使用建议关闭",
+                                    sub: "打开即开始记录、关闭即停,无需保存。仅排查滚动手感时打开",
                                     showDivider: true
                                 ) {
-                                    Toggle("", isOn: $draft.debugLoggingEnabled)
-                                        .labelsHidden()
-                                        .toggleStyle(.switch)
-                                        .controlSize(.small)
-                                        .tint(.mgAccent)
+                                    // 即时生效:直接写 store(立刻应用到日志器),同时同步 draft,
+                                    // 让它不计入"未保存更改"、也不被保存/丢弃按钮影响。
+                                    Toggle("", isOn: Binding(
+                                        get: { store.preferences.mouseControl.debugLoggingEnabled },
+                                        set: { v in
+                                            store.updatePreferences { $0.mouseControl.debugLoggingEnabled = v }
+                                            draft.debugLoggingEnabled = v
+                                        }
+                                    ))
+                                    .labelsHidden()
+                                    .toggleStyle(.switch)
+                                    .controlSize(.small)
+                                    .tint(.mgAccent)
                                 }
                             }
                         }

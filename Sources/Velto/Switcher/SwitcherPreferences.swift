@@ -135,6 +135,10 @@ struct SwitcherPreferences: Codable, Equatable {
     /// 总开关。关掉后 Cmd+Tab 会还给系统原生 switcher。
     var enabled: Bool
 
+    /// 切换器调试日志开关(默认关)。开启后只写 ~/Library/Logs/Velto/switcher-debug.log,
+    /// 不影响其它模块。带默认值,旧配置无此字段时解码回退到 false。
+    var debugLoggingEnabled: Bool = false
+
     /// 触发快捷键。nil 表示用户没设(P3 默认 Cmd+Tab,见 defaults)。
     var triggerShortcut: Shortcut?
 
@@ -210,6 +214,7 @@ struct SwitcherPreferences: Codable, Equatable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         let d = Self.defaults
         enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? d.enabled
+        debugLoggingEnabled = try c.decodeIfPresent(Bool.self, forKey: .debugLoggingEnabled) ?? d.debugLoggingEnabled
         triggerShortcut = try c.decodeIfPresent(Shortcut.self, forKey: .triggerShortcut) ?? d.triggerShortcut
         appsToShow = try c.decodeIfPresent(SwitcherAppsScope.self, forKey: .appsToShow) ?? d.appsToShow
         spacesToShow = try c.decodeIfPresent(SwitcherSpacesScope.self, forKey: .spacesToShow) ?? d.spacesToShow

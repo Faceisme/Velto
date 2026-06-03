@@ -74,6 +74,21 @@ struct SwitcherSettingsPage: View {
                 ) {
                     AnyView(menuPicker(\.showOnScreen))
                 }
+
+                row(
+                    icon: "ladybug",
+                    title: "调试日志",
+                    desc: "排查切换器问题时打开,只写 switcher-debug.log,不影响其它模块。平时保持关闭。",
+                    showDivider: true
+                ) {
+                    AnyView(
+                        Toggle("", isOn: bind(\.debugLoggingEnabled))
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .controlSize(.small)
+                            .tint(.mgAccent)
+                    )
+                }
             }
         }
     }
