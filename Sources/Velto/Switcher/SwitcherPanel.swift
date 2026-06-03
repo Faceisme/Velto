@@ -72,8 +72,17 @@ final class SwitcherPanel: NSPanel {
         hideWindowTitle: Bool = false,
         on screen: NSScreen? = nil
     ) {
-        let contentSize = tilesView.rebuild(with: windows, style: style, hideWindowTitle: hideWindowTitle)
-        let frame = positionedFrame(for: contentSize, on: screen)
+        // 先定面板屏幕,算可用区域(留点边距,别贴满屏),交给 tiles 决定列数与缩放。
+        let panelScreen = screen ?? NSScreen.screenContainingMouse() ?? NSScreen.main ?? NSScreen.screens.first!
+        let visible = panelScreen.visibleFrame
+        let maxSize = NSSize(width: visible.width * 0.94, height: visible.height * 0.94)
+        let contentSize = tilesView.rebuild(
+            with: windows,
+            style: style,
+            hideWindowTitle: hideWindowTitle,
+            maxSize: maxSize
+        )
+        let frame = positionedFrame(for: contentSize, on: panelScreen)
         setFrame(frame, display: true)
         // 即时显示 —— 跟 alt-tab 一致。fade-in 会被感受为"按下后等了一下"。
         alphaValue = 1
