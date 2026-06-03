@@ -21,6 +21,17 @@ struct Shortcut: Codable, Equatable {
     var keyCode: UInt16
     var modifierFlags: UInt64
     var displayName: String
+
+    /// 是否含至少一个「真」修饰键(⌘ / ⌃ / ⌥;⇧ 单独不算)。用于校验全局触发键
+    /// 不被裸键占用 —— 裸键作为切换器触发键会全局吞普通输入、且无 modifier 松开可确认。
+    var hasRealModifier: Bool {
+        let real = UInt64(
+            CGEventFlags.maskCommand.rawValue
+                | CGEventFlags.maskControl.rawValue
+                | CGEventFlags.maskAlternate.rawValue
+        )
+        return (modifierFlags & real) != 0
+    }
 }
 
 struct GestureCommand: Codable, Identifiable, Equatable {

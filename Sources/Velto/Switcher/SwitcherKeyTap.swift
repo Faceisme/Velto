@@ -58,9 +58,38 @@ final class SwitcherKeyTap: @unchecked Sendable {
         _switcherEnabled = enabled
         switcherEnabledLock.unlock()
         guard wasEnabled != enabled else { return }
-        // 系统 hotkey 的 enable 状态在 OS 重启之前持久 —— 切回 true / false
-        // 是即时生效的,不需要重启 app 或 tap。
-        setNativeCommandTabEnabled(!enabled)
+        applySystemHotkeyState()
+    }
+
+    /// 系统符号热键状态 = (启用?, 触发键)。**先把三个热键全部恢复**(治崩溃残留 +
+    /// 换触发键时把上次占用的放回去),**再**仅在启用时关掉"当前触发键实际占用"的那几个。
+    /// 系统 hotkey 的 enable 状态持久到下次开机,切 true/false 即时生效,无需重启 tap。
+    private func applySystemHotkeyState() {
+        setNativeCommandTabEnabled(true)   // 全部恢复
+        let trigger = triggerSnapshot
+        let occupied = switcherEnabled
+            ? Self.occupiedSystemHotkeys(keyCode: trigger.keyCode, modifierFlags: trigger.modifierFlags)
+            : []
+        if !occupied.isEmpty {
+            setNativeCommandTabEnabled(false, occupied)
+        }
+        didDisableSystemHotkey = !occupied.isEmpty
+    }
+
+    /// 触发键实际占用哪些系统符号热键 —— 只有真正冲突时才关对应系统 hotkey,
+    /// 否则"自定义触发键 + 保留系统 Cmd+Tab"无法成立(P1a)。
+    ///   - ⌘+Tab → commandTab + commandShiftTab(反向用 ⇧)
+    ///   - ⌘+`(键码 50)→ commandKeyAboveTab
+    ///   - 其它 → 不占用任何系统热键
+    private static func occupiedSystemHotkeys(keyCode: UInt16, modifierFlags: UInt64) -> [CGSSymbolicHotKey] {
+        let shiftMask = UInt64(CGEventFlags.maskShift.rawValue)
+        let nonShift = (modifierFlags & modifierMask) & ~shiftMask
+        guard nonShift == UInt64(CGEventFlags.maskCommand.rawValue) else { return [] }
+        switch keyCode {
+        case 48: return [.commandTab, .commandShiftTab]   // Tab
+        case 50: return [.commandKeyAboveTab]             // `(grave)
+        default: return []
+        }
     }
 
     /// 用户配置的触发快捷键 —— Cmd+Tab 是默认,但可被设置页改成任何组合。
@@ -87,7 +116,9 @@ final class SwitcherKeyTap: @unchecked Sendable {
     /// Controller 在偏好变化时调,实时生效不需要重启。
     func setTriggerShortcut(_ shortcut: Shortcut?) {
         triggerLock.lock()
-        if let shortcut, shortcut.keyCode != 0 {
+        // 兜底校验:必须有 keyCode 且含真 modifier;裸键 / 仅 Shift / nil 一律回退默认
+        // ⌘+Tab —— 绝不把会全局吞普通输入的裸键推给 tap。
+        if let shortcut, shortcut.keyCode != 0, shortcut.hasRealModifier {
             _triggerKeyCode = shortcut.keyCode
             _triggerModifierFlags = shortcut.modifierFlags & Self.modifierMask
         } else {
@@ -95,6 +126,8 @@ final class SwitcherKeyTap: @unchecked Sendable {
             _triggerModifierFlags = UInt64(CGEventFlags.maskCommand.rawValue)
         }
         triggerLock.unlock()
+        // 触发键变了,系统热键占用要重算(可能从占用 Cmd+Tab 变成不占用,或反过来)。
+        applySystemHotkeyState()
     }
 
     /// Tap / runloop source / tap 线程的生命周期都由 start/stop 管,这三个字段
@@ -111,9 +144,9 @@ final class SwitcherKeyTap: @unchecked Sendable {
     func start() -> Bool {
         guard tap == nil else { return true }
 
-        // 关掉系统 Cmd+Tab / Shift+Cmd+Tab / Cmd+`
-        setNativeCommandTabEnabled(false)
-        didDisableSystemHotkey = true
+        // 启动自愈 + 按需关闭:先把系统热键全部恢复(治上次崩溃/被 kill 留下的残留),
+        // 再只关当前触发键实际占用的那几个。不再无条件关掉全部三个。
+        applySystemHotkeyState()
 
         // CGEvent tap:监听 keyDown 和 flagsChanged
         let mask: CGEventMask =
@@ -208,6 +241,10 @@ final class SwitcherKeyTap: @unchecked Sendable {
         // 这两个 case 收到时静默重新启用 tap,避免 Cmd+Tab 突然失灵。
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
+            // 禁用期间可能丢了 modifier 松开 / Esc —— 通知 controller 取消可能残留的
+            // session,避免面板卡在屏幕上、isActive 卡 true 吞掉后续方向键/Esc。
+            // 未在 session 中时 controller 的 .cancel 是 no-op,安全。
+            onEvent?(.cancel)
             return Unmanaged.passUnretained(event)
         }
 

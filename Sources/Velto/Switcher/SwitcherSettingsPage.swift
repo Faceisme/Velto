@@ -59,7 +59,15 @@ struct SwitcherSettingsPage: View {
                     AnyView(
                         KeyCapSlot(minWidth: 110) {
                             ShortcutRecorderField(
-                                shortcut: bind(\.triggerShortcut),
+                                shortcut: Binding(
+                                    get: { store.preferences.switcher.triggerShortcut },
+                                    set: { newValue in
+                                        // 触发键必须含真 modifier(⌘/⌃/⌥)。裸键 / 仅 Shift 的录入
+                                        // 直接忽略(保留旧值);清空(nil)允许 —— 会回退默认 ⌘+Tab。
+                                        if let s = newValue, !s.hasRealModifier { return }
+                                        store.updatePreferences { $0.switcher.triggerShortcut = newValue }
+                                    }
+                                ),
                                 placeholder: "点击录制"
                             )
                         }
