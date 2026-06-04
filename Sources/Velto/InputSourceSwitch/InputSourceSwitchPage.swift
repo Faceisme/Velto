@@ -243,7 +243,7 @@ struct InputSourceSwitchPage: View {
         Picker("", selection: Binding(get: { sourceID ?? "" }, set: { onPick($0.isEmpty ? nil : $0) })) {
           Text("不指定").tag("")
           ForEach(sources) { Text($0.localizedName).tag($0.id) }
-        }.labelsHidden().frame(minWidth: 140)
+        }.labelsHidden().pickerStyle(.menu).frame(minWidth: 140, alignment: .trailing)
         Toggle("", isOn: Binding(get: { isEnabled }, set: { onToggle($0) }))
           .labelsHidden().toggleStyle(.switch).controlSize(.small).tint(.mgAccent)
         if let onEdit { Button { onEdit() } label: { Image(systemName: "pencil") }.buttonStyle(.borderless) }
@@ -275,7 +275,7 @@ struct InputSourceSwitchPage: View {
     )) {
       Text("不指定").tag("")
       ForEach(sources) { Text($0.localizedName).tag($0.id) }
-    }.labelsHidden().frame(minWidth: 160)
+    }.labelsHidden().pickerStyle(.menu).frame(minWidth: 160, alignment: .trailing)
   }
 
   private func enumPicker<E: Hashable>(
@@ -286,7 +286,7 @@ struct InputSourceSwitchPage: View {
       get: { store.preferences.inputSourceSwitch[keyPath: kp] },
       set: { v in store.updatePreferences { $0.inputSourceSwitch[keyPath: kp] = v } }
     )) { ForEach(cases, id: \.self) { Text(name($0)).tag($0) } }
-      .labelsHidden().frame(minWidth: 160)
+      .labelsHidden().pickerStyle(.menu).frame(minWidth: 160, alignment: .trailing)
   }
 
   // MARK: - 规则增删改

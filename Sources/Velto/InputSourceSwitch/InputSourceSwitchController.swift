@@ -76,6 +76,10 @@ final class InputSourceSwitchController {
     Task { @MainActor [weak self] in
       guard let self else { return }
       InputSourceSwitchDebugLog.setEnabled(GestureStore.shared.preferences.inputSourceSwitch.debugLoggingEnabled)
+      // 偏好变更后清空 runtime cache:否则 restorePreviouslyUsed 模式下旧缓存会
+      // 一直命中、绕过用户刚改的规则,导致"新配的规则不生效"。代价是会话内
+      // "上次用过的输入法"记忆被重置,但语义更可预期。
+      self.cache.removeAll()
       self.monitor.evaluate()
     }
   }

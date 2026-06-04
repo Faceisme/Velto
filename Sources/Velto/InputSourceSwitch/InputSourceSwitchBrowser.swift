@@ -48,10 +48,6 @@ enum SupportedBrowserCatalog {
     return all.first { $0.bundleID == id }
   }
 
-  static func isSupportedBrowser(_ id: String?) -> Bool {
-    browser(forBundleID: id) != nil
-  }
-
   /// 本机已安装的受支持浏览器。
   static func installed() -> [SupportedBrowser] {
     all.filter { $0.isInstalled }

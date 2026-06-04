@@ -38,8 +38,14 @@ struct BrowserRuleEditor: View {
         ForEach(sources) { Text($0.localizedName).tag($0.id) }
       }
 
-      // 示例 URL 即时显示是否命中。
-      if let url = URL(string: draft.sample), !draft.sample.isEmpty {
+      // 正则类型先校验 pattern 合法性,无效时单独提示(区别于"不命中")。
+      if draft.type == .urlRegex, !draft.value.isEmpty,
+         (try? NSRegularExpression(pattern: draft.value)) == nil {
+        Text("⚠︎ 正则表达式无效")
+          .font(.mgMeta)
+          .foregroundStyle(Color.red)
+      } else if let url = URL(string: draft.sample), !draft.sample.isEmpty {
+        // 示例 URL 即时显示是否命中。
         let hit = InputSourceSwitchController.matches(rule: draft, url: url)
         Text(hit ? "✓ 示例 URL 命中" : "✗ 示例 URL 不命中")
           .font(.mgMeta)

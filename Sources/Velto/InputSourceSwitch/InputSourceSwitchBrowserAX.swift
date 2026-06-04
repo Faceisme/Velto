@@ -72,14 +72,30 @@ enum BrowserAXReader {
         || desc.localizedCaseInsensitiveContains("address")
         || desc.localizedCaseInsensitiveContains("地址")
     case .webkit:
-      // Safari 地址栏:聚焦后焦点元素是顶层 AXTextField,且 value 常是 URL/搜索词。
-      // 退化策略:顶层 AXTextField 即认为是地址栏。
-      return true
+      // Safari 地址栏在工具栏里,聚焦时焦点元素是 AXTextField。原退化策略"顶层
+      // AXTextField 即地址栏"会把网页内的 <input> 误判成地址栏 → 在网页打字被强切。
+      // 按 spec §8 的安全取向(失效时退化为"不在地址栏"),这里收紧为:仅当焦点
+      // 文本框不在网页内容(AXWebArea)之内时才算地址栏 —— 地址栏的祖先链不含
+      // AXWebArea,网页输入框则一定含。
+      return !isInsideWebArea(focused)
     case .gecko:
       return identifier.localizedCaseInsensitiveContains("urlbar")
         || desc.localizedCaseInsensitiveContains("address")
         || desc.localizedCaseInsensitiveContains("地址")
     }
+  }
+
+  /// 焦点元素是否处于网页内容(AXWebArea)之内 —— 用于把"网页里的输入框"与
+  /// "工具栏里的地址栏"区分开。沿 AXParent 向上走,带深度上限防 AX 树异常时卡死。
+  private static func isInsideWebArea(_ element: AXUIElement) -> Bool {
+    var current: AXUIElement? = element
+    var depth = 0
+    while let node = current, depth < maxDepth {
+      if copyString(node, kAXRoleAttribute) == "AXWebArea" { return true }
+      current = copyElement(node, kAXParentAttribute)
+      depth += 1
+    }
+    return false
   }
 
   // MARK: - AX 原语
