@@ -197,7 +197,9 @@ struct InputSourceSwitchPage: View {
           AnyView(toggle(\.cjkFixEnabled))
         }
         row(icon: "slider.horizontal.3", title: "CJKV 修复策略",
-            desc: "默认「模拟上一个输入法快捷键」;临时窗口会瞬时抢焦点。", showDivider: true) {
+            desc: "推荐「临时输入窗口」(对各种快捷键配置都稳,会瞬时抢一下焦点);"
+              + "「模拟上一个输入法快捷键」更轻量,但依赖该系统快捷键、且绑到 🌐 键时可能失效。",
+            showDivider: true) {
           AnyView(enumPicker(\.cjkFixStrategy, cases: InputSourceCJKFixStrategy.allCases) { $0.displayName })
         }
         if store.preferences.inputSourceSwitch.cjkFixStrategy == .previousInputSourceShortcut,

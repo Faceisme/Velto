@@ -121,7 +121,9 @@ struct InputSourceSwitchPreferences: Codable, Equatable {
   var browserAddressDefaultInputSourceID: String? = nil
   var restoreStrategy: InputSourceRestoreStrategy = .useDefaultInputSource
   var cjkFixEnabled: Bool = true
-  var cjkFixStrategy: InputSourceCJKFixStrategy = .previousInputSourceShortcut
+  // 默认用临时输入窗口:它对各种「选上一个输入法」快捷键配置(含 🌐/Globe 键)都稳,
+  // 既能让 CJKV 输入法落到正确的中文态、又不像系统热键那样把输入法"粘"住切不走。
+  var cjkFixStrategy: InputSourceCJKFixStrategy = .temporaryInputWindow
   /// 启用了 URL 检测的浏览器 bundle id 集合。
   var enabledBrowserBundleIDs: Set<String> = []
   var appRules: [InputSourceAppRule] = []
