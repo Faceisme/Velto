@@ -409,7 +409,7 @@ final class EventTapManager: @unchecked Sendable {
 
         case .flagsChanged:
             // 合成的「上一个输入法」快捷键修饰键不能污染鼠标控制/缩放/拖窗的修饰键状态机。
-            if event.getIntegerValueField(.eventSourceUserData) == InputSourceSwitchSelector.syntheticEventMarker {
+            if InputSourceSwitchSelector.isSyntheticEvent(event) {
                 return Unmanaged.passUnretained(event)
             }
             guard !gestureEngine.isHandlingRightMouse else {
@@ -427,7 +427,7 @@ final class EventTapManager: @unchecked Sendable {
         case .keyDown:
             let kdUserData = event.getIntegerValueField(.eventSourceUserData)
             if kdUserData == ShortcutSynthesizer.syntheticEventMarker
-                || kdUserData == InputSourceSwitchSelector.syntheticEventMarker {
+                || InputSourceSwitchSelector.isSyntheticEvent(event) {
                 return Unmanaged.passUnretained(event)
             }
             guard !gestureEngine.isHandlingRightMouse else {
@@ -447,7 +447,7 @@ final class EventTapManager: @unchecked Sendable {
         case .keyUp:
             let kuUserData = event.getIntegerValueField(.eventSourceUserData)
             if kuUserData == ShortcutSynthesizer.syntheticEventMarker
-                || kuUserData == InputSourceSwitchSelector.syntheticEventMarker {
+                || InputSourceSwitchSelector.isSyntheticEvent(event) {
                 return Unmanaged.passUnretained(event)
             }
             guard !gestureEngine.isHandlingRightMouse else {

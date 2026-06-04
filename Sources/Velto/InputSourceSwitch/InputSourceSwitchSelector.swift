@@ -27,19 +27,50 @@ enum InputSourceSwitchSelector {
 
   /// 临时窗口策略的可见时长。够长到让 IME 在隐藏文本框里建立输入会话,又短到几乎无感。
   private static let temporaryWindowDuration: TimeInterval = 0.08
+  private static let temporaryWindowActivationSuppressionDuration: TimeInterval = 0.5
 
   /// 当前临时输入窗口及其弹出前的前台 app(关窗后还回)。仅主线程访问。
+  @MainActor private static var pendingWorkItems: [DispatchWorkItem] = []
   @MainActor private static var temporaryWindow: NSWindow?
   @MainActor private static var temporaryWindowPreviousApp: NSRunningApplication?
+  @MainActor private static var temporaryWindowActivationSuppressionEndTime: TimeInterval = 0
+  @MainActor private static var isShowingTemporaryWindow = false
+
+  /// 合成键盘事件的抑制窗口。部分 flagsChanged 事件不一定保留 userData,用 PID + 时间兜底。
+  private nonisolated(unsafe) static var syntheticEventEndTime: TimeInterval = 0
+
+  @MainActor
+  static var isHandlingTemporaryWindowActivation: Bool {
+    isShowingTemporaryWindow ||
+      ProcessInfo.processInfo.systemUptime < temporaryWindowActivationSuppressionEndTime
+  }
+
+  @MainActor
+  static func isTemporaryWindowApplicationActivation(_ app: NSRunningApplication) -> Bool {
+    guard isHandlingTemporaryWindowActivation else { return false }
+    return app.bundleIdentifier == Bundle.main.bundleIdentifier
+  }
+
+  static func isSyntheticEvent(_ event: CGEvent?) -> Bool {
+    guard let event else { return false }
+    if event.getIntegerValueField(.eventSourceUserData) == syntheticEventMarker {
+      return true
+    }
+    let eventPID = event.getIntegerValueField(.eventSourceUnixProcessID)
+    return ProcessInfo.processInfo.systemUptime < syntheticEventEndTime
+      && eventPID == Int64(ProcessInfo.processInfo.processIdentifier)
+  }
 
   /// 切到指定持久化 ID 的输入法。返回是否成功发起切换(同步发起即算成功,
   /// CJKV 修复的后续步骤异步进行)。
   @discardableResult
+  @MainActor
   static func select(
     persistentID: String,
     cjkFixEnabled: Bool,
     cjkFixStrategy: InputSourceCJKFixStrategy
   ) -> Bool {
+    cancelPendingWorkItems()
     guard let target = InputSourceCatalog.tisInputSource(forID: persistentID) else {
       InputSourceSwitchDebugLog.log("select FAILED: 找不到输入源 id=\(persistentID)")
       return false
@@ -75,41 +106,39 @@ enum InputSourceSwitchSelector {
 
   // MARK: - CJKV 修复:bounce + 选上一个 + Command 轻点 + 兜底重选
 
+  @MainActor
   private static func switchCJKVWithPreviousShortcut(target: TISInputSource, targetID: String) -> Bool {
-    guard let bounce = nonCJKVBounceSource(excluding: targetID) else {
-      // 没有可用的非 CJKV 源做 bounce(用户只装了 CJKV 输入法):退化为纯切换。
-      InputSourceSwitchDebugLog.log("cjk-fix SKIP: 无非 CJKV 源可 bounce,直接选 id=\(targetID)")
+    guard let shortcut = previousInputSourceShortcut(),
+          let bounce = nonCJKVBounceSource(excluding: targetID)
+    else {
+      InputSourceSwitchDebugLog.log("cjk-fix shortcut fallback: 无快捷键或无非 CJKV 源,直接选 id=\(targetID)")
       return plainSelect(target, id: targetID)
     }
 
     // 1) 先切目标(同步返回 true 表示已发起);2) 立刻弹到非 CJKV 源。
     //    这样系统「上一个输入法」指针就指向目标,后面合成热键才能切回目标。
+    syntheticEventEndTime = ProcessInfo.processInfo.systemUptime + 0.35
     let ok = plainSelect(target, id: targetID)
     _ = TISSelectInputSource(bounce.source)
     InputSourceSwitchDebugLog.log("cjk-fix bounce → \(bounce.id)")
 
-    let shortcut = previousInputSourceShortcut()
     // 3) 合成「选择上一个输入法」热键,走 OS 路径切回目标并激活 CJKV。
-    DispatchQueue.main.asyncAfter(deadline: .now() + cjkStepDelay) {
-      if let shortcut {
-        InputSourceSwitchDebugLog.log("cjk-fix 合成「选上一个」keyCode=\(shortcut.keyCode)")
-        synthesize(keyCode: shortcut.keyCode, flags: shortcut.flags)
-      } else {
-        InputSourceSwitchDebugLog.log("cjk-fix 无「选上一个」热键,靠末尾兜底重选")
-      }
-      // 4) 轻点一次 Command,促使系统确认输入源切换。
-      DispatchQueue.main.asyncAfter(deadline: .now() + cjkStepDelay) {
-        synthesizeCommandTap()
-        // 5) 末尾校验:仍未停在目标就再 TIS 兜底。重新按 ID 解析句柄,
-        //    避免把非 Sendable 的 TISInputSource 跨异步边界捕获(Swift 6 并发)。
-        DispatchQueue.main.asyncAfter(deadline: .now() + cjkStepDelay) {
-          if InputSourceCatalog.current()?.id == targetID {
-            InputSourceSwitchDebugLog.log("cjk-fix 完成,当前=\(targetID)")
-          } else if let again = InputSourceCatalog.tisInputSource(forID: targetID) {
-            InputSourceSwitchDebugLog.log("cjk-fix 兜底重选 → \(targetID)")
-            _ = TISSelectInputSource(again)
-          }
-        }
+    scheduleWorkItem(after: cjkStepDelay) {
+      InputSourceSwitchDebugLog.log("cjk-fix 合成「选上一个」keyCode=\(shortcut.keyCode)")
+      synthesize(keyCode: shortcut.keyCode, flags: shortcut.flags)
+    }
+    // 4) 轻点一次 Command,促使系统确认输入源切换。
+    scheduleWorkItem(after: cjkStepDelay * 2) {
+      synthesizeCommandTap()
+    }
+    // 5) 末尾校验:仍未停在目标就再 TIS 兜底。重新按 ID 解析句柄,
+    //    避免把非 Sendable 的 TISInputSource 跨异步边界捕获(Swift 6 并发)。
+    scheduleWorkItem(after: cjkStepDelay * 3) {
+      if InputSourceCatalog.current()?.id == targetID {
+        InputSourceSwitchDebugLog.log("cjk-fix 完成,当前=\(targetID)")
+      } else if let again = InputSourceCatalog.tisInputSource(forID: targetID) {
+        InputSourceSwitchDebugLog.log("cjk-fix 兜底重选 → \(targetID)")
+        _ = TISSelectInputSource(again)
       }
     }
     return ok
@@ -122,17 +151,17 @@ enum InputSourceSwitchSelector {
        let source = InputSourceCatalog.tisInputSource(forID: current.id) {
       return (current.id, source)
     }
-    guard let info = InputSourceCatalog.all().first(where: { !$0.isCJKV && $0.id != targetID }),
+    guard let info = InputSourceCatalog.all().first(where: { !$0.isCJKV && $0.isEnabled && $0.id != targetID }),
           let source = InputSourceCatalog.tisInputSource(forID: info.id)
     else { return nil }
     return (info.id, source)
   }
 
   /// 读 com.apple.symbolichotkeys 里 id 60「选择上一个输入法」的快捷键。
-  /// 未启用 / 不存在 → nil(合成步骤跳过,改由末尾兜底保证最终落在目标上)。
+  /// 未启用 / 不存在 → nil(退化为纯 TISSelectInputSource)。
   static func previousInputSourceShortcut() -> (keyCode: UInt16, flags: CGEventFlags)? {
-    guard let defaults = UserDefaults(suiteName: "com.apple.symbolichotkeys"),
-          let hotkeys = defaults.dictionary(forKey: "AppleSymbolicHotKeys"),
+    guard let domain = UserDefaults.standard.persistentDomain(forName: "com.apple.symbolichotkeys"),
+          let hotkeys = domain["AppleSymbolicHotKeys"] as? [String: Any],
           let entry = hotkeys["60"] as? [String: Any],
           (entry["enabled"] as? Bool) == true,
           let value = entry["value"] as? [String: Any],
@@ -251,16 +280,18 @@ enum InputSourceSwitchSelector {
     window.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]
 
     temporaryWindow = window
+    suppressTemporaryWindowActivation()
+    isShowingTemporaryWindow = true
     window.makeKeyAndOrderFront(nil)
     NSApp.activate(ignoringOtherApps: true)
     window.makeFirstResponder(textView)
     InputSourceSwitchDebugLog.log("cjk-fix 临时窗口已弹出")
 
-    DispatchQueue.main.asyncAfter(deadline: .now() + temporaryWindowDuration) {
+    scheduleWorkItem(after: temporaryWindowDuration) {
       closeTemporaryWindow(restorePrevious: true)
     }
     // 关窗后校验(对齐 IPS 的 duration + 0.05):没停在目标就 TIS 兜底重选。
-    DispatchQueue.main.asyncAfter(deadline: .now() + temporaryWindowDuration + 0.05) {
+    scheduleWorkItem(after: temporaryWindowDuration + 0.05) {
       if InputSourceCatalog.current()?.id == targetID {
         InputSourceSwitchDebugLog.log("cjk-fix 临时窗口完成,当前=\(targetID)")
       } else if let again = InputSourceCatalog.tisInputSource(forID: targetID) {
@@ -276,11 +307,14 @@ enum InputSourceSwitchSelector {
   private static func closeTemporaryWindow(restorePrevious: Bool) {
     guard let window = temporaryWindow else {
       temporaryWindowPreviousApp = nil
+      isShowingTemporaryWindow = false
       return
     }
     temporaryWindow = nil
     window.orderOut(nil)
     window.close()
+    suppressTemporaryWindowActivation()
+    isShowingTemporaryWindow = false
 
     let previous = temporaryWindowPreviousApp
     temporaryWindowPreviousApp = nil
@@ -289,5 +323,42 @@ enum InputSourceSwitchSelector {
           NSWorkspace.shared.frontmostApplication?.bundleIdentifier == Bundle.main.bundleIdentifier
     else { return }
     previous.activate(options: [])
+  }
+
+  @MainActor
+  private static func cancelPendingWorkItems() {
+    syntheticEventEndTime = 0
+    closeTemporaryWindow(restorePrevious: true)
+    pendingWorkItems.forEach { $0.cancel() }
+    pendingWorkItems.removeAll()
+  }
+
+  @MainActor
+  private static func scheduleWorkItem(after delay: TimeInterval, execute work: @escaping () -> Void) {
+    var workItem: DispatchWorkItem?
+    workItem = DispatchWorkItem {
+      guard let item = workItem else { return }
+      MainActor.assumeIsolated {
+        defer { removePendingWorkItem(item) }
+        guard !item.isCancelled else { return }
+        work()
+      }
+    }
+    guard let item = workItem else { return }
+    pendingWorkItems.append(item)
+    DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
+  }
+
+  @MainActor
+  private static func removePendingWorkItem(_ item: DispatchWorkItem) {
+    if let index = pendingWorkItems.firstIndex(where: { $0 === item }) {
+      pendingWorkItems.remove(at: index)
+    }
+  }
+
+  @MainActor
+  private static func suppressTemporaryWindowActivation() {
+    temporaryWindowActivationSuppressionEndTime =
+      ProcessInfo.processInfo.systemUptime + temporaryWindowActivationSuppressionDuration
   }
 }

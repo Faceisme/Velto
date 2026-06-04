@@ -248,7 +248,7 @@ final class SwitcherKeyTap: @unchecked Sendable {
             return Unmanaged.passUnretained(event)
         }
 
-        if event.getIntegerValueField(.eventSourceUserData) == InputSourceSwitchSelector.syntheticEventMarker {
+        if InputSourceSwitchSelector.isSyntheticEvent(event) {
             return Unmanaged.passUnretained(event)
         }
 

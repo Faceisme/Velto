@@ -140,27 +140,25 @@ final class InputSourceSwitchController {
     }
   }
 
-  /// 决策算法。优先级:地址栏强默认 > 规则指定输入法 >(仅 restorePreviouslyUsed)
-  /// 上次残留 > 全局默认。
+  /// 决策算法。对齐 InputSourcePro:
+  /// 地址栏强默认 > (restorePreviouslyUsed 时)上次使用 cache > 规则指定输入法 > 全局默认。
   ///
-  /// **规则指定的输入法是 authoritative 的**:切回配了规则的 App / 网站,一定用规则
-  /// 指定值,不被"上次手动残留"覆盖。restore 缓存只服务于"没有规则命中、落到全局默认"
-  /// 的上下文(即用户没专门配置的 App)—— 那里才记忆/恢复上次手动选择。这样既满足
-  /// "配了规则就强制",又保留"没配的 App 记住我上次的选择"。
+  /// 地址栏是瞬时状态,不读写 cache。普通 App / 网站开启恢复后,用户在该上下文手动切换过
+  /// 输入法,下次回来优先恢复它;若手动切回默认值,cache 会被移除。
   private func decideTarget(for ctx: InputSourceContext, prefs: InputSourceSwitchPreferences) -> String? {
     // 地址栏聚焦:强默认。
     if ctx.kind == .addressBar, let addr = prefs.browserAddressDefaultInputSourceID {
       return addr
     }
-    // 规则命中(网站规则 / 应用规则):authoritative,优先于 cache 残留。
-    if let ruleTarget = ruleMatch(ctx, prefs: prefs) {
-      return ruleTarget
-    }
-    // 无规则命中,落全局默认。restorePreviouslyUsed 时用 cache 记忆上次手动选择。
     if prefs.restoreStrategy == .restorePreviouslyUsed, let cached = cache[ctx.contextID] {
       return cached
     }
-    return prefs.systemDefaultInputSourceID
+    return defaultTarget(for: ctx, prefs: prefs)
+  }
+
+  /// 规则 / 全局默认算出来的默认目标,不含 restore cache。
+  private func defaultTarget(for ctx: InputSourceContext, prefs: InputSourceSwitchPreferences) -> String? {
+    ruleMatch(ctx, prefs: prefs) ?? prefs.systemDefaultInputSourceID
   }
 
   /// 命中的网站 / 应用规则所指定的输入法;无命中返回 nil(交给 cache / 全局默认)。
@@ -208,11 +206,18 @@ final class InputSourceSwitchController {
   }
 
   private func applyUserInputSourceChange() {
+    let prefs = GestureStore.shared.preferences.inputSourceSwitch
     guard running, !isApplyingProgrammaticSwitch,
+          prefs.restoreStrategy == .restorePreviouslyUsed,
           let ctx = lastContext, ctx.kind != .addressBar,
           let current = InputSourceCatalog.current()?.id
     else { return }
-    cache[ctx.contextID] = current
-    InputSourceSwitchDebugLog.log("用户手动切换 → cache[\(ctx.contextID)] = \(current)")
+    if defaultTarget(for: ctx, prefs: prefs) == current {
+      cache.removeValue(forKey: ctx.contextID)
+      InputSourceSwitchDebugLog.log("用户手动切回默认 → cache[\(ctx.contextID)] 已清除")
+    } else {
+      cache[ctx.contextID] = current
+      InputSourceSwitchDebugLog.log("用户手动切换 → cache[\(ctx.contextID)] = \(current)")
+    }
   }
 }
