@@ -20,6 +20,9 @@ final class InputSourceSwitchController {
   private var lastContext: InputSourceContext?
   /// 自切抑制:程序化切换会触发系统通知,期内不写 cache,避免回灌/反馈环。
   private var isApplyingProgrammaticSwitch = false
+  /// 抑制窗口代次:仅最后一次程序化切换排定的复位生效。否则 0.3s 内连续两次切换时,
+  /// 早到的定时器会提前清掉抑制标志,使后一次切换的系统通知被误记成用户手动 → 污染 cache。
+  private var programmaticSwitchGeneration = 0
   private var running = false
 
   private init() {}
@@ -89,14 +92,18 @@ final class InputSourceSwitchController {
     }
     InputSourceSwitchDebugLog.log("context=\(ctx.contextID) → 切到 \(targetID)")
     isApplyingProgrammaticSwitch = true
+    programmaticSwitchGeneration += 1
+    let generation = programmaticSwitchGeneration
     InputSourceSwitchSelector.select(
       persistentID: targetID,
       cjkFixEnabled: prefs.cjkFixEnabled,
       cjkFixStrategy: prefs.cjkFixStrategy
     )
     // 程序化切换会引发系统通知,延后一拍再解除抑制(覆盖 CJKV 二次事件)。
+    // 仅当这期间没有更晚的程序化切换时才复位,否则把复位交给最后那一次。
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
-      self?.isApplyingProgrammaticSwitch = false
+      guard let self, self.programmaticSwitchGeneration == generation else { return }
+      self.isApplyingProgrammaticSwitch = false
     }
   }
 
@@ -151,6 +158,13 @@ final class InputSourceSwitchController {
   // MARK: - 用户手动切换 → 更新 cache
 
   @objc private func systemInputSourceChanged() {
+    // 该通知由 DistributedNotificationCenter 投递,投递线程取决于注册时的 run loop。
+    // 当前在主线程 start() 注册,实际即主线程;但 @objc 派发会绕过 actor 隔离的编译期
+    // 检查,这里显式跳回主线程,确保对 @MainActor 状态(cache/抑制标志)的访问始终安全。
+    Task { @MainActor [weak self] in self?.applyUserInputSourceChange() }
+  }
+
+  private func applyUserInputSourceChange() {
     guard running, !isApplyingProgrammaticSwitch,
           let ctx = lastContext, ctx.kind != .addressBar,
           let current = InputSourceCatalog.current()?.id
