@@ -30,6 +30,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if !SwitcherController.shared.start() {
             print("⚠️ 切换器启动失败 —— CGEvent tap 创建不成功,检查输入监控/辅助功能权限")
         }
+
+        // 启动输入法自动切换:监听前台 App/浏览器上下文 → 按规则切输入法。
+        InputSourceSwitchController.shared.start()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -37,6 +40,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // ⚠️ 必须恢复系统 Cmd+Tab —— 它是 OS 持久状态,我们不复位的话用户下次
         // 开机系统切换器都是关的。
         SwitcherController.shared.stop()
+        InputSourceSwitchController.shared.stop()
     }
 
     /// `.accessory` 应用默认没有主菜单 → ⌘W / ⌘Q / 文本编辑快捷键全部失效。
