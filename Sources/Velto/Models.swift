@@ -76,6 +76,9 @@ struct AppPreferences: Codable, Equatable {
     /// 窗口切换器的全部配置 —— 子结构定义在 Switcher/SwitcherPreferences.swift。
     /// 嵌进来跟手势/窗口管理共享一份 JSON 持久化。
     var switcher: SwitcherPreferences
+    /// 输入法自动切换的全部配置 —— 子结构定义在
+    /// InputSourceSwitch/InputSourceSwitchPreferences.swift。
+    var inputSourceSwitch: InputSourceSwitchPreferences
 
     init(
         gesturesEnabled: Bool,
@@ -91,7 +94,8 @@ struct AppPreferences: Codable, Equatable {
         contentZoomModifierFlags: UInt64,
         windowMaximizeShortcut: Shortcut?,
         mouseControl: MouseControlPreferences,
-        switcher: SwitcherPreferences
+        switcher: SwitcherPreferences,
+        inputSourceSwitch: InputSourceSwitchPreferences
     ) {
         self.gesturesEnabled = gesturesEnabled
         self.showTrail = showTrail
@@ -107,6 +111,7 @@ struct AppPreferences: Codable, Equatable {
         self.windowMaximizeShortcut = windowMaximizeShortcut
         self.mouseControl = mouseControl
         self.switcher = switcher
+        self.inputSourceSwitch = inputSourceSwitch
     }
 
     init(from decoder: Decoder) throws {
@@ -126,6 +131,7 @@ struct AppPreferences: Codable, Equatable {
         windowMaximizeShortcut = try container.decodeIfPresent(Shortcut.self, forKey: .windowMaximizeShortcut) ?? Self.defaults.windowMaximizeShortcut
         mouseControl = try container.decodeIfPresent(MouseControlPreferences.self, forKey: .mouseControl) ?? Self.defaults.mouseControl
         switcher = try container.decodeIfPresent(SwitcherPreferences.self, forKey: .switcher) ?? Self.defaults.switcher
+        inputSourceSwitch = try container.decodeIfPresent(InputSourceSwitchPreferences.self, forKey: .inputSourceSwitch) ?? Self.defaults.inputSourceSwitch
     }
 
     static let defaults = AppPreferences(
@@ -142,7 +148,8 @@ struct AppPreferences: Codable, Equatable {
         contentZoomModifierFlags: 0,
         windowMaximizeShortcut: nil,
         mouseControl: .defaults,
-        switcher: .defaults
+        switcher: .defaults,
+        inputSourceSwitch: .defaults
     )
 }
 
