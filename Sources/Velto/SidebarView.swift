@@ -47,6 +47,13 @@ struct SidebarView: View {
                         badge: nil,
                         active: page == .switcher
                     ) { page = .switcher }
+
+                    SidebarItem(
+                        icon: MGPage.inputSourceSwitch.icon,
+                        label: MGPage.inputSourceSwitch.label,
+                        badge: nil,
+                        active: page == .inputSourceSwitch
+                    ) { page = .inputSourceSwitch }
                 }
 
                 Spacer().frame(height: 14)

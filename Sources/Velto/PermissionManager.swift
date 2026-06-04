@@ -49,4 +49,17 @@ enum PermissionManager {
             break
         }
     }
+
+    /// 打开「系统设置 → 键盘」,引导用户确认/设置「选择上一个输入法」快捷键。
+    static func openKeyboardSettings() {
+        let candidates = [
+            "x-apple.systempreferences:com.apple.Keyboard-Settings.extension",
+            "x-apple.systempreferences:com.apple.preference.keyboard"
+        ]
+        for candidate in candidates {
+            guard let url = URL(string: candidate) else { continue }
+            NSWorkspace.shared.open(url)
+            break
+        }
+    }
 }
