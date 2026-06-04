@@ -248,6 +248,10 @@ final class SwitcherKeyTap: @unchecked Sendable {
             return Unmanaged.passUnretained(event)
         }
 
+        if event.getIntegerValueField(.eventSourceUserData) == InputSourceSwitchSelector.syntheticEventMarker {
+            return Unmanaged.passUnretained(event)
+        }
+
         let flags = event.flags
         let eventModifiers = UInt64(flags.rawValue) & Self.modifierMask
         let shift = flags.contains(.maskShift)

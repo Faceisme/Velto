@@ -3,6 +3,11 @@ import Carbon
 import CoreGraphics
 import Foundation
 
+private final class TemporaryInputWindow: NSWindow {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { true }
+}
+
 /// 输入法切换执行器:TISSelectInputSource + 必要时 CJKV 二次确认。
 enum InputSourceSwitchSelector {
     /// 合成事件暗号 —— previousInputSourceShortcut 策略会合成键盘事件,
@@ -46,7 +51,9 @@ enum InputSourceSwitchSelector {
                 return
             }
             InputSourceSwitchDebugLog.log("cjk-fix previousShortcut keyCode=\(shortcut.keyCode)")
-            synthesize(keyCode: shortcut.keyCode, flags: shortcut.flags)
+            if !synthesize(keyCode: shortcut.keyCode, flags: shortcut.flags) {
+                InputSourceSwitchDebugLog.log("cjk-fix FAILED: previousShortcut synthesize failed keyCode=\(shortcut.keyCode)")
+            }
 
         case .temporaryInputWindow:
             InputSourceSwitchDebugLog.log("cjk-fix temporaryWindow")
@@ -86,24 +93,36 @@ enum InputSourceSwitchSelector {
         if raw & 262_144 != 0 { flags.insert(.maskControl) }
         if raw & 524_288 != 0 { flags.insert(.maskAlternate) }
         if raw & 1_048_576 != 0 { flags.insert(.maskCommand) }
+        if raw & 8_388_608 != 0 { flags.insert(.maskSecondaryFn) }
         return flags
     }
 
     /// 合成一组带暗号的按键事件(仿 ShortcutSynthesizer,但用本模块自己的 marker)。
-    private static func synthesize(keyCode: UInt16, flags: CGEventFlags) {
-        guard let source = CGEventSource(stateID: .hidSystemState) else { return }
+    @discardableResult
+    private static func synthesize(keyCode: UInt16, flags: CGEventFlags) -> Bool {
+        guard let source = CGEventSource(stateID: .hidSystemState) else {
+            InputSourceSwitchDebugLog.log("cjk-fix FAILED: CGEventSource unavailable keyCode=\(keyCode)")
+            return false
+        }
         let key = CGKeyCode(keyCode)
 
-        let down = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: true)
-        down?.flags = flags
-        down?.setIntegerValueField(.eventSourceUserData, value: syntheticEventMarker)
+        guard let down = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: true) else {
+            InputSourceSwitchDebugLog.log("cjk-fix FAILED: keyDown event creation failed keyCode=\(keyCode)")
+            return false
+        }
+        down.flags = flags
+        down.setIntegerValueField(.eventSourceUserData, value: syntheticEventMarker)
 
-        let up = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: false)
-        up?.flags = flags
-        up?.setIntegerValueField(.eventSourceUserData, value: syntheticEventMarker)
+        guard let up = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: false) else {
+            InputSourceSwitchDebugLog.log("cjk-fix FAILED: keyUp event creation failed keyCode=\(keyCode)")
+            return false
+        }
+        up.flags = flags
+        up.setIntegerValueField(.eventSourceUserData, value: syntheticEventMarker)
 
-        down?.post(tap: .cghidEventTap)
-        up?.post(tap: .cghidEventTap)
+        down.post(tap: .cghidEventTap)
+        up.post(tap: .cghidEventTap)
+        return true
     }
 
     /// 透明 3x3 临时窗口:短暂抢焦点逼 macOS 重新确认输入上下文,再还回前台 app。
@@ -111,7 +130,7 @@ enum InputSourceSwitchSelector {
     @MainActor
     private static func showTemporaryInputWindow() {
         let previousApp = NSWorkspace.shared.frontmostApplication
-        let window = NSWindow(
+        let window = TemporaryInputWindow(
             contentRect: NSRect(x: -10, y: -10, width: 3, height: 3),
             styleMask: [.borderless],
             backing: .buffered,
