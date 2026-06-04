@@ -408,6 +408,10 @@ final class EventTapManager: @unchecked Sendable {
             return Unmanaged.passUnretained(event)
 
         case .flagsChanged:
+            // 合成的「上一个输入法」快捷键修饰键不能污染鼠标控制/缩放/拖窗的修饰键状态机。
+            if event.getIntegerValueField(.eventSourceUserData) == InputSourceSwitchSelector.syntheticEventMarker {
+                return Unmanaged.passUnretained(event)
+            }
             guard !gestureEngine.isHandlingRightMouse else {
                 return Unmanaged.passUnretained(event)
             }
@@ -421,7 +425,9 @@ final class EventTapManager: @unchecked Sendable {
             return consumed ? nil : Unmanaged.passUnretained(event)
 
         case .keyDown:
-            if event.getIntegerValueField(.eventSourceUserData) == ShortcutSynthesizer.syntheticEventMarker {
+            let kdUserData = event.getIntegerValueField(.eventSourceUserData)
+            if kdUserData == ShortcutSynthesizer.syntheticEventMarker
+                || kdUserData == InputSourceSwitchSelector.syntheticEventMarker {
                 return Unmanaged.passUnretained(event)
             }
             guard !gestureEngine.isHandlingRightMouse else {
@@ -439,7 +445,9 @@ final class EventTapManager: @unchecked Sendable {
                 : Unmanaged.passUnretained(event)
 
         case .keyUp:
-            if event.getIntegerValueField(.eventSourceUserData) == ShortcutSynthesizer.syntheticEventMarker {
+            let kuUserData = event.getIntegerValueField(.eventSourceUserData)
+            if kuUserData == ShortcutSynthesizer.syntheticEventMarker
+                || kuUserData == InputSourceSwitchSelector.syntheticEventMarker {
                 return Unmanaged.passUnretained(event)
             }
             guard !gestureEngine.isHandlingRightMouse else {
