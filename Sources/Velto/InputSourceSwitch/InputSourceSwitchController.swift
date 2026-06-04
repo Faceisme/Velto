@@ -71,8 +71,13 @@ final class InputSourceSwitchController {
   @objc private func storeChanged(_ note: Notification) {
     guard note.gestureStoreChangeReason == .preferences
             || note.gestureStoreChangeReason == .backupImport else { return }
-    InputSourceSwitchDebugLog.setEnabled(GestureStore.shared.preferences.inputSourceSwitch.debugLoggingEnabled)
-    monitor.evaluate()
+    // 与 systemInputSourceChanged 同理:@objc 派发绕过 @MainActor 隔离的编译期检查,
+    // 显式跳回主线程再访问 monitor / 偏好状态。
+    Task { @MainActor [weak self] in
+      guard let self else { return }
+      InputSourceSwitchDebugLog.setEnabled(GestureStore.shared.preferences.inputSourceSwitch.debugLoggingEnabled)
+      self.monitor.evaluate()
+    }
   }
 
   // MARK: - 决策
