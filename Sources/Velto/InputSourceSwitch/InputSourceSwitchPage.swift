@@ -196,13 +196,12 @@ struct InputSourceSwitchPage: View {
             desc: "中日韩越输入法切了图标变但实际没切时打开。", showDivider: false) {
           AnyView(toggle(\.cjkFixEnabled))
         }
-        row(icon: "slider.horizontal.3", title: "CJKV 修复策略",
-            desc: "推荐「模拟上一个输入法快捷键」,不抢焦点;「临时输入窗口」更强但会短暂激活 Velto。",
+        row(icon: "slider.horizontal.3", title: "CJKV 修复方式",
+            desc: "使用系统「选择上一个输入法」快捷键路径,不创建临时窗口、不激活 Velto。",
             showDivider: true) {
-          AnyView(enumPicker(\.cjkFixStrategy, cases: InputSourceCJKFixStrategy.allCases) { $0.displayName })
+          AnyView(Text("模拟系统快捷键").font(.system(size: 13, weight: .medium)).foregroundStyle(Color.mgText2))
         }
-        if store.preferences.inputSourceSwitch.cjkFixStrategy == .previousInputSourceShortcut,
-           InputSourceSwitchSelector.previousInputSourceShortcut() == nil {
+        if InputSourceSwitchSelector.previousInputSourceShortcut() == nil {
           row(icon: "exclamationmark.triangle", title: "系统未配置「选择上一个输入法」快捷键",
               desc: "该策略依赖此系统快捷键,请到键盘设置开启。", showDivider: true) {
             AnyView(Button("打开键盘设置") { PermissionManager.openKeyboardSettings() })

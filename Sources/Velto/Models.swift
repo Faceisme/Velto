@@ -257,6 +257,9 @@ final class GestureStore {
             key: preferencesKey,
             decoder: decoder
         ) ?? .defaults
+        if Self.storedPreferencesContainDeprecatedCJKFixStrategy(key: preferencesKey) {
+            savePreferences()
+        }
         // 不再强制开启手势:用户在 UI 里的暂停状态应当跨重启持久化(解耦总开关)。
         localizeBuiltInGestureNames()
         gesturesVersion = 1
@@ -348,6 +351,15 @@ final class GestureStore {
     ) -> T? {
         guard let data = UserDefaults.standard.data(forKey: key) else { return nil }
         return try? decoder.decode(T.self, from: data)
+    }
+
+    private static func storedPreferencesContainDeprecatedCJKFixStrategy(key: String) -> Bool {
+        guard let data = UserDefaults.standard.data(forKey: key),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let inputSourceSwitch = object["inputSourceSwitch"] as? [String: Any],
+              inputSourceSwitch["cjkFixStrategy"] as? String == "temporaryInputWindow"
+        else { return false }
+        return true
     }
 
     private static func defaultGestures() -> [GestureCommand] {

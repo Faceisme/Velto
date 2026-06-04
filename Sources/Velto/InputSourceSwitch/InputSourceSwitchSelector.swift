@@ -3,15 +3,10 @@ import Carbon
 import CoreGraphics
 import Foundation
 
-private final class TemporaryInputWindow: NSWindow {
-  override var canBecomeKey: Bool { true }
-  override var canBecomeMain: Bool { true }
-}
-
 /// 输入法切换执行器:TISSelectInputSource + 必要时 CJKV 二次确认。
 ///
 /// 切到 CJKV 输入法(中日韩越)常出现"菜单栏图标已变、实际还在英文"的半切换。
-/// 修复思路借鉴 InputSourcePro(GPL-3.0,仅参考其行为,未复制源码):
+/// 修复流程对齐 InputSourcePro 的无抢焦点路径(仅参考行为,未复制源码):
 ///   先切目标 → 弹到一个非 CJKV 源(bounce) → 合成系统「选择上一个输入法」热键
 ///   切回目标(走 OS 热键路径能真正激活 CJKV)→ 轻点一次 Command → 末尾校验,
 ///   若仍未到位再 TISSelectInputSource 兜底。
@@ -25,31 +20,10 @@ enum InputSourceSwitchSelector {
   /// CJKV 修复各步之间的间隔。与参考实现一致,给系统留出处理热键/激活的时间。
   private static let cjkStepDelay: TimeInterval = 0.1
 
-  /// 临时窗口策略的可见时长。够长到让 IME 在隐藏文本框里建立输入会话,又短到几乎无感。
-  private static let temporaryWindowDuration: TimeInterval = 0.08
-  private static let temporaryWindowActivationSuppressionDuration: TimeInterval = 0.5
-
-  /// 当前临时输入窗口及其弹出前的前台 app(关窗后还回)。仅主线程访问。
   @MainActor private static var pendingWorkItems: [DispatchWorkItem] = []
-  @MainActor private static var temporaryWindow: NSWindow?
-  @MainActor private static var temporaryWindowPreviousApp: NSRunningApplication?
-  @MainActor private static var temporaryWindowActivationSuppressionEndTime: TimeInterval = 0
-  @MainActor private static var isShowingTemporaryWindow = false
 
   /// 合成键盘事件的抑制窗口。部分 flagsChanged 事件不一定保留 userData,用 PID + 时间兜底。
   private nonisolated(unsafe) static var syntheticEventEndTime: TimeInterval = 0
-
-  @MainActor
-  static var isHandlingTemporaryWindowActivation: Bool {
-    isShowingTemporaryWindow ||
-      ProcessInfo.processInfo.systemUptime < temporaryWindowActivationSuppressionEndTime
-  }
-
-  @MainActor
-  static func isTemporaryWindowApplicationActivation(_ app: NSRunningApplication) -> Bool {
-    guard isHandlingTemporaryWindowActivation else { return false }
-    return app.bundleIdentifier == Bundle.main.bundleIdentifier
-  }
 
   static func isSyntheticEvent(_ event: CGEvent?) -> Bool {
     guard let event else { return false }
@@ -83,12 +57,8 @@ enum InputSourceSwitchSelector {
     }
 
     switch cjkFixStrategy {
-    case .previousInputSourceShortcut:
+    case .previousInputSourceShortcut, .temporaryInputWindow:
       return switchCJKVWithPreviousShortcut(target: target, targetID: persistentID)
-    case .temporaryInputWindow:
-      let ok = plainSelect(target, id: persistentID)
-      Task { @MainActor in runTemporaryInputWindow(targetID: persistentID) }
-      return ok
     }
   }
 
@@ -238,97 +208,9 @@ enum InputSourceSwitchSelector {
     up.post(tap: .cghidEventTap)
   }
 
-  /// 临时输入窗口策略(完全照 macism / InputSourcePro 的行为实现,未复制 GPL 源码):
-  /// TIS 选中目标后,在屏幕角落弹一个近乎全透明、装着 NSTextView 的 3x3 窗口,令其成为
-  /// key 并 **激活 Velto**(`NSApp.activate`),逼 macOS 围绕这个文本框为目标 IME 真正
-  /// 建立输入会话 —— 把"菜单栏图标已变、实际仍打英文"的半切换态扶正成中文态,随即关窗、
-  /// 把焦点还给原前台 app。因为目标仍是 TIS 选中的,不会像系统热键那样"粘住"、可正常切走。
-  ///
-  /// **必须激活**:只让窗口成为 key 而不激活 app(非激活面板)时,IME 的输入客户端仍在
-  /// 原 app 上,隐藏文本框拿不到能重置 CJKV 子模式的真实输入会话,半切换扶不正。激活带来
-  /// 的瞬时焦点跳动是这套可靠方案固有的代价(IPS 亦然)。
-  @MainActor
-  private static func runTemporaryInputWindow(targetID: String) {
-    closeTemporaryWindow(restorePrevious: false)
-    guard let screen = NSScreen.main ?? NSScreen.screens.first else { return }
-
-    temporaryWindowPreviousApp = NSWorkspace.shared.frontmostApplication
-
-    let size = NSSize(width: 3, height: 3)
-    let visible = screen.visibleFrame
-    let rect = NSRect(
-      x: visible.maxX - size.width - 8,
-      y: visible.minY + 8,
-      width: size.width,
-      height: size.height
-    )
-    let window = TemporaryInputWindow(
-      contentRect: rect,
-      styleMask: [.borderless],
-      backing: .buffered,
-      defer: false
-    )
-    let textView = NSTextView(frame: NSRect(origin: .zero, size: size))
-    window.contentView = textView
-    window.isReleasedWhenClosed = false
-    window.isOpaque = false
-    window.backgroundColor = .clear
-    window.alphaValue = 0.01
-    window.hasShadow = false
-    window.ignoresMouseEvents = true
-    window.level = .screenSaver
-    window.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]
-
-    temporaryWindow = window
-    suppressTemporaryWindowActivation()
-    isShowingTemporaryWindow = true
-    window.makeKeyAndOrderFront(nil)
-    NSApp.activate(ignoringOtherApps: true)
-    window.makeFirstResponder(textView)
-    InputSourceSwitchDebugLog.log("cjk-fix 临时窗口已弹出")
-
-    scheduleWorkItem(after: temporaryWindowDuration) {
-      closeTemporaryWindow(restorePrevious: true)
-    }
-    // 关窗后校验(对齐 IPS 的 duration + 0.05):没停在目标就 TIS 兜底重选。
-    scheduleWorkItem(after: temporaryWindowDuration + 0.05) {
-      if InputSourceCatalog.current()?.id == targetID {
-        InputSourceSwitchDebugLog.log("cjk-fix 临时窗口完成,当前=\(targetID)")
-      } else if let again = InputSourceCatalog.tisInputSource(forID: targetID) {
-        InputSourceSwitchDebugLog.log("cjk-fix 临时窗口兜底重选 → \(targetID)")
-        _ = TISSelectInputSource(again)
-      }
-    }
-  }
-
-  /// 关闭临时窗口;`restorePrevious` 时把焦点还给弹窗前的前台 app。
-  /// 仅当焦点确实还在 Velto 上、且原 app 不是 Velto 自己时才还回,避免误抢。
-  @MainActor
-  private static func closeTemporaryWindow(restorePrevious: Bool) {
-    guard let window = temporaryWindow else {
-      temporaryWindowPreviousApp = nil
-      isShowingTemporaryWindow = false
-      return
-    }
-    temporaryWindow = nil
-    window.orderOut(nil)
-    window.close()
-    suppressTemporaryWindowActivation()
-    isShowingTemporaryWindow = false
-
-    let previous = temporaryWindowPreviousApp
-    temporaryWindowPreviousApp = nil
-    guard restorePrevious, let previous,
-          previous.bundleIdentifier != Bundle.main.bundleIdentifier,
-          NSWorkspace.shared.frontmostApplication?.bundleIdentifier == Bundle.main.bundleIdentifier
-    else { return }
-    previous.activate(options: [])
-  }
-
   @MainActor
   private static func cancelPendingWorkItems() {
     syntheticEventEndTime = 0
-    closeTemporaryWindow(restorePrevious: true)
     pendingWorkItems.forEach { $0.cancel() }
     pendingWorkItems.removeAll()
   }
@@ -356,9 +238,4 @@ enum InputSourceSwitchSelector {
     }
   }
 
-  @MainActor
-  private static func suppressTemporaryWindowActivation() {
-    temporaryWindowActivationSuppressionEndTime =
-      ProcessInfo.processInfo.systemUptime + temporaryWindowActivationSuppressionDuration
-  }
 }

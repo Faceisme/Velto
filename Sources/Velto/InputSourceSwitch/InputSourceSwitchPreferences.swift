@@ -18,12 +18,13 @@ enum InputSourceRestoreStrategy: String, Codable, CaseIterable, Hashable {
 /// CJKV(中日韩越)输入法切换后的二次确认策略。
 enum InputSourceCJKFixStrategy: String, Codable, CaseIterable, Hashable {
   case previousInputSourceShortcut
+  /// 旧版本保留值。运行时不再使用,解码时迁移到 previousInputSourceShortcut。
   case temporaryInputWindow
 
   var displayName: String {
     switch self {
     case .previousInputSourceShortcut: return "模拟「上一个输入法」快捷键"
-    case .temporaryInputWindow: return "临时输入窗口"
+    case .temporaryInputWindow: return "临时输入窗口(已停用)"
     }
   }
 }
@@ -141,7 +142,8 @@ struct InputSourceSwitchPreferences: Codable, Equatable {
     browserAddressDefaultInputSourceID = try c.decodeIfPresent(String.self, forKey: .browserAddressDefaultInputSourceID) ?? d.browserAddressDefaultInputSourceID
     restoreStrategy = try c.decodeIfPresent(InputSourceRestoreStrategy.self, forKey: .restoreStrategy) ?? d.restoreStrategy
     cjkFixEnabled = try c.decodeIfPresent(Bool.self, forKey: .cjkFixEnabled) ?? d.cjkFixEnabled
-    cjkFixStrategy = try c.decodeIfPresent(InputSourceCJKFixStrategy.self, forKey: .cjkFixStrategy) ?? d.cjkFixStrategy
+    let decodedStrategy = try c.decodeIfPresent(InputSourceCJKFixStrategy.self, forKey: .cjkFixStrategy) ?? d.cjkFixStrategy
+    cjkFixStrategy = decodedStrategy == .temporaryInputWindow ? .previousInputSourceShortcut : decodedStrategy
     enabledBrowserBundleIDs = try c.decodeIfPresent(Set<String>.self, forKey: .enabledBrowserBundleIDs) ?? d.enabledBrowserBundleIDs
     appRules = try c.decodeIfPresent([InputSourceAppRule].self, forKey: .appRules) ?? d.appRules
     browserRules = try c.decodeIfPresent([InputSourceBrowserRule].self, forKey: .browserRules) ?? d.browserRules
