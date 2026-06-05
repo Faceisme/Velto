@@ -13,6 +13,38 @@ enum SwitcherKeyEvent {
     case cancel
 }
 
+/// KeyTap 线程上的轻量状态闩锁。
+///
+/// `trigger` 事件先在 tap 线程产生,真正创建 session 要跳到 main actor。
+/// 用户很快松开 Cmd 时,`flagsChanged` 可能早于 main actor 把 panel 标为 active。
+/// 这时仍然要把 release 事件发给 Controller,否则快速 `⌘+Tab` 会出现
+/// “按下被吞了,但没有确认/列表不跟手”的状态。
+struct SwitcherKeyTapState {
+    private(set) var isActive = false
+    private var hasQueuedTrigger = false
+
+    mutating func noteTriggerQueued() {
+        hasQueuedTrigger = true
+    }
+
+    mutating func setActive(_ active: Bool) {
+        isActive = active
+        hasQueuedTrigger = false
+    }
+
+    mutating func cancel() {
+        isActive = false
+        hasQueuedTrigger = false
+    }
+
+    mutating func shouldEmitRelease(triggerModifiersStillPressed: Bool) -> Bool {
+        guard !triggerModifiersStillPressed else { return false }
+        guard isActive || hasQueuedTrigger else { return false }
+        hasQueuedTrigger = false
+        return true
+    }
+}
+
 /// 接管系统的 Cmd+Tab,把按键事件路由给 Controller。
 ///
 /// 工作流:
@@ -35,11 +67,15 @@ final class SwitcherKeyTap: @unchecked Sendable {
 
     /// 用来告诉 tap:切换器现在是不是显示中,影响事件吞吐策略
     /// (没显示时只吞 Cmd+Tab;显示时吃方向键 / Esc / Cmd 释放)。
-    private let isActiveLock = NSLock()
-    private var _isActive = false
+    private let stateLock = NSLock()
+    private var state = SwitcherKeyTapState()
     var isActive: Bool {
-        get { isActiveLock.lock(); defer { isActiveLock.unlock() }; return _isActive }
-        set { isActiveLock.lock(); _isActive = newValue; isActiveLock.unlock() }
+        get { stateLock.lock(); defer { stateLock.unlock() }; return state.isActive }
+        set {
+            stateLock.lock()
+            state.setActive(newValue)
+            stateLock.unlock()
+        }
     }
 
     /// 切换器总开关 —— UI 上"启用窗口切换器"的实时反映。
@@ -244,6 +280,9 @@ final class SwitcherKeyTap: @unchecked Sendable {
             // 禁用期间可能丢了 modifier 松开 / Esc —— 通知 controller 取消可能残留的
             // session,避免面板卡在屏幕上、isActive 卡 true 吞掉后续方向键/Esc。
             // 未在 session 中时 controller 的 .cancel 是 no-op,安全。
+            stateLock.lock()
+            state.cancel()
+            stateLock.unlock()
             onEvent?(.cancel)
             return Unmanaged.passUnretained(event)
         }
@@ -279,11 +318,15 @@ final class SwitcherKeyTap: @unchecked Sendable {
                 guard switcherEnabled else {
                     return Unmanaged.passUnretained(event)
                 }
+                stateLock.lock()
+                state.noteTriggerQueued()
+                stateLock.unlock()
                 onEvent?(.trigger(reverse: reverse))
                 return nil
             }
             // 切换器已活跃时,这些键也吃掉
-            if isActive {
+            let active = isActive
+            if active {
                 switch keyCode {
                 case 53:   // Esc
                     onEvent?(.cancel)
@@ -309,7 +352,14 @@ final class SwitcherKeyTap: @unchecked Sendable {
         case .flagsChanged:
             // 触发快捷键的**任一** modifier 松开 → 确认切换。
             // 不局限于 Cmd —— 用户配 ⌥+` 时就是 ⌥ 松开触发。
-            if isActive && (eventModifiers & trigger.modifierFlags) != trigger.modifierFlags {
+            let triggerModifiersStillPressed =
+                (eventModifiers & trigger.modifierFlags) == trigger.modifierFlags
+            stateLock.lock()
+            let shouldRelease = state.shouldEmitRelease(
+                triggerModifiersStillPressed: triggerModifiersStillPressed
+            )
+            stateLock.unlock()
+            if shouldRelease {
                 onEvent?(.releaseModifier)
                 return Unmanaged.passUnretained(event)
             }

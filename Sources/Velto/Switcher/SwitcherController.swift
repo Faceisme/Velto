@@ -1,5 +1,45 @@
 import Cocoa
 
+/// 切换器面板的确认节流状态。
+///
+/// 快速 `⌘+Tab` 时,`keyDown` 会被 tap 线程先吞掉,随后主线程显示 panel。
+/// 如果用户马上松开 `⌘`,确认事件可能在 panel 刚显示甚至还没显示时到达。
+/// 保留一个最短可见时长,保证被我们接管的快捷键一定有可见反馈。
+struct SwitcherPanelVisibilityState {
+    let minimumVisibleDuration: TimeInterval
+
+    private var shownAt: TimeInterval?
+    private var hasPendingConfirmForNextSession = false
+
+    init(minimumVisibleDuration: TimeInterval = 0.12) {
+        self.minimumVisibleDuration = minimumVisibleDuration
+    }
+
+    mutating func markShown(at timestamp: TimeInterval) {
+        shownAt = timestamp
+    }
+
+    mutating func clear() {
+        shownAt = nil
+        hasPendingConfirmForNextSession = false
+    }
+
+    func confirmDelay(at timestamp: TimeInterval) -> TimeInterval {
+        guard let shownAt else { return 0 }
+        return max(0, minimumVisibleDuration - (timestamp - shownAt))
+    }
+
+    mutating func noteConfirmBeforeSession() {
+        hasPendingConfirmForNextSession = true
+    }
+
+    mutating func consumePendingConfirmForShownSession() -> Bool {
+        guard hasPendingConfirmForNextSession else { return false }
+        hasPendingConfirmForNextSession = false
+        return true
+    }
+}
+
 /// 切换器总指挥。它把所有子系统粘起来:
 ///
 ///   KeyTap ──事件──→ Controller ──┬──→ WindowList(取快照)
@@ -29,6 +69,9 @@ final class SwitcherController {
     private var thumbnailTrimTask: Task<Void, Never>?
     private static let thumbnailTrimDelayNanos: UInt64 = 120 * 1_000_000_000
     private static let thumbnailTrimKeepTop = 100
+    /// 快速松开触发键时,至少让 panel 停留一小段时间,避免看起来"没弹出来"。
+    private var panelVisibility = SwitcherPanelVisibilityState()
+    private var pendingConfirmTask: Task<Void, Never>?
     /// panel 是 lazy 创建 —— 第一次 trigger 时才实例化,避免拖慢启动
     private var _panel: SwitcherPanel?
     private var panel: SwitcherPanel {
@@ -145,6 +188,7 @@ final class SwitcherController {
         let snapshot = windowList.snapshot(applying: prefs, panelScreen: panelScreen)
         guard !snapshot.isEmpty else {
             SwitcherDebugLog.log("summon aborted: 没有可切换的窗口")
+            panelVisibility.clear()
             NSSound.beep()
             return
         }
@@ -165,11 +209,16 @@ final class SwitcherController {
             hideWindowTitle: prefs.groupBy == .perApp,
             on: panelScreen
         )
+        panelVisibility.markShown(at: ProcessInfo.processInfo.systemUptime)
         panel.tilesView.setSelectedIndex(session.selectedIndex)
 
         // 启动缩略图抓取 —— 异步,抓到一张更新一张 tile,不阻塞 panel 显示。
         // 没有 Screen Recording 权限就直接什么也不做,UI 保持纯图标态。
         startThumbnailCapture(for: session)
+
+        if panelVisibility.consumePendingConfirmForShownSession() {
+            confirmAndDismiss()
+        }
     }
 
     /// 开始这次 session 的缩略图抓取。抓到一张就找对应 tile 更新一张。
@@ -220,11 +269,37 @@ final class SwitcherController {
         guard let session = SwitcherSession.current else { return }
         guard index >= 0, index < session.windows.count else { return }
         session.selectedIndex = index
-        confirmAndDismiss()
+        confirmAndDismiss(delayingFastRelease: false)
     }
 
-    private func confirmAndDismiss() {
-        guard let session = SwitcherSession.current else { return }
+    private func confirmAndDismiss(delayingFastRelease: Bool = true) {
+        guard let session = SwitcherSession.current else {
+            panelVisibility.noteConfirmBeforeSession()
+            return
+        }
+        guard delayingFastRelease else {
+            confirmAndDismissImmediately(for: session)
+            return
+        }
+        let delay = panelVisibility.confirmDelay(at: ProcessInfo.processInfo.systemUptime)
+        guard delay > 0 else {
+            confirmAndDismissImmediately(for: session)
+            return
+        }
+        pendingConfirmTask?.cancel()
+        pendingConfirmTask = Task { @MainActor [weak self, weak session] in
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            guard !Task.isCancelled,
+                  let self,
+                  let session,
+                  SwitcherSession.current === session else { return }
+            self.pendingConfirmTask = nil
+            self.confirmAndDismissImmediately(for: session)
+        }
+    }
+
+    private func confirmAndDismissImmediately(for session: SwitcherSession) {
+        guard SwitcherSession.current === session else { return }
         let target = session.selectedWindow
         hidePanelIfShown()
         if let target {
@@ -238,6 +313,9 @@ final class SwitcherController {
 
     private func hidePanelIfShown() {
         guard SwitcherSession.isActive else { return }
+        pendingConfirmTask?.cancel()
+        pendingConfirmTask = nil
+        panelVisibility.clear()
         SwitcherSession.current = nil
         keyTap.isActive = false
         _panel?.hidePanel()

@@ -117,6 +117,42 @@ struct SwitcherWindowProbe: @unchecked Sendable {
 /// AX 字符串常量 —— 这两个在某些 SDK 版本里没桥接成 Swift 常量,直接用字符串。
 private let kAXFullScreenAttribute = "AXFullScreen"
 
+/// 缺失窗口的删除策略。
+///
+/// 普通 AX 扫描可能因为目标 app 短暂无响应漏掉窗口,所以保留两次 miss 才删。
+/// 但关闭 / 最小化这类明确窗口状态通知已经说明窗口集合或可见性发生变化,
+/// 这时继续等第二次扫描会让 Cmd+Tab 列表残留一次。
+enum SwitcherWindowMissPolicy {
+    case routineScan
+    case explicitWindowStateChange
+
+    var removalThreshold: Int {
+        switch self {
+        case .routineScan:
+            return 2
+        case .explicitWindowStateChange:
+            return 1
+        }
+    }
+}
+
+struct SwitcherWindowMissState {
+    private(set) var count: Int
+
+    init(count: Int = 0) {
+        self.count = max(0, count)
+    }
+
+    mutating func markSeen() {
+        count = 0
+    }
+
+    mutating func recordMiss(using policy: SwitcherWindowMissPolicy) -> Bool {
+        count += 1
+        return count >= policy.removalThreshold
+    }
+}
+
 /// 全局窗口清单。所有读写都在主线程上,AX 调用通过 `AXCallQueue` 后台化。
 @MainActor
 final class SwitcherWindowList {
@@ -223,7 +259,11 @@ final class SwitcherWindowList {
         }
     }
 
-    private func syncWindowsForApp(pid: pid_t, includeBruteForce: Bool = false) {
+    private func syncWindowsForApp(
+        pid: pid_t,
+        includeBruteForce: Bool = false,
+        missingWindowPolicy: SwitcherWindowMissPolicy = .routineScan
+    ) {
         guard maintainsIndex else { return }
         guard let app = apps[pid] else { return }
         AXCallQueue.shared.schedule("sync-\(pid)") { [weak self] in
@@ -270,12 +310,22 @@ final class SwitcherWindowList {
             }
             let spaceMap = SwitcherSpaces.spaces(forWindowIds: probes.map(\.wid))
             Task { @MainActor [weak self] in
-                self?.applyProbes(probes, for: pid, spaceMap: spaceMap)
+                self?.applyProbes(
+                    probes,
+                    for: pid,
+                    spaceMap: spaceMap,
+                    missingWindowPolicy: missingWindowPolicy
+                )
             }
         }
     }
 
-    private func applyProbes(_ probes: [SwitcherWindowProbe], for pid: pid_t, spaceMap: [CGWindowID: [CGSSpaceID]]) {
+    private func applyProbes(
+        _ probes: [SwitcherWindowProbe],
+        for pid: pid_t,
+        spaceMap: [CGWindowID: [CGSSpaceID]],
+        missingWindowPolicy: SwitcherWindowMissPolicy = .routineScan
+    ) {
         guard let app = apps[pid] else { return }
         // 窗口集合变化(新增 / 删除)—— 仅这种情况需要重排 lastFocusOrder。
         // 字段更新(title/size/...)不影响 MRU 序,不触发 compact。
@@ -320,7 +370,9 @@ final class SwitcherWindowList {
                 appLocalizedName: app.localizedName
             )
             if let existing = windows[probe.wid] {
-                existing.missCount = 0   // 本轮扫描到了 → 清零两阶段移除计数
+                var missState = SwitcherWindowMissState(count: existing.missCount)
+                missState.markSeen()
+                existing.missCount = missState.count   // 本轮扫描到了 → 清零移除计数
                 if existing.title != resolvedTitle { existing.title = resolvedTitle }
                 if existing.isMinimized != probe.isMinimized { existing.isMinimized = probe.isMinimized }
                 if existing.isFullscreen != probe.isFullscreen { existing.isFullscreen = probe.isFullscreen }
@@ -351,17 +403,17 @@ final class SwitcherWindowList {
                 setChanged = true
             }
         }
-        // 两阶段移除:本轮没扫到的现有窗口先累加 missCount,连续 staleThreshold 次没出现
-        // 才真正删。治"目标 app 短暂不响应 / AX 字段瞬时为空"导致真实窗口被误删、列表闪烁、
-        // MRU 被重排、缩略图重抓。明确的 destroyed 通知仍走即时移除(见 handleAxNotification)。
-        let staleThreshold = 2
+        // 移除策略:
+        // - 例行扫描:连续两次 miss 才删,防 AX 瞬时漏报。
+        // - 明确窗口状态变化:一次 miss 就删,防关闭/最小化后 Cmd+Tab 列表残留。
         let missed = windows.values.filter { $0.application.pid == pid && !seenWids.contains($0.cgWindowId) }
         for w in missed {
-            w.missCount += 1
-            if w.missCount >= staleThreshold {
-                unsubscribeWindowNotifications(w)
-                windows.removeValue(forKey: w.cgWindowId)
+            var missState = SwitcherWindowMissState(count: w.missCount)
+            if missState.recordMiss(using: missingWindowPolicy) {
+                removeWindow(w, compact: false)
                 setChanged = true
+            } else {
+                w.missCount = missState.count
             }
         }
         if setChanged {
@@ -384,6 +436,36 @@ final class SwitcherWindowList {
         for notification in SwitcherWindow.observedNotifications {
             AXObserverRemoveNotification(observer, window.axUiElement, notification as CFString)
         }
+    }
+
+    private func window(matching element: AXUIElement) -> SwitcherWindow? {
+        if let wid = SwitcherAxRead.cgWindowId(of: element),
+           let window = windows[wid]
+        {
+            return window
+        }
+        return windows.values.first { CFEqual($0.axUiElement, element) }
+    }
+
+    @discardableResult
+    private func removeWindow(_ window: SwitcherWindow, compact: Bool = true) -> Bool {
+        guard windows[window.cgWindowId] === window else { return false }
+        unsubscribeWindowNotifications(window)
+        windows.removeValue(forKey: window.cgWindowId)
+        if compact {
+            compactMRUOrdering()
+        }
+        return true
+    }
+
+    @discardableResult
+    private func updateMinimizedState(for element: AXUIElement, isMinimized: Bool) -> Bool {
+        guard let window = window(matching: element) else { return false }
+        window.missCount = 0
+        if window.isMinimized != isMinimized {
+            window.isMinimized = isMinimized
+        }
+        return true
     }
 
     /// 删除窗口后,把 lastFocusOrder 压回 [0..<count] 紧凑序列。
@@ -420,25 +502,23 @@ final class SwitcherWindowList {
         switch type {
         // ---- 窗口级别通知 ----
         case kAXWindowMiniaturizedNotification:
-            if let wid = SwitcherAxRead.cgWindowId(of: element),
-               let w = windows[wid], !w.isMinimized
+            if !updateMinimizedState(for: element, isMinimized: true),
+               let pid = pidOfElement(element) ?? frontmostPid
             {
-                w.isMinimized = true
+                syncWindowsForApp(pid: pid, missingWindowPolicy: .explicitWindowStateChange)
             }
         case kAXWindowDeminiaturizedNotification:
-            if let wid = SwitcherAxRead.cgWindowId(of: element),
-               let w = windows[wid], w.isMinimized
+            if !updateMinimizedState(for: element, isMinimized: false),
+               let pid = pidOfElement(element) ?? frontmostPid
             {
-                w.isMinimized = false
+                syncWindowsForApp(pid: pid, missingWindowPolicy: .explicitWindowStateChange)
             }
         case kAXUIElementDestroyedNotification:
             // 销毁的 element 可能拿不到 wid(它已经从 CGS 里消失),退化到全量 sync
-            if let wid = SwitcherAxRead.cgWindowId(of: element), let w = windows[wid] {
-                unsubscribeWindowNotifications(w)
-                windows.removeValue(forKey: wid)
-                compactMRUOrdering()
+            if let window = window(matching: element) {
+                removeWindow(window)
             } else if let pid = pidOfElement(element) ?? frontmostPid {
-                syncWindowsForApp(pid: pid)
+                syncWindowsForApp(pid: pid, missingWindowPolicy: .explicitWindowStateChange)
             }
         case kAXTitleChangedNotification:
             // 标题更新 —— Chrome / Slack / Xcode 改一个 tab 的标题就触发,频率
