@@ -168,7 +168,11 @@ final class GestureCaptureView: NSView {
             width: viewInScreen.width,
             height: viewInScreen.height
         )
-        RightClickPassThrough.setRegion(cgRect, owner: ObjectIdentifier(self))
+        RightClickPassThrough.setRegion(
+            cgRect,
+            windowNumber: window.windowNumber,
+            owner: ObjectIdentifier(self)
+        )
     }
 
     private func invalidateForPointChange(from oldPoints: [CGPoint], to newPoints: [CGPoint]) {

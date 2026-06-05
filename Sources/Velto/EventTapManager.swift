@@ -42,16 +42,19 @@ private let veltoScrollEventTapCallback: CGEventTapCallBack = { proxy, type, eve
 /// 事件)。读路径锁 + rect.contains,只是几条 CPU 指令,不会成为瓶颈。
 enum RightClickPassThrough {
     private static let lock = NSLock()
+    private static let selfPID = pid_t(getpid())
     nonisolated(unsafe) private static var _region: CGRect?
+    nonisolated(unsafe) private static var _windowNumber: Int?
     nonisolated(unsafe) private static var _owner: ObjectIdentifier?
 
     /// 注册透传区并标记归属者。SwiftUI 切换/新建手势时,新旧 `GestureCaptureView`
     /// 实例的创建与销毁会交错(常常旧实例的销毁晚于新实例的创建);用 owner 标识
     /// "当前有效注册者",销毁旧实例时只能清掉自己的注册(见 `clear(owner:)`),
     /// 不会误抹掉新实例刚注册的区域。
-    static func setRegion(_ region: CGRect, owner: ObjectIdentifier) {
+    static func setRegion(_ region: CGRect, windowNumber: Int?, owner: ObjectIdentifier) {
         lock.lock(); defer { lock.unlock() }
         _region = region
+        _windowNumber = windowNumber
         _owner = owner
     }
 
@@ -61,20 +64,54 @@ enum RightClickPassThrough {
         lock.lock(); defer { lock.unlock() }
         if _owner == owner {
             _region = nil
+            _windowNumber = nil
             _owner = nil
         }
     }
 
-    static func contains(_ point: CGPoint) -> Bool {
+    static func contains(
+        _ point: CGPoint,
+        eventTargetPID: pid_t,
+        eventWindowNumber: Int64,
+        eventWindowThatCanHandleNumber: Int64
+    ) -> Bool {
         lock.lock(); defer { lock.unlock() }
-        guard let r = _region else { return false }
-        return r.contains(point)
+        return shouldPassThrough(
+            point: point,
+            region: _region,
+            eventTargetPID: eventTargetPID,
+            selfPID: selfPID,
+            eventWindowNumber: eventWindowNumber,
+            eventWindowThatCanHandleNumber: eventWindowThatCanHandleNumber,
+            registeredWindowNumber: _windowNumber
+        )
+    }
+
+    static func shouldPassThrough(
+        point: CGPoint,
+        region: CGRect?,
+        eventTargetPID: pid_t,
+        selfPID: pid_t,
+        eventWindowNumber: Int64 = 0,
+        eventWindowThatCanHandleNumber: Int64 = 0,
+        registeredWindowNumber: Int? = nil
+    ) -> Bool {
+        guard let region, region.contains(point) else { return false }
+        if eventTargetPID == selfPID { return true }
+        guard let registeredWindowNumber else { return false }
+        let registered = Int64(registeredWindowNumber)
+        return eventWindowNumber == registered || eventWindowThatCanHandleNumber == registered
     }
 
     /// 仅供调试日志读取当前透传区(可能为 nil)。
     static func regionForDebug() -> CGRect? {
         lock.lock(); defer { lock.unlock() }
         return _region
+    }
+
+    static func windowNumberForDebug() -> Int? {
+        lock.lock(); defer { lock.unlock() }
+        return _windowNumber
     }
 }
 
@@ -331,15 +368,29 @@ final class EventTapManager: @unchecked Sendable {
             }
             // 录制手势卡片这种自己想吃右键的 view 已经把屏幕区域登记进来 ——
             // 让事件原样透传,GestureEngine 完全不介入。
-            let inPassThrough = RightClickPassThrough.contains(event.location)
+            let targetPID = pid_t(event.getIntegerValueField(.eventTargetUnixProcessID))
+            let eventWindowNumber = event.getIntegerValueField(.mouseEventWindowUnderMousePointer)
+            let eventWindowThatCanHandleNumber = event.getIntegerValueField(.mouseEventWindowUnderMousePointerThatCanHandleThisEvent)
+            let inPassThrough = RightClickPassThrough.contains(
+                event.location,
+                eventTargetPID: targetPID,
+                eventWindowNumber: eventWindowNumber,
+                eventWindowThatCanHandleNumber: eventWindowThatCanHandleNumber
+            )
             // 诊断:右键按下时记录点击坐标 + 当前透传区,定位"录制无反应"是区域
             // 没注册(rw=-1)还是坐标对不上(pass=false 但点其实在卡片内)。
             if DebugLog.isEnabled {
                 let r = RightClickPassThrough.regionForDebug()
+                let registeredWindowNumber = RightClickPassThrough.windowNumberForDebug()
                 DebugLog.event("rclick", [
                     "x": Double(event.location.x),
                     "y": Double(event.location.y),
                     "pass": inPassThrough,
+                    "targetPID": Double(targetPID),
+                    "selfPID": Double(getpid()),
+                    "win": Double(eventWindowNumber),
+                    "winHandle": Double(eventWindowThatCanHandleNumber),
+                    "passWin": registeredWindowNumber.map(Double.init) ?? -1,
                     "rx": r.map { Double($0.minX) } ?? -1,
                     "ry": r.map { Double($0.minY) } ?? -1,
                     "rw": r.map { Double($0.width) } ?? -1,
@@ -366,7 +417,7 @@ final class EventTapManager: @unchecked Sendable {
             }
             // 透传区只在引擎"未在手势中"时生效。一旦手势已经在卡片外起手(引擎接管),
             // 后续 drag/up 即便飘进透传区也必须继续交给引擎,否则 up 被透传走、引擎卡死。
-            if !gestureEngine.isHandlingRightMouse, RightClickPassThrough.contains(event.location) {
+            if !gestureEngine.isHandlingRightMouse, isInRightClickPassThrough(event) {
                 return Unmanaged.passUnretained(event)
             }
             return gestureEngine.handleRightMouseDragged(at: event.location)
@@ -377,7 +428,7 @@ final class EventTapManager: @unchecked Sendable {
             if event.getIntegerValueField(.eventSourceUserData) == gestureEngine.rightClickSyntheticMarker {
                 return Unmanaged.passUnretained(event)
             }
-            if !gestureEngine.isHandlingRightMouse, RightClickPassThrough.contains(event.location) {
+            if !gestureEngine.isHandlingRightMouse, isInRightClickPassThrough(event) {
                 return Unmanaged.passUnretained(event)
             }
             if mouseControlController.handleTriggerEvent(type: type, event: event, normalizedFlags: raw) {
@@ -605,5 +656,14 @@ final class EventTapManager: @unchecked Sendable {
 
     private func eventMask(for type: CGEventType) -> CGEventMask {
         CGEventMask(1) << CGEventMask(type.rawValue)
+    }
+
+    private func isInRightClickPassThrough(_ event: CGEvent) -> Bool {
+        RightClickPassThrough.contains(
+            event.location,
+            eventTargetPID: pid_t(event.getIntegerValueField(.eventTargetUnixProcessID)),
+            eventWindowNumber: event.getIntegerValueField(.mouseEventWindowUnderMousePointer),
+            eventWindowThatCanHandleNumber: event.getIntegerValueField(.mouseEventWindowUnderMousePointerThatCanHandleThisEvent)
+        )
     }
 }
