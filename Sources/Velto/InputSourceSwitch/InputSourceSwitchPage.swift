@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -33,11 +34,10 @@ struct InputSourceSwitchPage: View {
             title: "输入法切换",
             subtitle: "根据当前 App 和浏览器网站自动切换输入法。"
           )
-          Picker("", selection: $segment) {
-            ForEach(Segment.allCases) { Text($0.title).tag($0) }
-          }
-          .labelsHidden()
-          .pickerStyle(.segmented)
+          MGSegmentedPicker(
+            selection: $segment,
+            options: Segment.allCases.map { MGSegmentedOption($0, $0.title) }
+          )
 
           switch segment {
           case .general: generalGroup
@@ -92,7 +92,10 @@ struct InputSourceSwitchPage: View {
         }
         row(icon: "folder", title: "打开日志文件夹",
             desc: "~/Library/Logs/Velto/", showDivider: true) {
-          AnyView(Button("打开") { openLogsFolder() })
+          AnyView(
+            Button("打开") { openLogsFolder() }
+              .buttonStyle(MGSecondaryButtonStyle())
+          )
         }
       }
     }
@@ -107,6 +110,7 @@ struct InputSourceSwitchPage: View {
         Button {
           showAppPicker = true
         } label: { Label("从应用选择", systemImage: "plus") }
+          .buttonStyle(MGSecondaryButtonStyle(foreground: .mgAccent))
       }
       GroupCard(radius: MGRadius.cardLg) {
         VStack(spacing: 0) {
@@ -117,6 +121,7 @@ struct InputSourceSwitchPage: View {
           ForEach(rules) { rule in
             ruleRow(
               title: rule.displayName, subtitle: rule.bundleIdentifier,
+              icon: { AnyView(AppRuleIcon(rule: rule)) },
               isEnabled: rule.isEnabled,
               sourceID: rule.inputSourceID,
               showDivider: rule.id != rules.first?.id,
@@ -144,8 +149,12 @@ struct InputSourceSwitchPage: View {
             let installed = SupportedBrowserCatalog.installed()
             if installed.isEmpty { emptyHint("没检测到受支持的浏览器。") }
             ForEach(installed) { b in
-              row(icon: "globe", title: b.displayName, desc: b.bundleID,
-                  showDivider: b.id != installed.first?.id) {
+              row(
+                title: b.displayName,
+                desc: b.bundleID,
+                showDivider: b.id != installed.first?.id,
+                icon: { AnyView(BrowserIcon(browser: b)) }
+              ) {
                 AnyView(Toggle("", isOn: Binding(
                   get: { store.preferences.inputSourceSwitch.enabledBrowserBundleIDs.contains(b.bundleID) },
                   set: { v in store.updatePreferences { p in
@@ -165,6 +174,7 @@ struct InputSourceSwitchPage: View {
           Button {
             editingBrowserRule = InputSourceBrowserRule()
           } label: { Label("新增规则", systemImage: "plus") }
+            .buttonStyle(MGSecondaryButtonStyle(foreground: .mgAccent))
         }
         GroupCard(radius: MGRadius.cardLg) {
           VStack(spacing: 0) {
@@ -206,7 +216,10 @@ struct InputSourceSwitchPage: View {
            InputSourceSwitchSelector.previousInputSourceShortcut() == nil {
           row(icon: "exclamationmark.triangle", title: "系统未配置「选择上一个输入法」快捷键",
               desc: "该策略依赖此系统快捷键,请到键盘设置开启。", showDivider: true) {
-            AnyView(Button("打开键盘设置") { PermissionManager.openKeyboardSettings() })
+            AnyView(
+              Button("打开键盘设置") { PermissionManager.openKeyboardSettings() }
+                .buttonStyle(MGSecondaryButtonStyle(foreground: .mgAccent))
+            )
           }
         }
       }
@@ -215,14 +228,28 @@ struct InputSourceSwitchPage: View {
 
   // MARK: - 行/控件 helper
 
-  private func row(icon: String, title: String, desc: String?, showDivider: Bool,
+  private func row(
+    icon: String,
+    title: String,
+    desc: String?,
+    showDivider: Bool,
+    @ViewBuilder control: () -> AnyView
+  ) -> some View {
+    row(title: title, desc: desc, showDivider: showDivider, icon: { AnyView(ActionIcon(systemName: icon)) }, control: control)
+  }
+
+  private func row(
+    title: String,
+    desc: String?,
+    showDivider: Bool,
+    @ViewBuilder icon: () -> AnyView,
                    @ViewBuilder control: () -> AnyView) -> some View {
     VStack(spacing: 0) {
       if showDivider {
         Rectangle().fill(Color.mgHair).frame(height: 0.5).padding(.leading, 78)
       }
       HStack(alignment: .center, spacing: 16) {
-        ActionIcon(systemName: icon)
+        icon()
         VStack(alignment: .leading, spacing: 2) {
           Text(title).font(.system(size: 14, weight: .semibold)).foregroundStyle(Color.mgText1)
           if let desc { Text(desc).font(.system(size: 12)).foregroundStyle(Color.mgText2) }
@@ -242,14 +269,45 @@ struct InputSourceSwitchPage: View {
   ) -> some View {
     row(icon: "list.bullet", title: title, desc: subtitle.isEmpty ? nil : subtitle, showDivider: showDivider) {
       AnyView(HStack(spacing: 10) {
-        Picker("", selection: Binding(get: { sourceID ?? "" }, set: { onPick($0.isEmpty ? nil : $0) })) {
-          Text("不指定").tag("")
-          ForEach(sources) { Text($0.localizedName).tag($0.id) }
-        }.labelsHidden().pickerStyle(.menu).frame(minWidth: 140, alignment: .trailing)
+        MGMenuPicker(
+          selection: Binding(get: { sourceID ?? "" }, set: { onPick($0.isEmpty ? nil : $0) }),
+          options: [MGMenuOption("", "不指定")] + sources.map { MGMenuOption($0.id, $0.localizedName) },
+          minWidth: 140
+        )
         Toggle("", isOn: Binding(get: { isEnabled }, set: { onToggle($0) }))
           .labelsHidden().toggleStyle(.switch).controlSize(.small).tint(.mgAccent)
-        if let onEdit { Button { onEdit() } label: { Image(systemName: "pencil") }.buttonStyle(.borderless) }
-        Button { onDelete() } label: { Image(systemName: "trash") }.buttonStyle(.borderless)
+        if let onEdit {
+          Button { onEdit() } label: { Image(systemName: "pencil") }
+            .buttonStyle(MGPlainButtonStyle(foreground: .mgText3))
+        }
+        Button { onDelete() } label: { Image(systemName: "trash") }
+          .buttonStyle(MGPlainButtonStyle(foreground: .mgDanger))
+      })
+    }
+  }
+
+  private func ruleRow(
+    title: String, subtitle: String, icon: @escaping () -> AnyView,
+    isEnabled: Bool, sourceID: String?,
+    showDivider: Bool,
+    onToggle: @escaping (Bool) -> Void, onPick: @escaping (String?) -> Void,
+    onDelete: @escaping () -> Void, onEdit: (() -> Void)? = nil
+  ) -> some View {
+    row(title: title, desc: subtitle.isEmpty ? nil : subtitle, showDivider: showDivider, icon: icon) {
+      AnyView(HStack(spacing: 10) {
+        MGMenuPicker(
+          selection: Binding(get: { sourceID ?? "" }, set: { onPick($0.isEmpty ? nil : $0) }),
+          options: [MGMenuOption("", "不指定")] + sources.map { MGMenuOption($0.id, $0.localizedName) },
+          minWidth: 140
+        )
+        Toggle("", isOn: Binding(get: { isEnabled }, set: { onToggle($0) }))
+          .labelsHidden().toggleStyle(.switch).controlSize(.small).tint(.mgAccent)
+        if let onEdit {
+          Button { onEdit() } label: { Image(systemName: "pencil") }
+            .buttonStyle(MGPlainButtonStyle(foreground: .mgText3))
+        }
+        Button { onDelete() } label: { Image(systemName: "trash") }
+          .buttonStyle(MGPlainButtonStyle(foreground: .mgDanger))
       })
     }
   }
@@ -271,24 +329,28 @@ struct InputSourceSwitchPage: View {
   }
 
   private func sourcePicker(_ kp: WritableKeyPath<InputSourceSwitchPreferences, String?>) -> some View {
-    Picker("", selection: Binding(
-      get: { store.preferences.inputSourceSwitch[keyPath: kp] ?? "" },
-      set: { v in store.updatePreferences { $0.inputSourceSwitch[keyPath: kp] = v.isEmpty ? nil : v } }
-    )) {
-      Text("不指定").tag("")
-      ForEach(sources) { Text($0.localizedName).tag($0.id) }
-    }.labelsHidden().pickerStyle(.menu).frame(minWidth: 160, alignment: .trailing)
+    MGMenuPicker(
+      selection: Binding(
+        get: { store.preferences.inputSourceSwitch[keyPath: kp] ?? "" },
+        set: { v in store.updatePreferences { $0.inputSourceSwitch[keyPath: kp] = v.isEmpty ? nil : v } }
+      ),
+      options: [MGMenuOption("", "不指定")] + sources.map { MGMenuOption($0.id, $0.localizedName) },
+      minWidth: 160
+    )
   }
 
   private func enumPicker<E: Hashable>(
     _ kp: WritableKeyPath<InputSourceSwitchPreferences, E>,
     cases: [E], name: @escaping (E) -> String
   ) -> some View {
-    Picker("", selection: Binding(
-      get: { store.preferences.inputSourceSwitch[keyPath: kp] },
-      set: { v in store.updatePreferences { $0.inputSourceSwitch[keyPath: kp] = v } }
-    )) { ForEach(cases, id: \.self) { Text(name($0)).tag($0) } }
-      .labelsHidden().pickerStyle(.menu).frame(minWidth: 160, alignment: .trailing)
+    MGMenuPicker(
+      selection: Binding(
+        get: { store.preferences.inputSourceSwitch[keyPath: kp] },
+        set: { v in store.updatePreferences { $0.inputSourceSwitch[keyPath: kp] = v } }
+      ),
+      options: cases.map { MGMenuOption($0, name($0)) },
+      minWidth: 160
+    )
   }
 
   // MARK: - 规则增删改
@@ -332,5 +394,69 @@ struct InputSourceSwitchPage: View {
     let url = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first?
       .appendingPathComponent("Logs/Velto", isDirectory: true)
     if let url { NSWorkspace.shared.open(url) }
+  }
+}
+
+private struct AppRuleIcon: View {
+  let rule: InputSourceAppRule
+
+  var body: some View {
+    if let icon = appIcon {
+      let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
+      Image(nsImage: icon)
+        .resizable()
+        .aspectRatio(contentMode: .fit)
+        .frame(width: 30, height: 30)
+        .padding(5)
+        .frame(width: 40, height: 40)
+        .background(shape.fill(Color.mgGlassControl))
+        .veltoNativeGlass(in: shape)
+        .overlay {
+          shape.strokeBorder(Color.mgHair, lineWidth: 0.5)
+        }
+    } else {
+      ActionIcon(systemName: "app")
+    }
+  }
+
+  private var appIcon: NSImage? {
+    if let bundlePath = rule.bundlePath,
+       FileManager.default.fileExists(atPath: bundlePath) {
+      return NSWorkspace.shared.icon(forFile: bundlePath)
+    }
+    if let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: rule.bundleIdentifier) {
+      return NSWorkspace.shared.icon(forFile: appURL.path)
+    }
+    return nil
+  }
+}
+
+private struct BrowserIcon: View {
+  let browser: SupportedBrowser
+
+  var body: some View {
+    if let icon = browserIcon {
+      let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
+      Image(nsImage: icon)
+        .resizable()
+        .aspectRatio(contentMode: .fit)
+        .frame(width: 30, height: 30)
+        .padding(5)
+        .frame(width: 40, height: 40)
+        .background(shape.fill(Color.mgGlassControl))
+        .veltoNativeGlass(in: shape)
+        .overlay {
+          shape.strokeBorder(Color.mgHair, lineWidth: 0.5)
+        }
+    } else {
+      ActionIcon(systemName: "globe")
+    }
+  }
+
+  private var browserIcon: NSImage? {
+    guard let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: browser.bundleID) else {
+      return nil
+    }
+    return NSWorkspace.shared.icon(forFile: appURL.path)
   }
 }

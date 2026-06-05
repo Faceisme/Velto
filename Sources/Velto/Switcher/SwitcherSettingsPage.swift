@@ -257,14 +257,11 @@ struct SwitcherSettingsPage: View {
     private func menuPicker<E>(
         _ keyPath: WritableKeyPath<SwitcherPreferences, E>
     ) -> some View where E: CaseIterable & Hashable & RawRepresentable, E.AllCases: RandomAccessCollection, E.RawValue: Hashable {
-        Picker("", selection: bind(keyPath)) {
-            ForEach(Array(E.allCases), id: \.rawValue) { value in
-                Text(displayName(of: value)).tag(value)
-            }
-        }
-        .labelsHidden()
-        .pickerStyle(.menu)
-        .frame(minWidth: 160, alignment: .trailing)
+        MGMenuPicker(
+            selection: bind(keyPath),
+            options: Array(E.allCases).map { MGMenuOption($0, displayName(of: $0)) },
+            minWidth: 160
+        )
     }
 
     /// 给 menuPicker 用 —— Swift 泛型没法把"任意自带 displayName 的枚举"约束

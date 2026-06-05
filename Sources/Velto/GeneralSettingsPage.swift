@@ -122,16 +122,16 @@ struct GeneralSettingsPage: View {
                                 }
                             }
                             GroupRow(label: "手势作用目标", showDivider: true) {
-                                Picker("", selection: Binding(
-                                    get: { store.preferences.gestureTargetPolicy },
-                                    set: { v in store.updatePreferences { $0.gestureTargetPolicy = v } }
-                                )) {
-                                    Text("鼠标指针下方").tag(GestureTargetPolicy.windowUnderPointer)
-                                    Text("活动窗口").tag(GestureTargetPolicy.activeWindow)
-                                }
-                                .pickerStyle(.segmented)
-                                .labelsHidden()
-                                .frame(width: 220)
+                                MGSegmentedPicker(
+                                    selection: Binding(
+                                        get: { store.preferences.gestureTargetPolicy },
+                                        set: { v in store.updatePreferences { $0.gestureTargetPolicy = v } }
+                                    ),
+                                    options: [
+                                        MGSegmentedOption(.windowUnderPointer, "鼠标指针下方"),
+                                        MGSegmentedOption(.activeWindow, "活动窗口")
+                                    ]
+                                )
                             }
                         }
                     }

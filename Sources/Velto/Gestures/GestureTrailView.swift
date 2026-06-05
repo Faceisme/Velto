@@ -172,26 +172,16 @@ struct GesturePreviewCard<Overlay: View>: View {
     }
 
     var body: some View {
-        ZStack {
-            // 三层背景
-            ZStack {
-                Color.mgCardAlt
-                RadialGradient(
-                    colors: [Color.mgAccent.opacity(0.06), .clear],
-                    center: UnitPoint(x: 0.2, y: 0.2),
-                    startRadius: 0, endRadius: 260
-                )
-                RadialGradient(
-                    colors: [Color.mgAccentEnd.opacity(0.06), .clear],
-                    center: UnitPoint(x: 0.8, y: 0.8),
-                    startRadius: 0, endRadius: 260
-                )
-            }
+        let shape = RoundedRectangle(cornerRadius: MGRadius.cardSm, style: .continuous)
+        return ZStack {
+            shape
+                .fill(Color.mgCardAlt)
+                .veltoNativeGlass(in: shape)
 
             // 点阵网格
             Canvas { ctx, size in
                 let step: CGFloat = 14
-                let dotColor = Color(red: 15/255, green: 30/255, blue: 60/255).opacity(0.10)
+                let dotColor = Color.mgText3.opacity(0.16)
                 var y: CGFloat = 1
                 while y < size.height {
                     var x: CGFloat = 1
@@ -243,15 +233,13 @@ struct GesturePreviewCard<Overlay: View>: View {
                         .padding(.horizontal, 10)
                         .padding(.vertical, 4)
                         .background(
-                            Capsule().fill(Color.white.opacity(0.85))
+                            Capsule()
+                                .fill(Color.mgGlassControl)
                         )
-                        .background(
-                            Capsule().fill(.ultraThinMaterial)
-                        )
+                        .veltoNativeGlass(in: Capsule())
                         .overlay(
                             Capsule()
-                                .strokeBorder(Color(red: 15/255, green: 30/255, blue: 60/255).opacity(0.08),
-                                              lineWidth: 0.5)
+                                .strokeBorder(Color.mgHair, lineWidth: 0.5)
                         )
                     }
                     Spacer()
@@ -260,6 +248,9 @@ struct GesturePreviewCard<Overlay: View>: View {
             }
         }
         .frame(height: height)
-        .clipShape(RoundedRectangle(cornerRadius: MGRadius.cardSm, style: .continuous))
+        .overlay {
+            shape.strokeBorder(Color.mgHair, lineWidth: 0.5)
+        }
+        .clipShape(shape)
     }
 }

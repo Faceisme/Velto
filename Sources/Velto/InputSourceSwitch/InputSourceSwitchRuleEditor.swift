@@ -24,19 +24,22 @@ struct BrowserRuleEditor: View {
     VStack(alignment: .leading, spacing: 16) {
       Text("浏览器规则").font(.mgPageTitle).foregroundStyle(Color.mgText1)
 
-      Picker("匹配类型", selection: $draft.type) {
-        ForEach(InputSourceBrowserRuleType.allCases, id: \.self) { Text($0.displayName).tag($0) }
-      }
+      MGMenuPicker(
+        selection: $draft.type,
+        options: InputSourceBrowserRuleType.allCases.map { MGMenuOption($0, $0.displayName) },
+        minWidth: 180
+      )
       TextField("匹配值(如 github.com)", text: $draft.value)
       TextField("示例 URL(如 https://github.com/x)", text: $draft.sample)
 
-      Picker("目标输入法", selection: Binding(
-        get: { draft.inputSourceID ?? "" },
-        set: { draft.inputSourceID = $0.isEmpty ? nil : $0 }
-      )) {
-        Text("不指定").tag("")
-        ForEach(sources) { Text($0.localizedName).tag($0.id) }
-      }
+      MGMenuPicker(
+        selection: Binding(
+          get: { draft.inputSourceID ?? "" },
+          set: { draft.inputSourceID = $0.isEmpty ? nil : $0 }
+        ),
+        options: [MGMenuOption("", "不指定")] + sources.map { MGMenuOption($0.id, $0.localizedName) },
+        minWidth: 180
+      )
 
       // 正则类型先校验 pattern 合法性,无效时单独提示(区别于"不命中")。
       if draft.type == .urlRegex, !draft.value.isEmpty,

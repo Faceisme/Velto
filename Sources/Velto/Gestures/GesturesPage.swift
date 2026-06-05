@@ -80,17 +80,17 @@ struct GesturesPage: View {
             HStack(spacing: 0) {
                 listColumn
                     .frame(width: 360)
-                    .background(Color.mgBg)
+                    .background(Color.clear)
                     .overlay(
                         Rectangle()
                             .fill(Color.mgHair)
-                            .frame(width: 0.5),
+                            .frame(width: 1),
                         alignment: .trailing
                     )
 
                 detailColumn
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(Color.mgBg)
+                    .background(Color.clear)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
@@ -170,13 +170,13 @@ struct GesturesPage: View {
             }
 
             // 模块级调试开关:只点亮手势日志(velto-debug.jsonl),不影响其它模块。
-            Rectangle()
-                .fill(Color.mgHair)
-                .frame(height: 0.5)
             HStack(spacing: 8) {
                 Image(systemName: "ladybug")
-                    .font(.system(size: 11))
+                    .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(Color.mgText2)
+                    .frame(width: 30, height: 30)
+                    .background(Color.mgAccentSoft)
+                    .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
                 VStack(alignment: .leading, spacing: 1) {
                     Text("调试日志")
                         .font(.mgLabelStrong)
@@ -195,8 +195,10 @@ struct GesturesPage: View {
                 .controlSize(.small)
                 .tint(.mgAccent)
             }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 12)
+            .padding(14)
+            .veltoGlassPanel(radius: MGRadius.cardSm)
+            .padding(.horizontal, 14)
+            .padding(.bottom, 14)
         }
     }
 
@@ -427,11 +429,19 @@ private struct GestureListItem: View {
             .padding(.vertical, 9)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(selected ? Color.mgAccent : Color.mgCard)
+                Group {
+                    if selected {
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .fill(Color.mgAccent)
+                    } else {
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .fill(Color.mgGlassWeak)
+                            .veltoNativeGlass(in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    }
+                }
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
                     .strokeBorder(selected ? Color.clear : Color.mgHair, lineWidth: 0.5)
             )
             .contentShape(Rectangle())
@@ -558,7 +568,7 @@ private struct GestureDetailPanel: View {
         return trimmed.isEmpty ? "未命名" : trimmed
     }
 
-    // 大白卡片:画布 + 撤销/清空 + 提示
+    // 录制卡:系统白底 + 原生玻璃效果 + 操作区
     private var captureCard: some View {
         VStack(alignment: .leading, spacing: 14) {
             // GesturePreviewCard 提供网格 / 已保存样本 / 玻璃药丸 / 提示;
@@ -597,7 +607,7 @@ private struct GestureDetailPanel: View {
             }
         }
         .padding(16)
-        .mgCard(radius: MGRadius.cardLg)
+        .veltoGlassPanel(radius: MGRadius.cardLg, shadow: true)
     }
 
     // 触发的快捷键卡片
@@ -622,7 +632,7 @@ private struct GestureDetailPanel: View {
         .padding(.horizontal, 20)
         .padding(.vertical, 12)
         .frame(minHeight: 56)
-        .mgCard(radius: MGRadius.card)
+        .veltoGlassPanel(radius: MGRadius.card)
     }
 }
 
@@ -668,7 +678,7 @@ struct BottomToolbar: View {
             .padding(.horizontal, 20)
             .frame(height: 54)
         }
-        .background(Color.mgCard)
+        .veltoGlassSurface(radius: 0, fill: .mgGlassWeak, shadow: false)
     }
 
     @ViewBuilder

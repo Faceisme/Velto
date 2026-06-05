@@ -422,13 +422,11 @@ private struct MouseBindingRow: View {
                     )
                 }
 
-                Picker("", selection: actionKind) {
-                    ForEach(MouseActionKind.allCases) { kind in
-                        Text(kind.label).tag(kind)
-                    }
-                }
-                .labelsHidden()
-                .frame(width: 112)
+                MGMenuPicker(
+                    selection: actionKind,
+                    options: MouseActionKind.allCases.map { MGMenuOption($0, $0.label) },
+                    minWidth: 112
+                )
 
                 Button("删除", action: onDelete)
                     .buttonStyle(MGPlainButtonStyle(foreground: .mgDanger))
@@ -438,26 +436,18 @@ private struct MouseBindingRow: View {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 10)
-        .background(
-            RoundedRectangle(cornerRadius: MGRadius.cardSm, style: .continuous)
-                .fill(Color.mgCardAlt)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: MGRadius.cardSm, style: .continuous)
-                .strokeBorder(Color.mgHairStrong, lineWidth: 0.5)
-        )
+        .veltoGlassPanel(radius: MGRadius.cardSm)
     }
 
     @ViewBuilder
     private var actionEditor: some View {
         switch binding.action {
         case .system:
-            Picker("系统动作", selection: systemActionBinding) {
-                ForEach(MouseSystemAction.allCases) { action in
-                    Text(action.label).tag(action)
-                }
-            }
-            .labelsHidden()
+            MGMenuPicker(
+                selection: systemActionBinding,
+                options: MouseSystemAction.allCases.map { MGMenuOption($0, $0.label) },
+                minWidth: 180
+            )
             .frame(maxWidth: 220, alignment: .leading)
         case .shortcut:
             HStack {
@@ -733,10 +723,7 @@ private struct MouseAppRulesSection: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
-        .background(
-            RoundedRectangle(cornerRadius: MGRadius.control, style: .continuous)
-                .fill(Color.mgCardAlt)
-        )
+        .veltoGlassPanel(radius: MGRadius.control)
     }
 
     private func binding<Value>(_ index: Int, _ keyPath: WritableKeyPath<MouseAppRule, Value>) -> Binding<Value> {
