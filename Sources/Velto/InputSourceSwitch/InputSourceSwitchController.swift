@@ -114,7 +114,7 @@ final class InputSourceSwitchController {
     }
     // 进入上下文时无条件重新应用(对齐 IPS:App 激活总是 re-select)。
     // 关键:CJKV 输入法即便"当前已是它",菜单栏虽显示该 IME,内部仍可能停在英文子模式
-    // (半切换),而 TIS API 读不到中/英子模式 —— 所以必须重跑临时窗口修复才能扶正成中文态。
+    // (半切换),而 TIS API 读不到中/英子模式。是否额外修复由 cjkFixEnabled/strategy 决定。
     // 非 CJKV(US 等无子模式的拉丁键盘)若已是当前,重选无意义,跳过以免刷屏 / 多余抑制。
     let targetIsCJKV = InputSourceCatalog.all().first { $0.id == targetID }?.isCJKV ?? false
     if targetID == InputSourceCatalog.current()?.id, !targetIsCJKV {

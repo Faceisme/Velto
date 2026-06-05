@@ -197,11 +197,13 @@ struct InputSourceSwitchPage: View {
           AnyView(toggle(\.cjkFixEnabled))
         }
         row(icon: "slider.horizontal.3", title: "CJKV 修复方式",
-            desc: "使用系统「选择上一个输入法」快捷键路径,不创建临时窗口、不激活 Velto。",
+            desc: "模拟快捷键不抢焦点;切换焦点会短暂激活 Velto,但对 macOS 26/CJKV 更强。",
             showDivider: true) {
-          AnyView(Text("模拟系统快捷键").font(.system(size: 13, weight: .medium)).foregroundStyle(Color.mgText2))
+          AnyView(enumPicker(\.cjkFixStrategy, cases: InputSourceCJKFixStrategy.allCases) { $0.displayName })
         }
-        if InputSourceSwitchSelector.previousInputSourceShortcut() == nil {
+        if store.preferences.inputSourceSwitch.cjkFixEnabled,
+           store.preferences.inputSourceSwitch.cjkFixStrategy == .previousInputSourceShortcut,
+           InputSourceSwitchSelector.previousInputSourceShortcut() == nil {
           row(icon: "exclamationmark.triangle", title: "系统未配置「选择上一个输入法」快捷键",
               desc: "该策略依赖此系统快捷键,请到键盘设置开启。", showDivider: true) {
             AnyView(Button("打开键盘设置") { PermissionManager.openKeyboardSettings() })

@@ -3,6 +3,11 @@ import Carbon
 import CoreGraphics
 import Foundation
 
+private final class TemporaryInputWindow: NSWindow {
+  override var canBecomeKey: Bool { true }
+  override var canBecomeMain: Bool { true }
+}
+
 /// 输入法切换执行器:TISSelectInputSource + 必要时 CJKV 二次确认。
 ///
 /// 切到 CJKV 输入法(中日韩越)常出现"菜单栏图标已变、实际还在英文"的半切换。
@@ -19,11 +24,29 @@ enum InputSourceSwitchSelector {
 
   /// CJKV 修复各步之间的间隔。与参考实现一致,给系统留出处理热键/激活的时间。
   private static let cjkStepDelay: TimeInterval = 0.1
+  private static let temporaryWindowDuration: TimeInterval = 0.08
+  private static let temporaryWindowActivationSuppressionDuration: TimeInterval = 0.5
 
   @MainActor private static var pendingWorkItems: [DispatchWorkItem] = []
+  @MainActor private static var temporaryWindow: NSWindow?
+  @MainActor private static var temporaryWindowPreviousApp: NSRunningApplication?
+  @MainActor private static var temporaryWindowActivationSuppressionEndTime: TimeInterval = 0
+  @MainActor private static var isShowingTemporaryWindow = false
 
   /// 合成键盘事件的抑制窗口。部分 flagsChanged 事件不一定保留 userData,用 PID + 时间兜底。
   private nonisolated(unsafe) static var syntheticEventEndTime: TimeInterval = 0
+
+  @MainActor
+  static var isHandlingTemporaryWindowActivation: Bool {
+    isShowingTemporaryWindow ||
+      ProcessInfo.processInfo.systemUptime < temporaryWindowActivationSuppressionEndTime
+  }
+
+  @MainActor
+  static func isTemporaryWindowApplicationActivation(_ app: NSRunningApplication) -> Bool {
+    guard isHandlingTemporaryWindowActivation else { return false }
+    return app.bundleIdentifier == Bundle.main.bundleIdentifier
+  }
 
   static func isSyntheticEvent(_ event: CGEvent?) -> Bool {
     guard let event else { return false }
@@ -57,8 +80,10 @@ enum InputSourceSwitchSelector {
     }
 
     switch cjkFixStrategy {
-    case .previousInputSourceShortcut, .temporaryInputWindow:
+    case .previousInputSourceShortcut:
       return switchCJKVWithPreviousShortcut(target: target, targetID: persistentID)
+    case .temporaryInputWindow:
+      return switchCJKVWithTemporaryWindow(target: target, targetID: persistentID)
     }
   }
 
@@ -114,13 +139,24 @@ enum InputSourceSwitchSelector {
     return ok
   }
 
-  /// 找一个非 CJKV 的可选中输入源做 bounce(排除目标自身)。优先用"当前源"——
-  /// 通常它就是即将离开的非 CJKV 源(如 US),bounce 最自然、视觉跳动最小。
-  private static func nonCJKVBounceSource(excluding targetID: String) -> (id: String, source: TISInputSource)? {
-    if let current = InputSourceCatalog.current(), !current.isCJKV, current.id != targetID,
-       let source = InputSourceCatalog.tisInputSource(forID: current.id) {
-      return (current.id, source)
+  @MainActor
+  private static func switchCJKVWithTemporaryWindow(target: TISInputSource, targetID: String) -> Bool {
+    let ok = plainSelect(target, id: targetID)
+    runTemporaryInputWindow(targetID: targetID)
+    scheduleWorkItem(after: temporaryWindowDuration + 0.05) {
+      if InputSourceCatalog.current()?.id == targetID {
+        InputSourceSwitchDebugLog.log("cjk-fix 临时窗口完成,当前=\(targetID)")
+      } else if let again = InputSourceCatalog.tisInputSource(forID: targetID) {
+        InputSourceSwitchDebugLog.log("cjk-fix 临时窗口兜底重选 → \(targetID)")
+        _ = TISSelectInputSource(again)
+      }
     }
+    return ok
+  }
+
+  /// 找一个非 CJKV 的可选中输入源做 bounce(排除目标自身)。对齐 InputSourcePro:
+  /// 使用输入源列表里的第一个非 CJKV 可选源。
+  private static func nonCJKVBounceSource(excluding targetID: String) -> (id: String, source: TISInputSource)? {
     guard let info = InputSourceCatalog.all().first(where: { !$0.isCJKV && $0.isEnabled && $0.id != targetID }),
           let source = InputSourceCatalog.tisInputSource(forID: info.id)
     else { return nil }
@@ -209,8 +245,78 @@ enum InputSourceSwitchSelector {
   }
 
   @MainActor
+  private static func runTemporaryInputWindow(targetID: String) {
+    closeTemporaryWindow(restorePrevious: false)
+    guard let screen = NSScreen.main ?? NSScreen.screens.first else { return }
+
+    temporaryWindowPreviousApp = NSWorkspace.shared.frontmostApplication
+
+    let size = NSSize(width: 3, height: 3)
+    let visible = screen.visibleFrame
+    let rect = NSRect(
+      x: visible.maxX - size.width - 8,
+      y: visible.minY + 8,
+      width: size.width,
+      height: size.height
+    )
+    let window = TemporaryInputWindow(
+      contentRect: rect,
+      styleMask: [.borderless],
+      backing: .buffered,
+      defer: false
+    )
+    let textView = NSTextView(frame: NSRect(origin: .zero, size: size))
+
+    window.contentView = textView
+    window.isReleasedWhenClosed = false
+    window.isOpaque = false
+    window.backgroundColor = .clear
+    window.alphaValue = 0.01
+    window.hasShadow = false
+    window.ignoresMouseEvents = true
+    window.level = .screenSaver
+    window.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]
+
+    temporaryWindow = window
+    suppressTemporaryWindowActivation()
+    isShowingTemporaryWindow = true
+
+    window.makeKeyAndOrderFront(nil)
+    NSApp.activate(ignoringOtherApps: true)
+    window.makeFirstResponder(textView)
+    InputSourceSwitchDebugLog.log("cjk-fix 临时窗口已弹出")
+
+    scheduleWorkItem(after: temporaryWindowDuration) {
+      closeTemporaryWindow(restorePrevious: true)
+    }
+  }
+
+  @MainActor
+  private static func closeTemporaryWindow(restorePrevious: Bool) {
+    guard let window = temporaryWindow else {
+      temporaryWindowPreviousApp = nil
+      isShowingTemporaryWindow = false
+      return
+    }
+    temporaryWindow = nil
+    window.orderOut(nil)
+    window.close()
+    suppressTemporaryWindowActivation()
+    isShowingTemporaryWindow = false
+
+    let previous = temporaryWindowPreviousApp
+    temporaryWindowPreviousApp = nil
+    guard restorePrevious, let previous,
+          previous.bundleIdentifier != Bundle.main.bundleIdentifier,
+          NSWorkspace.shared.frontmostApplication?.bundleIdentifier == Bundle.main.bundleIdentifier
+    else { return }
+    previous.activate(options: [])
+  }
+
+  @MainActor
   private static func cancelPendingWorkItems() {
     syntheticEventEndTime = 0
+    closeTemporaryWindow(restorePrevious: true)
     pendingWorkItems.forEach { $0.cancel() }
     pendingWorkItems.removeAll()
   }
@@ -236,6 +342,12 @@ enum InputSourceSwitchSelector {
     if let index = pendingWorkItems.firstIndex(where: { $0 === item }) {
       pendingWorkItems.remove(at: index)
     }
+  }
+
+  @MainActor
+  private static func suppressTemporaryWindowActivation() {
+    temporaryWindowActivationSuppressionEndTime =
+      ProcessInfo.processInfo.systemUptime + temporaryWindowActivationSuppressionDuration
   }
 
 }

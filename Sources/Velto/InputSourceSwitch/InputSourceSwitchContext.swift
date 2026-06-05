@@ -68,6 +68,9 @@ final class InputSourceContextMonitor {
     guard running, let front = NSWorkspace.shared.frontmostApplication,
           let bundleID = front.bundleIdentifier
     else { return }
+    if InputSourceSwitchSelector.isTemporaryWindowApplicationActivation(front) {
+      return
+    }
     let pid = front.processIdentifier
 
     if let browser = SupportedBrowserCatalog.browser(forBundleID: bundleID),
