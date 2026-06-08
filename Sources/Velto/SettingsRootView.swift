@@ -1,7 +1,7 @@
 import SwiftUI
 
 enum MGPage: String, CaseIterable, Identifiable, Hashable {
-    case gestures, mouseControl, window, switcher, inputSourceSwitch, general
+    case gestures, mouseControl, window, trackpadGesture, switcher, inputSourceSwitch, general
 
     var id: String { rawValue }
 
@@ -10,6 +10,7 @@ enum MGPage: String, CaseIterable, Identifiable, Hashable {
         case .gestures: "鼠标手势"
         case .mouseControl: "鼠标控制"
         case .window:   "窗口管理"
+        case .trackpadGesture: "触控板手势"
         case .switcher: "窗口切换"
         case .inputSourceSwitch: "输入法切换"
         case .general:  "通用设置"
@@ -21,6 +22,7 @@ enum MGPage: String, CaseIterable, Identifiable, Hashable {
         case .gestures: "cursorarrow.motionlines"
         case .mouseControl: "computermouse"
         case .window:   "macwindow"
+        case .trackpadGesture: "hand.draw"
         case .switcher: "rectangle.on.rectangle"
         case .inputSourceSwitch: "keyboard.badge.ellipsis"
         case .general:  "gearshape"
@@ -54,6 +56,7 @@ struct SettingsRootView: View {
             pageContent(.gestures, current: current) { GesturesPage() }
             pageContent(.mouseControl, current: current) { MouseControlPage() }
             pageContent(.window, current: current) { WindowManagementPage() }
+            pageContent(.trackpadGesture, current: current) { TrackpadGesturePage() }
             pageContent(.switcher, current: current) { SwitcherSettingsPage() }
             pageContent(.inputSourceSwitch, current: current) { InputSourceSwitchPage() }
             pageContent(.general, current: current) { GeneralSettingsPage() }

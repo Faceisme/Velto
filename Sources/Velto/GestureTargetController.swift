@@ -109,12 +109,57 @@ enum GestureTargetController {
             return
         }
 
+        maximizeWindow(window, containingEventLocation: point)
+    }
+
+    static func maximizeWindow(_ window: AXUIElement, containingEventLocation point: CGPoint) {
         let frame = DisplayCoordinateConverter.visibleAccessibilityFrame(containingEventLocation: point)
         guard !frame.isEmpty else {
             return
         }
 
         _ = setFrame(frame, ofWindow: window)
+    }
+
+    @discardableResult
+    static func minimizeWindow(_ window: AXUIElement) -> Bool {
+        runOnMainIfSelf(window) {
+            if AXUIElementSetAttributeValue(window, kAXMinimizedAttribute as CFString, kCFBooleanTrue) == .success {
+                return true
+            }
+            guard let button = axElementAttribute(kAXMinimizeButtonAttribute, of: window) else {
+                return false
+            }
+            return AXUIElementPerformAction(button, kAXPressAction as CFString) == .success
+        }
+    }
+
+    @discardableResult
+    static func closeWindow(_ window: AXUIElement) -> Bool {
+        runOnMainIfSelf(window) {
+            guard let button = axElementAttribute(kAXCloseButtonAttribute, of: window) else {
+                return false
+            }
+            return AXUIElementPerformAction(button, kAXPressAction as CFString) == .success
+        }
+    }
+
+    static func titleBarWindow(at point: CGPoint, titleBarHeight: CGFloat = 28) -> AXUIElement? {
+        guard let window = windowUnderPointer(at: point),
+              let frame = frame(ofWindow: window) else {
+            return nil
+        }
+        let candidates = [point, DisplayCoordinateConverter.eventLocationToAccessibilityPoint(point)]
+        for p in candidates where frame.contains(p) {
+            if isPointInTitleBarActivationBand(p, frame: frame, bandHeight: titleBarHeight) {
+                return window
+            }
+        }
+        return nil
+    }
+
+    static func isPointInTitleBarActivationBand(_ point: CGPoint, frame: CGRect, bandHeight: CGFloat) -> Bool {
+        frame.contains(point) && point.y >= frame.minY && point.y - frame.minY <= bandHeight
     }
 
     private static func targetUnderPointer(at point: CGPoint) -> GestureExecutionTarget {
@@ -258,7 +303,7 @@ enum GestureTargetController {
     /// 跨进程 AX 查询:遇到卡死 / 无响应的目标 App 可能长时间阻塞。给它设一个消息
     /// 超时,超时后调用快速失败(返回非 .success),上层回退到 frontmost App,避免
     /// detached task 长期挂住、最终晚回来补发旧手势。
-    private static let axMessagingTimeout: Float = 0.25
+    private static let axMessagingTimeout: Float = 0.10
 
     private static func elementAtPosition(_ point: CGPoint) -> AXUIElement? {
         let systemWide = AXUIElementCreateSystemWide()

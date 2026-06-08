@@ -14,6 +14,7 @@ import Foundation
 /// - `MouseControlController` smooth scroll / scroll hotkeys / button bindings
 /// - `WindowDragController` modifier+drag move/resize
 /// - `ContentZoomController` modifier+scroll content zoom
+/// - `TrackpadGestureController` titlebar trackpad gestures
 /// - `WindowShortcutController` shortcut-triggered window actions
 ///
 /// The tap callback runs on a private high-QoS thread+runloop. State that's
@@ -142,6 +143,7 @@ final class EventTapManager: @unchecked Sendable {
     private let windowDragController = WindowDragController()
     private let contentZoomController = ContentZoomController()
     private let windowShortcutController = WindowShortcutController()
+    private let trackpadGestureController = TrackpadGestureController()
 
     /// 手势 / 窗口管理是否启用的 tap 线程快照。只在 tap 线程读写(`handle` 与
     /// `performOnTapThread` 块都在 tap 线程;`init` 在 `start()` 之前于主线程设初值,
@@ -542,6 +544,10 @@ final class EventTapManager: @unchecked Sendable {
             return nil
         }
 
+        if raw == 0, trackpadGestureController.handleScrollWheel(event: event) {
+            return nil
+        }
+
         return mouseControlController.handleScrollWheel(event: event)
             ? nil
             : Unmanaged.passUnretained(event)
@@ -646,6 +652,7 @@ final class EventTapManager: @unchecked Sendable {
         )
         contentZoomController.updateModifierFlag(preferences.contentZoomModifierFlags)
         windowShortcutController.updateShortcut(preferences.windowMaximizeShortcut)
+        trackpadGestureController.setEnabled(preferences.trackpadGesturesEnabled)
     }
 
     private func prewarmCaches() {

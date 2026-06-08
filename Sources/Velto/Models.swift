@@ -58,6 +58,10 @@ struct AppPreferences: Codable, Equatable {
     /// 窗口管理(拖窗 / 内容缩放 / 窗口快捷键)总开关。关掉只停这三项,不影响手势 /
     /// 鼠标控制。带默认值,旧配置(无此字段)解码时按 `decodeIfPresent` 回退到 true。
     var windowManagementEnabled: Bool = true
+    /// 触控板双指手势总开关。默认关,避免升级后立即接管标题栏滚动。
+    var trackpadGesturesEnabled: Bool = false
+    /// 触控板手势调试日志开关。默认关,关闭时日志路径零文件开销。
+    var trackpadGestureDebugLoggingEnabled: Bool = false
     var showTrail: Bool
     var showMenuBarIcon: Bool
     var recognitionThreshold: Double
@@ -118,6 +122,8 @@ struct AppPreferences: Codable, Equatable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         gesturesEnabled = try container.decodeIfPresent(Bool.self, forKey: .gesturesEnabled) ?? Self.defaults.gesturesEnabled
         windowManagementEnabled = try container.decodeIfPresent(Bool.self, forKey: .windowManagementEnabled) ?? Self.defaults.windowManagementEnabled
+        trackpadGesturesEnabled = try container.decodeIfPresent(Bool.self, forKey: .trackpadGesturesEnabled) ?? Self.defaults.trackpadGesturesEnabled
+        trackpadGestureDebugLoggingEnabled = try container.decodeIfPresent(Bool.self, forKey: .trackpadGestureDebugLoggingEnabled) ?? Self.defaults.trackpadGestureDebugLoggingEnabled
         showTrail = try container.decodeIfPresent(Bool.self, forKey: .showTrail) ?? Self.defaults.showTrail
         showMenuBarIcon = try container.decodeIfPresent(Bool.self, forKey: .showMenuBarIcon) ?? Self.defaults.showMenuBarIcon
         recognitionThreshold = try container.decodeIfPresent(Double.self, forKey: .recognitionThreshold) ?? Self.defaults.recognitionThreshold
@@ -331,6 +337,7 @@ final class GestureStore {
     /// 把"调试模式"开关同步给 `DebugLog` —— 覆盖启动加载 / UI 改动 / 配置导入。
     private func syncDebugLog() {
         DebugLog.setEnabled(preferences.debugLoggingEnabled)
+        TrackpadGestureDebugLog.setEnabled(preferences.trackpadGestureDebugLoggingEnabled)
     }
 
     private func notifyChanged(reason: GestureStoreChangeReason) {

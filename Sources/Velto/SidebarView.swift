@@ -42,6 +42,13 @@ struct SidebarView: View {
                     ) { page = .window }
 
                     SidebarItem(
+                        icon: MGPage.trackpadGesture.icon,
+                        label: MGPage.trackpadGesture.label,
+                        badge: nil,
+                        active: page == .trackpadGesture
+                    ) { page = .trackpadGesture }
+
+                    SidebarItem(
                         icon: MGPage.switcher.icon,
                         label: MGPage.switcher.label,
                         badge: nil,
