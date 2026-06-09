@@ -82,6 +82,10 @@ final class InputSourceContextMonitor {
         let ctx = BrowserAXReader.readContext(pid: pid, engine: engine)
         DispatchQueue.main.async {
           guard let self, self.running else { return }
+          // 这次 AX 读取是异步的(最长可拖到 AXCallQueue 的 1s 超时)。若读取期间用户已切走,
+          // 结果就过期了 —— 不能回灌:否则会发出一个已不在前台的浏览器上下文,触发一次错误
+          // 切换,还会 cancel 掉新 app 正在跑的切换/校验序列。仅当该浏览器仍在前台才采纳。
+          guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { return }
           self.emitBrowserContext(bundleID: bundleID, page: ctx)
         }
       }

@@ -27,6 +27,13 @@ enum InputSourceSwitchSelector {
   private static let temporaryWindowDuration: TimeInterval = 0.08
   private static let temporaryWindowActivationSuppressionDuration: TimeInterval = 0.5
 
+  /// 通用切换的读回校验间隔与最大重试次数。TISSelectInputSource 返回 noErr **不代表**
+  /// 真的切过去了 —— 它是异步的,重型第三方输入法(豆包等)激活/释放有延迟,快速切换时
+  /// 这次请求会被系统吞掉(停在旧输入法但 TIS 仍回成功)。切完延时读回当前输入源,未到位
+  /// 就重选。两次重试都落在 Controller 的 0.6s 程序化切换抑制窗口内,不会污染 restore cache。
+  private static let verifyRetryDelay: TimeInterval = 0.15
+  private static let maxVerifyRetries = 2
+
   @MainActor private static var pendingWorkItems: [DispatchWorkItem] = []
   @MainActor private static var temporaryWindow: NSWindow?
   @MainActor private static var temporaryWindowPreviousApp: NSRunningApplication?
@@ -74,9 +81,9 @@ enum InputSourceSwitchSelector {
     }
 
     let isCJKV = InputSourceCatalog.all().first { $0.id == persistentID }?.isCJKV ?? false
-    // 非 CJKV,或用户关闭了修复:直接选,选完即止。
+    // 非 CJKV,或用户关闭了修复:直接选 + 读回校验/重试(裸 TIS 在快速切换下会"假成功")。
     guard cjkFixEnabled, isCJKV else {
-      return plainSelect(target, id: persistentID)
+      return plainSelectWithVerify(target, id: persistentID)
     }
 
     switch cjkFixStrategy {
@@ -97,6 +104,44 @@ enum InputSourceSwitchSelector {
     }
     InputSourceSwitchDebugLog.log("select OK id=\(id)")
     return true
+  }
+
+  /// 纯选择 + 读回校验/重试。用于非 CJKV、或关闭 CJKV 修复时的通用路径。
+  /// 见 verifyRetryDelay 注释:裸 TISSelectInputSource 在快速切换下会"假成功"。
+  @MainActor
+  @discardableResult
+  private static func plainSelectWithVerify(_ source: TISInputSource, id: String) -> Bool {
+    let ok = plainSelect(source, id: id)
+    guard ok else { return false }
+    scheduleVerifyRetry(targetID: id, attempt: 1)
+    return ok
+  }
+
+  /// 延时读回:当前已是目标则收工;否则重选并再排一次,直到 maxVerifyRetries。
+  /// 走 scheduleWorkItem 排队 —— 下一次 select() 的 cancelPendingWorkItems() 会自动
+  /// 取消过期校验,既不和更晚的程序化切换抢,也不和用户随后的手动切换打架。
+  @MainActor
+  private static func scheduleVerifyRetry(targetID: String, attempt: Int) {
+    scheduleWorkItem(after: verifyRetryDelay) {
+      let current = InputSourceCatalog.current()?.id
+      if current == targetID {
+        if attempt > 1 {
+          InputSourceSwitchDebugLog.log("select 校验通过(重试 \(attempt - 1) 次后),当前=\(targetID)")
+        }
+        return
+      }
+      guard attempt <= maxVerifyRetries,
+            let again = InputSourceCatalog.tisInputSource(forID: targetID)
+      else {
+        InputSourceSwitchDebugLog.log(
+          "select 校验失败:重试 \(maxVerifyRetries) 次后仍未到位 target=\(targetID) 当前=\(current ?? "nil")")
+        return
+      }
+      InputSourceSwitchDebugLog.log(
+        "select 未生效(当前=\(current ?? "nil")),第 \(attempt) 次重选 → \(targetID)")
+      _ = TISSelectInputSource(again)
+      scheduleVerifyRetry(targetID: targetID, attempt: attempt + 1)
+    }
   }
 
   // MARK: - CJKV 修复:bounce + 选上一个 + Command 轻点 + 兜底重选
