@@ -21,6 +21,19 @@ enum GestureTargetController {
         let bounds: CGRect
     }
 
+    struct TitleBarTarget: @unchecked Sendable {
+        let window: AXUIElement
+        let pid: pid_t?
+        let ownerName: String
+        let frame: CGRect
+        let source: String
+
+        var debugSummary: String {
+            let pidText = pid.map(String.init) ?? "-"
+            return "source=\(source) pid=\(pidText) app=\"\(ownerName)\" frame=\(Int(frame.minX)),\(Int(frame.minY)),\(Int(frame.width)),\(Int(frame.height))"
+        }
+    }
+
     /// Velto 自己的 pid。所有"鼠标下的目标"查询都必须先 skip 这个 pid ——
     /// 否则当鼠标停在 Velto 设置窗口边缘时(典型场景:用户 resize 设置窗口),
     /// `AXUIElementCopyElementAtPosition` 会被 AppKit 同步路由回我们自己的
@@ -145,6 +158,49 @@ enum GestureTargetController {
     }
 
     static func titleBarWindow(at point: CGPoint, titleBarHeight: CGFloat = 28) -> AXUIElement? {
+        titleBarTarget(at: point, titleBarHeight: titleBarHeight)?.window
+    }
+
+    static func titleBarTarget(at point: CGPoint, titleBarHeight: CGFloat = 28) -> TitleBarTarget? {
+        let candidatePoints = targetLookupPoints(for: point)
+        let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+        let cachedWindowList = (CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]]) ?? []
+
+        if candidatePoints.contains(where: { topmostWindowIsSelf(in: cachedWindowList, at: $0) }) {
+            for p in candidatePoints {
+                guard let candidate = selfWindowCandidate(in: cachedWindowList, at: p),
+                      isPointInTitleBarActivationBand(p, frame: candidate.bounds, bandHeight: titleBarHeight) else {
+                    continue
+                }
+                let target = target(from: candidate)
+                guard let window = target.window else { return nil }
+                return TitleBarTarget(
+                    window: window,
+                    pid: target.pid ?? candidate.pid,
+                    ownerName: candidate.ownerName,
+                    frame: frame(ofWindow: window) ?? candidate.bounds,
+                    source: "cg-self"
+                )
+            }
+            return nil
+        }
+
+        for p in candidatePoints {
+            guard let candidate = windowCandidate(in: cachedWindowList, at: p),
+                  isPointInTitleBarActivationBand(p, frame: candidate.bounds, bandHeight: titleBarHeight) else {
+                continue
+            }
+            let target = target(from: candidate)
+            guard let window = target.window else { return nil }
+            return TitleBarTarget(
+                window: window,
+                pid: target.pid ?? candidate.pid,
+                ownerName: candidate.ownerName,
+                frame: frame(ofWindow: window) ?? candidate.bounds,
+                source: "cg"
+            )
+        }
+
         guard let window = windowUnderPointer(at: point),
               let frame = frame(ofWindow: window) else {
             return nil
@@ -152,7 +208,17 @@ enum GestureTargetController {
         let candidates = [point, DisplayCoordinateConverter.eventLocationToAccessibilityPoint(point)]
         for p in candidates where frame.contains(p) {
             if isPointInTitleBarActivationBand(p, frame: frame, bandHeight: titleBarHeight) {
-                return window
+                let pid = processIdentifier(for: window)
+                let ownerName = pid
+                    .flatMap { NSRunningApplication(processIdentifier: $0)?.localizedName }
+                    ?? ""
+                return TitleBarTarget(
+                    window: window,
+                    pid: pid,
+                    ownerName: ownerName,
+                    frame: frame,
+                    source: "ax"
+                )
             }
         }
         return nil

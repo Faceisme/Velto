@@ -11,7 +11,7 @@ final class TrackpadGestureController: @unchecked Sendable {
     }
 
     private struct Session {
-        let window: AXUIElement
+        let target: GestureTargetController.TitleBarTarget
         var dx: Double
         var dy: Double
     }
@@ -90,7 +90,7 @@ final class TrackpadGestureController: @unchecked Sendable {
     private func begin(event: CGEvent) -> Bool {
         swallowMomentum = false
         let point = event.location
-        guard let window = GestureTargetController.titleBarWindow(
+        guard let target = GestureTargetController.titleBarTarget(
             at: point,
             titleBarHeight: titleBarActivationBandHeight
         ) else {
@@ -98,10 +98,10 @@ final class TrackpadGestureController: @unchecked Sendable {
             TrackpadGestureDebugLog.log("began ignore outside-titlebar-band x=\(Int(point.x)) y=\(Int(point.y)) band=\(Int(titleBarActivationBandHeight))")
             return false
         }
-        var next = Session(window: window, dx: 0, dy: 0)
+        var next = Session(target: target, dx: 0, dy: 0)
         accumulate(into: &next, event: event)
         session = next
-        TrackpadGestureDebugLog.log("began own x=\(Int(point.x)) y=\(Int(point.y)) band=\(Int(titleBarActivationBandHeight))")
+        TrackpadGestureDebugLog.log("began own x=\(Int(point.x)) y=\(Int(point.y)) band=\(Int(titleBarActivationBandHeight)) \(target.debugSummary)")
         return true
     }
 
@@ -136,8 +136,8 @@ final class TrackpadGestureController: @unchecked Sendable {
             return
         }
 
-        TrackpadGestureDebugLog.log("ended dx=\(Int(session.dx)) dy=\(Int(session.dy)) action=\(action)")
-        let box = WindowBox(window: session.window)
+        TrackpadGestureDebugLog.log("ended dx=\(Int(session.dx)) dy=\(Int(session.dy)) action=\(action) \(session.target.debugSummary)")
+        let box = WindowBox(window: session.target.window)
         DispatchQueue.global(qos: .userInteractive).async {
             switch action {
             case .maximize:
