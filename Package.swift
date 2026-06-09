@@ -8,11 +8,18 @@ let package = Package(
         .macOS(.v26)
     ],
     products: [
-        .executable(name: "Velto", targets: ["Velto"])
+        .library(name: "betterfinder", targets: ["betterfinder"]),
+        .executable(name: "Velto", targets: ["Velto"]),
+        .executable(name: "BetterFinderExtension", targets: ["BetterFinderExtension"])
     ],
     targets: [
+        .target(
+            name: "betterfinder",
+            path: "Sources/betterfinder"
+        ),
         .executableTarget(
             name: "Velto",
+            dependencies: ["betterfinder"],
             path: "Sources/Velto",
             linkerSettings: [
                 // 切换器要用 SkyLight 私有框架里的 CGS / SLPS / _AXUIElementGetWindow
@@ -24,8 +31,18 @@ let package = Package(
                 .linkedFramework("SkyLight")
             ]
         ),
+        .executableTarget(
+            name: "BetterFinderExtension",
+            dependencies: ["betterfinder"],
+            path: "Sources/BetterFinderExtension",
+            linkerSettings: [
+                .unsafeFlags(["-Xlinker", "-e", "-Xlinker", "_NSExtensionMain"]),
+                .linkedFramework("FinderSync")
+            ]
+        ),
         .testTarget(
             name: "VeltoTests",
+            dependencies: ["betterfinder"],
             path: "Tests/VeltoTests"
         )
     ],

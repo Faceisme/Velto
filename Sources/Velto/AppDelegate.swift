@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import SwiftUI
+import betterfinder
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -128,6 +129,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         openSettings()
         return true
+    }
+
+    func application(_ application: NSApplication, open urls: [URL]) {
+        BetterFinderDebugLog.log("appDelegate openURLs count=\(urls.count) urls=\(urls.map(\.absoluteString).joined(separator: ","))")
+        for url in urls {
+            handleBetterFinderCallbackURL(url)
+        }
+    }
+
+    private func handleBetterFinderCallbackURL(_ url: URL) {
+        guard url.scheme == BetterFinderActionBridge.callbackURLScheme else {
+            BetterFinderDebugLog.log("callback ignored scheme=\(url.scheme ?? "-")")
+            return
+        }
+        do {
+            let request = try BetterFinderActionBridge.request(from: url)
+            BetterFinderDebugLog.log("callback received kind=\(request.kind.rawValue) app=\(request.app?.name ?? "-") urls=\(request.urlPaths.joined(separator: ","))")
+            NSLog("BetterFinder callback received: %@ %@", request.kind.rawValue, request.urlPaths.joined(separator: ","))
+            try BetterFinderActionRunner.perform(request)
+            BetterFinderDebugLog.log("callback performed kind=\(request.kind.rawValue)")
+        } catch {
+            BetterFinderDebugLog.log("callback failed error=\(error.localizedDescription)")
+            NSLog("BetterFinder callback failed: %@", error.localizedDescription)
+            DebugLog.event("betterfinderBridge", [
+                "error": error.localizedDescription
+            ])
+        }
     }
 
     private func configureStatusItem() {

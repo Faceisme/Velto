@@ -3,6 +3,7 @@ import ApplicationServices
 @preconcurrency import CoreFoundation
 import CoreGraphics
 import Foundation
+import betterfinder
 
 /// Owns the global CGEventTaps, the dedicated HID tap-callback thread, and the
 /// controllers that act on events. Wheel events intentionally run through a
@@ -144,6 +145,7 @@ final class EventTapManager: @unchecked Sendable {
     private let contentZoomController = ContentZoomController()
     private let windowShortcutController = WindowShortcutController()
     private let trackpadGestureController = TrackpadGestureController()
+    private let betterFinderShortcutController = BetterFinderGlobalShortcutController()
 
     /// 手势 / 窗口管理是否启用的 tap 线程快照。只在 tap 线程读写(`handle` 与
     /// `performOnTapThread` 块都在 tap 线程;`init` 在 `start()` 之前于主线程设初值,
@@ -171,6 +173,7 @@ final class EventTapManager: @unchecked Sendable {
 
     private var activationObserver: NSObjectProtocol?
     private var storeObserver: NSObjectProtocol?
+    private var betterFinderObserver: NSObjectProtocol?
 
     @MainActor
     init(store: GestureStore = .shared) {
@@ -218,6 +221,18 @@ final class EventTapManager: @unchecked Sendable {
                 }
             }
         }
+
+        betterFinderShortcutController.updatePreferences(BetterFinderPreferencesStore.shared.preferences)
+        betterFinderObserver = NotificationCenter.default.addObserver(
+            forName: BetterFinderPreferencesStore.didChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            let preferences = BetterFinderPreferencesStore.shared.preferences
+            self?.performOnTapThread { [weak self] in
+                self?.betterFinderShortcutController.updatePreferences(preferences)
+            }
+        }
     }
 
     deinit {
@@ -226,6 +241,9 @@ final class EventTapManager: @unchecked Sendable {
         }
         if let storeObserver {
             NotificationCenter.default.removeObserver(storeObserver)
+        }
+        if let betterFinderObserver {
+            NotificationCenter.default.removeObserver(betterFinderObserver)
         }
         stop()
     }
@@ -487,6 +505,9 @@ final class EventTapManager: @unchecked Sendable {
                 return Unmanaged.passUnretained(event)
             }
             if mouseControlController.handleTriggerEvent(type: type, event: event, normalizedFlags: raw) {
+                return nil
+            }
+            if betterFinderShortcutController.handleKeyDown(event: event, normalizedFlags: raw) {
                 return nil
             }
             // 窗口快捷键(如最大化)归窗口管理,受总开关门控。

@@ -12,6 +12,17 @@
     <string>com.face.myapp</string>
     <key>CFBundleIconFile</key>
     <string>Velto</string>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>Velto BetterFinder</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>velto-betterfinder</string>
+            </array>
+        </dict>
+    </array>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
@@ -26,6 +37,8 @@
     <string>26.0</string>
     <key>LSUIElement</key>
     <true/>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>Velto 需要访问 Finder 来读取当前选中文件或窗口路径,用于增强Finder的打开与拷贝路径功能。</string>
     <key>NSAccessibilityUsageDescription</key>
     <string>Velto 需要辅助功能权限来监听右键手势并发送快捷键。</string>
     <key>NSInputMonitoringUsageDescription</key>

@@ -61,6 +61,13 @@ struct SidebarView: View {
                         badge: nil,
                         active: page == .inputSourceSwitch
                     ) { page = .inputSourceSwitch }
+
+                    SidebarItem(
+                        icon: MGPage.betterFinder.icon,
+                        label: MGPage.betterFinder.label,
+                        badge: nil,
+                        active: page == .betterFinder
+                    ) { page = .betterFinder }
                 }
 
                 Spacer().frame(height: 14)
