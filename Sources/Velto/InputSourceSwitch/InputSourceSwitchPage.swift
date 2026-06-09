@@ -21,9 +21,8 @@ struct InputSourceSwitchPage: View {
   @State private var segment: Segment = .general
   @State private var editingBrowserRule: InputSourceBrowserRule?
   @State private var showAppPicker = false
-
-  /// 输入法候选(进页面取一次)。
-  private var sources: [InputSourceInfo] { InputSourceCatalog.all() }
+  @State private var sources = InputSourceCatalog.all()
+  @State private var installedBrowsers = SupportedBrowserCatalog.installed()
 
   var body: some View {
     VStack(spacing: 0) {
@@ -146,13 +145,12 @@ struct InputSourceSwitchPage: View {
         sectionLabel("启用的浏览器")
         GroupCard(radius: MGRadius.cardLg) {
           VStack(spacing: 0) {
-            let installed = SupportedBrowserCatalog.installed()
-            if installed.isEmpty { emptyHint("没检测到受支持的浏览器。") }
-            ForEach(installed) { b in
+            if installedBrowsers.isEmpty { emptyHint("没检测到受支持的浏览器。") }
+            ForEach(installedBrowsers) { b in
               row(
                 title: b.displayName,
                 desc: b.bundleID,
-                showDivider: b.id != installed.first?.id,
+                showDivider: b.id != installedBrowsers.first?.id,
                 icon: { AnyView(BrowserIcon(browser: b)) }
               ) {
                 AnyView(Toggle("", isOn: Binding(
@@ -399,27 +397,38 @@ struct InputSourceSwitchPage: View {
 
 private struct AppRuleIcon: View {
   let rule: InputSourceAppRule
+  @State private var icon: NSImage?
 
   var body: some View {
-    if let icon = appIcon {
-      let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
-      Image(nsImage: icon)
-        .resizable()
-        .aspectRatio(contentMode: .fit)
-        .frame(width: 30, height: 30)
-        .padding(5)
-        .frame(width: 40, height: 40)
-        .background(shape.fill(Color.mgGlassControl))
-        .veltoNativeGlass(in: shape)
-        .overlay {
-          shape.strokeBorder(Color.mgHair, lineWidth: 0.5)
-        }
-    } else {
-      ActionIcon(systemName: "app")
+    Group {
+      if let icon {
+        let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
+        Image(nsImage: icon)
+          .resizable()
+          .aspectRatio(contentMode: .fit)
+          .frame(width: 30, height: 30)
+          .padding(5)
+          .frame(width: 40, height: 40)
+          .background(shape.fill(Color.mgGlassControl))
+          .veltoNativeGlass(in: shape)
+          .overlay {
+            shape.strokeBorder(Color.mgHair, lineWidth: 0.5)
+          }
+      } else {
+        ActionIcon(systemName: "app")
+      }
     }
+    .onAppear(perform: loadIconIfNeeded)
+    .onChange(of: rule.bundleIdentifier) { _, _ in icon = loadIcon() }
+    .onChange(of: rule.bundlePath) { _, _ in icon = loadIcon() }
   }
 
-  private var appIcon: NSImage? {
+  private func loadIconIfNeeded() {
+    guard icon == nil else { return }
+    icon = loadIcon()
+  }
+
+  private func loadIcon() -> NSImage? {
     if let bundlePath = rule.bundlePath,
        FileManager.default.fileExists(atPath: bundlePath) {
       return NSWorkspace.shared.icon(forFile: bundlePath)
@@ -433,27 +442,37 @@ private struct AppRuleIcon: View {
 
 private struct BrowserIcon: View {
   let browser: SupportedBrowser
+  @State private var icon: NSImage?
 
   var body: some View {
-    if let icon = browserIcon {
-      let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
-      Image(nsImage: icon)
-        .resizable()
-        .aspectRatio(contentMode: .fit)
-        .frame(width: 30, height: 30)
-        .padding(5)
-        .frame(width: 40, height: 40)
-        .background(shape.fill(Color.mgGlassControl))
-        .veltoNativeGlass(in: shape)
-        .overlay {
-          shape.strokeBorder(Color.mgHair, lineWidth: 0.5)
-        }
-    } else {
-      ActionIcon(systemName: "globe")
+    Group {
+      if let icon {
+        let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
+        Image(nsImage: icon)
+          .resizable()
+          .aspectRatio(contentMode: .fit)
+          .frame(width: 30, height: 30)
+          .padding(5)
+          .frame(width: 40, height: 40)
+          .background(shape.fill(Color.mgGlassControl))
+          .veltoNativeGlass(in: shape)
+          .overlay {
+            shape.strokeBorder(Color.mgHair, lineWidth: 0.5)
+          }
+      } else {
+        ActionIcon(systemName: "globe")
+      }
     }
+    .onAppear(perform: loadIconIfNeeded)
+    .onChange(of: browser.bundleID) { _, _ in icon = loadIcon() }
   }
 
-  private var browserIcon: NSImage? {
+  private func loadIconIfNeeded() {
+    guard icon == nil else { return }
+    icon = loadIcon()
+  }
+
+  private func loadIcon() -> NSImage? {
     guard let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: browser.bundleID) else {
       return nil
     }

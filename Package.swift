@@ -23,6 +23,10 @@ let package = Package(
                 .unsafeFlags(["-F", "/System/Library/PrivateFrameworks"]),
                 .linkedFramework("SkyLight")
             ]
+        ),
+        .testTarget(
+            name: "VeltoTests",
+            path: "Tests/VeltoTests"
         )
     ],
     swiftLanguageModes: [.v6]
