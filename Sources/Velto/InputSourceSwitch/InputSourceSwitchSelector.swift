@@ -27,12 +27,12 @@ enum InputSourceSwitchSelector {
   private static let temporaryWindowDuration: TimeInterval = 0.08
   private static let temporaryWindowActivationSuppressionDuration: TimeInterval = 0.5
 
-  /// 通用切换的读回校验间隔与最大重试次数。TISSelectInputSource 返回 noErr **不代表**
-  /// 真的切过去了 —— 它是异步的,重型第三方输入法(豆包等)激活/释放有延迟,快速切换时
-  /// 这次请求会被系统吞掉(停在旧输入法但 TIS 仍回成功)。切完延时读回当前输入源,未到位
-  /// 就重选。两次重试都落在 Controller 的 0.6s 程序化切换抑制窗口内,不会污染 restore cache。
-  private static let verifyRetryDelay: TimeInterval = 0.15
-  private static let maxVerifyRetries = 2
+  /// 进入新上下文后,延这一拍再切。didActivate 触发的当下,前一个重型 IME(豆包等)往往
+  /// 还没释放、新 App 的 TSM 输入上下文也没就绪,此刻同步调 TISSelectInputSource 会"假成功"
+  /// (返回 noErr 但实际没切过去,停在旧输入法)。等激活 settle 后只切一次即可,既不需要二次
+  /// 重选(二次 select 会把 CJKV 顶进英文子模式 → 半切换),也避免了原来的假成功。
+  /// 0.15s 取自日志经验:旧版"切完 0.15s 重选一次必成功",说明这个时点系统已就绪。
+  private static let settleDelay: TimeInterval = 0.15
 
   @MainActor private static var pendingWorkItems: [DispatchWorkItem] = []
   @MainActor private static var temporaryWindow: NSWindow?
@@ -81,9 +81,11 @@ enum InputSourceSwitchSelector {
     }
 
     let isCJKV = InputSourceCatalog.all().first { $0.id == persistentID }?.isCJKV ?? false
-    // 非 CJKV,或用户关闭了修复:直接选 + 读回校验/重试(裸 TIS 在快速切换下会"假成功")。
+    // 非 CJKV,或用户关闭了修复:延一拍后单次 TISSelectInputSource(理由见 settleDelay)。
+    // 单次切换对齐 InputSourcePro 的无修复路径:绝不二次重选 —— 二次 select 会把豆包等 CJKV
+    // 顶进英文子模式(菜单栏显示豆包、实际打英文的半切换),且 TIS 读不到中/英子模式无从校验。
     guard cjkFixEnabled, isCJKV else {
-      return plainSelectWithVerify(target, id: persistentID)
+      return plainSelectDeferred(id: persistentID)
     }
 
     switch cjkFixStrategy {
@@ -106,42 +108,21 @@ enum InputSourceSwitchSelector {
     return true
   }
 
-  /// 纯选择 + 读回校验/重试。用于非 CJKV、或关闭 CJKV 修复时的通用路径。
-  /// 见 verifyRetryDelay 注释:裸 TISSelectInputSource 在快速切换下会"假成功"。
+  /// 延时单次切换。等待 settleDelay 让前一个 IME 释放、新 App 上下文就绪后再切一次。
+  /// 走 scheduleWorkItem 排队 —— 下一次 select() 开头的 cancelPendingWorkItems() 会取消这笔
+  /// 尚未触发的延时切,快速切换时只有最后一次真正落地,期间不产生任何多余的 select。
+  /// 句柄按 ID 在闭包内重新解析,避免把非 Sendable 的 TISInputSource 跨异步边界捕获(Swift 6)。
   @MainActor
   @discardableResult
-  private static func plainSelectWithVerify(_ source: TISInputSource, id: String) -> Bool {
-    let ok = plainSelect(source, id: id)
-    guard ok else { return false }
-    scheduleVerifyRetry(targetID: id, attempt: 1)
-    return ok
-  }
-
-  /// 延时读回:当前已是目标则收工;否则重选并再排一次,直到 maxVerifyRetries。
-  /// 走 scheduleWorkItem 排队 —— 下一次 select() 的 cancelPendingWorkItems() 会自动
-  /// 取消过期校验,既不和更晚的程序化切换抢,也不和用户随后的手动切换打架。
-  @MainActor
-  private static func scheduleVerifyRetry(targetID: String, attempt: Int) {
-    scheduleWorkItem(after: verifyRetryDelay) {
-      let current = InputSourceCatalog.current()?.id
-      if current == targetID {
-        if attempt > 1 {
-          InputSourceSwitchDebugLog.log("select 校验通过(重试 \(attempt - 1) 次后),当前=\(targetID)")
-        }
+  private static func plainSelectDeferred(id: String) -> Bool {
+    scheduleWorkItem(after: settleDelay) {
+      guard let source = InputSourceCatalog.tisInputSource(forID: id) else {
+        InputSourceSwitchDebugLog.log("select FAILED(延时): 找不到输入源 id=\(id)")
         return
       }
-      guard attempt <= maxVerifyRetries,
-            let again = InputSourceCatalog.tisInputSource(forID: targetID)
-      else {
-        InputSourceSwitchDebugLog.log(
-          "select 校验失败:重试 \(maxVerifyRetries) 次后仍未到位 target=\(targetID) 当前=\(current ?? "nil")")
-        return
-      }
-      InputSourceSwitchDebugLog.log(
-        "select 未生效(当前=\(current ?? "nil")),第 \(attempt) 次重选 → \(targetID)")
-      _ = TISSelectInputSource(again)
-      scheduleVerifyRetry(targetID: targetID, attempt: attempt + 1)
+      _ = plainSelect(source, id: id)
     }
+    return true
   }
 
   // MARK: - CJKV 修复:bounce + 选上一个 + Command 轻点 + 兜底重选
@@ -356,6 +337,14 @@ enum InputSourceSwitchSelector {
           NSWorkspace.shared.frontmostApplication?.bundleIdentifier == Bundle.main.bundleIdentifier
     else { return }
     previous.activate(options: [])
+  }
+
+  /// 作废所有尚未触发的延时切换。Controller 进入新上下文时调用,杜绝上一上下文排定的延时
+  /// select 在新的前台 App 里误触发 —— 例如刚切到 WeChat 排了豆包(延 0.15s),又立刻切回
+  /// Claude,那笔豆包必须取消,否则会在 Claude 里把输入法切成豆包(豆包→US 失败的真凶)。
+  @MainActor
+  static func cancelPending() {
+    cancelPendingWorkItems()
   }
 
   @MainActor
