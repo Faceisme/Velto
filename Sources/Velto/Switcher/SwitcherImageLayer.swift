@@ -23,7 +23,7 @@ enum CALayerContents: @unchecked Sendable {
 final class SwitcherImageLayer: CALayer {
     override init() {
         super.init()
-        contentsGravity = .resize
+        contentsGravity = .resizeAspectFill
         magnificationFilter = .trilinear
         minificationFilter = .trilinear
         delegate = NoAnimationDelegate.shared

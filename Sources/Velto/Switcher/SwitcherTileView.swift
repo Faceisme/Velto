@@ -112,9 +112,9 @@ final class SwitcherTileView: NSView {
         // 两行文字时整个标题区高一点(app 名 + 窗口标题),单行时矮一点
         let titleAreaH: CGFloat = hasSubtitle ? 40 : 26
         let thumbH: CGFloat = size.height - titleAreaH - contentInset
-        let iconSize: CGFloat = 64
-        let badgeSize: CGFloat = 28
-        let badgePad: CGFloat = 6
+        let iconSize: CGFloat = 88
+        let badgeSize: CGFloat = 88
+        let badgePad: CGFloat = 8
 
         let thumbFrame = NSRect(
             x: contentInset, y: titleAreaH,

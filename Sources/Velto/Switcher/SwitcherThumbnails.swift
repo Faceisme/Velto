@@ -123,8 +123,12 @@ final class SwitcherThumbnails {
         let filter = SCContentFilter(desktopIndependentWindow: scWindow)
         let config = SCStreamConfiguration()
         let scale: CGFloat = 2.0
-        config.width = Int(min(scWindow.frame.width * scale, Self.maxDimension * scale))
-        config.height = Int(min(scWindow.frame.height * scale, Self.maxDimension * scale))
+        let maxPixels = Self.maxDimension * scale
+        let sourceWidth = max(1, scWindow.frame.width * scale)
+        let sourceHeight = max(1, scWindow.frame.height * scale)
+        let thumbnailScale = min(1, maxPixels / max(sourceWidth, sourceHeight))
+        config.width = max(1, Int((sourceWidth * thumbnailScale).rounded()))
+        config.height = max(1, Int((sourceHeight * thumbnailScale).rounded()))
         config.showsCursor = false
         config.scalesToFit = true
         config.preservesAspectRatio = true
