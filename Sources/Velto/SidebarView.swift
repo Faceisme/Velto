@@ -139,6 +139,7 @@ private struct SidebarItem: View {
     let badge: Int?
     let active: Bool
     let action: () -> Void
+    @State private var isHovered = false
 
     var body: some View {
         Button {
@@ -174,13 +175,44 @@ private struct SidebarItem: View {
             .padding(.vertical, 8)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
-                RoundedRectangle(cornerRadius: MGRadius.control, style: .continuous)
-                    .fill(active ? Color.mgAccent : .clear)
+                sidebarItemBackground
             )
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
         .transaction { $0.animation = nil }
+    }
+
+    @ViewBuilder
+    private var sidebarItemBackground: some View {
+        let shape = RoundedRectangle(cornerRadius: MGRadius.control, style: .continuous)
+
+        if active {
+            shape
+                .fill(Color.mgAccent)
+                .overlay(
+                    shape.strokeBorder(Color.white.opacity(0.18), lineWidth: 0.5)
+                )
+                .shadow(color: Color.black.opacity(0.10), radius: 6, x: 0, y: 2)
+        } else {
+            ZStack {
+                SettingsSidebarGlassView(
+                    cornerRadius: MGRadius.control,
+                    tintColor: NSColor.windowBackgroundColor.withAlphaComponent(isHovered ? 0.20 : 0.12),
+                    style: .regular
+                )
+                .clipShape(shape)
+                .opacity(isHovered ? 0.82 : 0.58)
+
+                shape
+                    .fill(Color.white.opacity(isHovered ? 0.10 : 0.045))
+
+                shape
+                    .strokeBorder(Color.white.opacity(isHovered ? 0.24 : 0.13), lineWidth: 0.5)
+            }
+            .shadow(color: Color.black.opacity(isHovered ? 0.07 : 0.035), radius: 4, x: 0, y: 1)
+        }
     }
 }
 

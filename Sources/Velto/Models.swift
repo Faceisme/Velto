@@ -2,6 +2,7 @@ import AppKit
 import CoreGraphics
 import Foundation
 import Observation
+import betterfinder
 
 struct StrokePoint: Codable, Hashable {
     var x: Double
@@ -160,23 +161,26 @@ struct AppPreferences: Codable, Equatable {
 }
 
 struct VeltoBackupFile: Codable {
-    static let currentFormatVersion = 1
+    static let currentFormatVersion = 2
 
     var formatVersion: Int
     var appName: String
     var exportedAt: Date
     var gestures: [GestureCommand]
     var preferences: AppPreferences
+    var betterFinderPreferences: BetterFinderPreferences?
 
     init(
         gestures: [GestureCommand],
-        preferences: AppPreferences
+        preferences: AppPreferences,
+        betterFinderPreferences: BetterFinderPreferences? = nil
     ) {
         formatVersion = Self.currentFormatVersion
         appName = "Velto"
         exportedAt = Date()
         self.gestures = gestures
         self.preferences = preferences
+        self.betterFinderPreferences = betterFinderPreferences
     }
 }
 
@@ -290,7 +294,8 @@ final class GestureStore {
     func exportBackupData() throws -> Data {
         let backup = VeltoBackupFile(
             gestures: gestures,
-            preferences: preferences
+            preferences: preferences,
+            betterFinderPreferences: BetterFinderPreferencesStore.shared.preferences
         )
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
@@ -312,6 +317,9 @@ final class GestureStore {
 
         gestures = backup.gestures
         preferences = backup.preferences
+        if let betterFinderPreferences = backup.betterFinderPreferences {
+            BetterFinderPreferencesStore.shared.replace(with: betterFinderPreferences)
+        }
         // 尊重备份里的开关状态,不再强制开启(与启动逻辑一致)。
         localizeBuiltInGestureNames()
         gesturesVersion &+= 1
