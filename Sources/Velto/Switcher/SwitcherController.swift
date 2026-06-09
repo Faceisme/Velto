@@ -200,6 +200,12 @@ final class SwitcherController {
         } else {
             initialSelection = reverse ? snapshot.count - 1 : 1
         }
+        // 诊断:打印 snapshot 的 MRU 序与初始选中。用来确认"切了等于没切"是不是
+        // 因为 MRU 还没更新到位(刚切到的窗口仍排在 index 1)。
+        SwitcherDebugLog.log("summon order selected=\(initialSelection) [" +
+            snapshot.enumerated().map { idx, w in
+                "\(idx):\(w.application.localizedName ?? "?")#\(w.lastFocusOrder)"
+            }.joined(separator: ", ") + "]")
         let session = SwitcherSession(windows: snapshot, initialSelection: initialSelection)
         SwitcherSession.current = session
         keyTap.isActive = true
@@ -303,6 +309,11 @@ final class SwitcherController {
         let target = session.selectedWindow
         hidePanelIfShown()
         if let target {
+            SwitcherDebugLog.log("confirm raise app=\(target.application.localizedName ?? "?") wid=\(target.cgWindowId)")
+            // 先把 MRU 同步顶到这个窗口,再 raise —— 这样紧接着的下一次 trigger
+            // 即便 AX activate 通知还没回来,snapshot 的 MRU 序也已经是新的,
+            // initialSelection=1 才会落在"真正的上一个 app"而不是刚切到的这个。
+            windowList.promoteForConfirmedSwitch(window: target)
             SwitcherFocus.raise(window: target)
         }
     }

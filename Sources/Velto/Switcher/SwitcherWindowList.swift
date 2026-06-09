@@ -602,6 +602,21 @@ final class SwitcherWindowList {
         SwitcherThumbnails.shared.warmThumbnail(for: promoted)
     }
 
+    /// 切换器**确认切换**到某窗口时由 Controller 同步调用 —— 立刻把它顶到 MRU
+    /// 最前并更新 frontmostPid,**不等**异步的 AX activate 通知。
+    ///
+    /// 为什么必须同步:`SwitcherFocus.raise` 只做 SLPS/AX 抬窗,MRU 重排全靠
+    /// 异步 `kAXApplicationActivatedNotification` → `updateFocusedWindowMRU`
+    /// (还依赖 `frontmostPid` 这条 NSWorkspace 通知,两条通知谁先到是竞态的)。
+    /// 快速连切时,下一次 trigger 的 snapshot 往往在通知到达前就取了,MRU 还是
+    /// 旧序 —— 刚切到的窗口仍排在 index 1,于是 `initialSelection = 1` 又选中它,
+    /// 表现为"切了等于没切,总停在当前 app"。这里乐观地先把 MRU 改对。
+    /// 万一 raise 实际失败,后续真实的 activate 通知会再纠正,可自愈。
+    func promoteForConfirmedSwitch(window: SwitcherWindow) {
+        frontmostPid = window.application.pid
+        promoteToMostRecent(wid: window.cgWindowId)
+    }
+
     private func refreshAppHiddenStates() {
         for (_, app) in apps {
             app.isHidden = app.runningApplication.isHidden
