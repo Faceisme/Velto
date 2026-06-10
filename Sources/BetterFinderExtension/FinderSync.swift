@@ -46,6 +46,7 @@ final class FinderSync: FIFinderSync {
     }
 
     override func menu(for menuKind: FIMenuKind) -> NSMenu {
+        let startedAt = CFAbsoluteTimeGetCurrent()
         let kind: BetterFinderMenuKind
         switch menuKind {
         case .toolbarItemMenu:
@@ -71,6 +72,8 @@ final class FinderSync: FIFinderSync {
             item.image = BetterFinderIconProvider.icon(for: entry.action, style: preferences.iconStyle)
             menu.addItem(item)
         }
+        let elapsedMs = (CFAbsoluteTimeGetCurrent() - startedAt) * 1000
+        BetterFinderDebugLog.log(String(format: "menu build finished kind=%@ elapsedMs=%.1f", kind.debugName, elapsedMs))
         return menu
     }
 

@@ -72,13 +72,17 @@ public final class BetterFinderPreferencesStore: @unchecked Sendable {
     }
 
     public init(
-        defaults: UserDefaults? = UserDefaults(suiteName: BetterFinderConstants.preferencesSuiteName),
+        defaults: UserDefaults? = nil,
         legacyDefaults: UserDefaults? = nil,
         fileURL: URL? = BetterFinderConstants.sharedPreferencesFileURL()
     ) {
-        self.defaults = defaults ?? .standard
+        let usesInjectedDefaults = defaults != nil
+        self.defaults = defaults ?? UserDefaults(suiteName: BetterFinderConstants.preferencesSuiteName) ?? .standard
         self.legacyDefaults = legacyDefaults
         self.fileURL = fileURL
+        let shouldWriteMigratedPreferences = fileURL.map {
+            usesInjectedDefaults || !FileManager.default.fileExists(atPath: $0.path)
+        } ?? true
         if let decoded = Self.loadPersistedPreferences(
             defaults: self.defaults,
             legacyDefaults: legacyDefaults,
@@ -86,11 +90,14 @@ public final class BetterFinderPreferencesStore: @unchecked Sendable {
             decoder: decoder
         ) {
             cachedPreferences = decoded
+            if shouldWriteMigratedPreferences {
+                persist(cachedPreferences)
+            }
         } else {
             cachedPreferences = .defaults
+            persist(cachedPreferences)
         }
         BetterFinderDebugLog.setEnabled(cachedPreferences.debugLoggingEnabled)
-        persist(cachedPreferences)
     }
 
     public func update(_ update: (inout BetterFinderPreferences) -> Void) {

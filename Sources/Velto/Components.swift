@@ -206,9 +206,8 @@ struct MGSegmentedPicker<Value: Equatable>: View {
         .padding(3)
         .background(
             RoundedRectangle(cornerRadius: MGRadius.control, style: .continuous)
-                .fill(Color.mgCardAlt.opacity(0.35))
+                .fill(Color.mgGlassControl.opacity(0.38))
         )
-        .veltoNativeGlass(in: RoundedRectangle(cornerRadius: MGRadius.control, style: .continuous))
     }
 }
 
