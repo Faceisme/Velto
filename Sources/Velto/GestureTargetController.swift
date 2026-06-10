@@ -2,6 +2,7 @@ import AppKit
 import ApplicationServices
 import CoreGraphics
 import Foundation
+import Synchronization
 
 /// `@unchecked Sendable`:`AXUIElement` 是 CFType,SDK 没标 Sendable,但本结构
 /// 都是不可变字段,实例创建后只读,跨线程传递没有竞争风险。
@@ -157,71 +158,152 @@ enum GestureTargetController {
         }
     }
 
-    static func titleBarWindow(at point: CGPoint, titleBarHeight: CGFloat = 28) -> AXUIElement? {
-        titleBarTarget(at: point, titleBarHeight: titleBarHeight)?.window
+    // MARK: - 标题栏带命中(滚动线程安全路径)
+
+    /// 滚动线程上做标题栏命中所需的最小窗口信息 —— 纯值类型,来自 CG 窗口
+    /// 列表的几何快照,不含任何 AX 句柄。
+    struct TitleBarBandCandidate: Sendable {
+        let pid: pid_t
+        let ownerName: String
+        let bounds: CGRect
+        let isSelf: Bool
+
+        var debugSummary: String {
+            "pid=\(pid) app=\"\(ownerName)\" frame=\(Int(bounds.minX)),\(Int(bounds.minY)),\(Int(bounds.width)),\(Int(bounds.height))\(isSelf ? " self" : "")"
+        }
     }
 
-    static func titleBarTarget(at point: CGPoint, titleBarHeight: CGFloat = 28) -> TitleBarTarget? {
-        let candidatePoints = targetLookupPoints(for: point)
-        let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
-        let cachedWindowList = (CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]]) ?? []
+    private struct CachedWindowEntry: Sendable {
+        let pid: pid_t
+        let ownerName: String
+        let bounds: CGRect
+    }
 
-        if candidatePoints.contains(where: { topmostWindowIsSelf(in: cachedWindowList, at: $0) }) {
+    private struct WindowListSnapshot: Sendable {
+        var entries: [CachedWindowEntry] = []
+        var fetchedAt: CFAbsoluteTime = 0
+    }
+
+    /// CG 窗口列表 TTL 缓存。`CGWindowListCopyWindowInfo` 走 WindowServer,
+    /// 毫秒级且不受目标 app 卡死影响,但每次手势 began 都做仍是固定 IPC 开销;
+    /// 缓存让手势密集期内复用同一份几何。TTL 内窗口刚被移动 / 缩放会用到陈旧
+    /// 矩形,最坏这一次手势落空或带宽判定偏移,下一次 began 即自愈。
+    private static let windowListCacheTTL: CFAbsoluteTime = 0.25
+    private static let windowListCache = Mutex(WindowListSnapshot())
+
+    /// 标题栏带命中测试 —— **滚动线程专用**。只做本地几何匹配 + 最多一次
+    /// WindowServer IPC(缓存过期时),绝不做 AX 调用:调用方与平滑滚动动画器
+    /// 同线程,卡死 app 的同步 AX RPC(上界 1s)会冻结整条滚动链路,甚至触发
+    /// tap timeout 被系统禁用。AX 窗口解析推迟到手势确认后,见
+    /// `resolveTitleBarTarget(from:)`。
+    static func titleBarBandCandidate(at point: CGPoint, bandHeight: CGFloat) -> TitleBarBandCandidate? {
+        let entries = cachedWindowEntries()
+        let candidatePoints = targetLookupPoints(for: point)
+
+        // 鼠标下最上层是 Velto 自己时只匹配自己的窗口,防止把设置窗口下层的
+        // 别家窗口当目标(与 targetUnderPointer 的 self 守护同语义)。
+        if candidatePoints.contains(where: { topmostEntryIsSelf(in: entries, at: $0) }) {
             for p in candidatePoints {
-                guard let candidate = selfWindowCandidate(in: cachedWindowList, at: p),
-                      isPointInTitleBarActivationBand(p, frame: candidate.bounds, bandHeight: titleBarHeight) else {
+                guard let entry = firstEntry(in: entries, at: p, selfOnly: true),
+                      isPointInTitleBarActivationBand(p, frame: entry.bounds, bandHeight: bandHeight) else {
                     continue
                 }
-                let target = target(from: candidate)
-                guard let window = target.window else { return nil }
-                return TitleBarTarget(
-                    window: window,
-                    pid: target.pid ?? candidate.pid,
-                    ownerName: candidate.ownerName,
-                    frame: frame(ofWindow: window) ?? candidate.bounds,
-                    source: "cg-self"
+                return TitleBarBandCandidate(
+                    pid: entry.pid,
+                    ownerName: entry.ownerName,
+                    bounds: entry.bounds,
+                    isSelf: true
                 )
             }
             return nil
         }
 
         for p in candidatePoints {
-            guard let candidate = windowCandidate(in: cachedWindowList, at: p),
-                  isPointInTitleBarActivationBand(p, frame: candidate.bounds, bandHeight: titleBarHeight) else {
+            guard let entry = firstEntry(in: entries, at: p, selfOnly: false),
+                  isPointInTitleBarActivationBand(p, frame: entry.bounds, bandHeight: bandHeight) else {
                 continue
             }
-            let target = target(from: candidate)
-            guard let window = target.window else { return nil }
-            return TitleBarTarget(
-                window: window,
-                pid: target.pid ?? candidate.pid,
-                ownerName: candidate.ownerName,
-                frame: frame(ofWindow: window) ?? candidate.bounds,
-                source: "cg"
+            return TitleBarBandCandidate(
+                pid: entry.pid,
+                ownerName: entry.ownerName,
+                bounds: entry.bounds,
+                isSelf: false
             )
         }
-
-        guard let window = windowUnderPointer(at: point),
-              let frame = frame(ofWindow: window) else {
-            return nil
-        }
-        let candidates = [point, DisplayCoordinateConverter.eventLocationToAccessibilityPoint(point)]
-        for p in candidates where frame.contains(p) {
-            if isPointInTitleBarActivationBand(p, frame: frame, bandHeight: titleBarHeight) {
-                let pid = processIdentifier(for: window)
-                let ownerName = pid
-                    .flatMap { NSRunningApplication(processIdentifier: $0)?.localizedName }
-                    ?? ""
-                return TitleBarTarget(
-                    window: window,
-                    pid: pid,
-                    ownerName: ownerName,
-                    frame: frame,
-                    source: "ax"
-                )
-            }
-        }
         return nil
+    }
+
+    /// 把 began 时的几何 candidate 解析成可操作的 AX 窗口。含跨进程 AX 调用
+    /// (对卡死 app 最长 1s 超时),只能在后台队列调,绝不能上滚动线程。
+    static func resolveTitleBarTarget(from candidate: TitleBarBandCandidate) -> TitleBarTarget? {
+        let windowCandidate = WindowCandidate(
+            pid: candidate.pid,
+            ownerName: candidate.ownerName,
+            bounds: candidate.bounds
+        )
+        let target = target(from: windowCandidate)
+        guard let window = target.window else { return nil }
+        return TitleBarTarget(
+            window: window,
+            pid: target.pid ?? candidate.pid,
+            ownerName: candidate.ownerName,
+            frame: frame(ofWindow: window) ?? candidate.bounds,
+            source: candidate.isSelf ? "cg-self" : "cg"
+        )
+    }
+
+    private static func cachedWindowEntries() -> [CachedWindowEntry] {
+        let now = CFAbsoluteTimeGetCurrent()
+        let cached = windowListCache.withLock { $0 }
+        if now - cached.fetchedAt <= windowListCacheTTL {
+            return cached.entries
+        }
+        let fresh = fetchWindowEntries()
+        windowListCache.withLock { $0 = WindowListSnapshot(entries: fresh, fetchedAt: now) }
+        return fresh
+    }
+
+    private static func fetchWindowEntries() -> [CachedWindowEntry] {
+        let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+        let windowList = (CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]]) ?? []
+        return windowList.compactMap { info in
+            guard let layer = (info[kCGWindowLayer as String] as? NSNumber)?.intValue,
+                  layer == 0,
+                  let onscreen = info[kCGWindowIsOnscreen as String] as? Bool,
+                  onscreen,
+                  let alpha = (info[kCGWindowAlpha as String] as? NSNumber)?.doubleValue,
+                  alpha > 0.01,
+                  let pidNumber = info[kCGWindowOwnerPID as String] as? NSNumber,
+                  let boundsDictionary = info[kCGWindowBounds as String] as? NSDictionary,
+                  let bounds = CGRect(dictionaryRepresentation: boundsDictionary)
+            else { return nil }
+            return CachedWindowEntry(
+                pid: pid_t(pidNumber.intValue),
+                ownerName: info[kCGWindowOwnerName as String] as? String ?? "",
+                bounds: bounds
+            )
+        }
+    }
+
+    /// 同 `topmostWindowIsSelf` 的语义(不卡尺寸阈值),作用在缓存条目上。
+    private static func topmostEntryIsSelf(in entries: [CachedWindowEntry], at point: CGPoint) -> Bool {
+        guard let top = entries.first(where: { $0.bounds.contains(point) }) else { return false }
+        return top.pid == selfPid
+    }
+
+    /// 同 `windowCandidate` / `selfWindowCandidate` 的尺寸与 self 过滤语义,
+    /// 作用在缓存条目上。
+    private static func firstEntry(
+        in entries: [CachedWindowEntry],
+        at point: CGPoint,
+        selfOnly: Bool
+    ) -> CachedWindowEntry? {
+        entries.first { entry in
+            entry.bounds.width >= 40
+                && entry.bounds.height >= 40
+                && entry.bounds.contains(point)
+                && (selfOnly ? entry.pid == selfPid : entry.pid != selfPid)
+        }
     }
 
     static func isPointInTitleBarActivationBand(_ point: CGPoint, frame: CGRect, bandHeight: CGFloat) -> Bool {
