@@ -92,7 +92,8 @@ final class InputSourceContextMonitor {
       rewireAXObserver(pid: pid)
       reschedulePoll(isBrowserFront: true)
       let engine = browser.engine
-      AXCallQueue.shared.schedule("input-source-browser:\(pid)") { [weak self] in
+      // 走输入法专用通道:与 Switcher 后台扫描隔离,卡死 app 的扫描不拖延本次决策。
+      AXCallQueue.shared.scheduleInputSource("input-source-browser:\(pid)") { [weak self] in
         let ctx = BrowserAXReader.readContext(pid: pid, engine: engine)
         DispatchQueue.main.async {
           guard let self, self.running else { return }

@@ -34,6 +34,18 @@ final class AXCallQueue: @unchecked Sendable {
         return q
     }()
 
+    /// 输入法切换上下文读取专用的独立队列。输入法决策是用户切 App / Tab 后的
+    /// 直接体验,不能与 Switcher 后台窗口扫描(sync-/title-/focus-)共线 ——
+    /// 后台扫描撞上无响应 app 时每个 AX 调用最长挂 1s,头阻塞会表现为
+    /// "切到浏览器后输入法迟迟不切"。各通道内部仍串行,避免并发轰炸 AX framework。
+    private let inputSourceQueue: OperationQueue = {
+        let q = OperationQueue()
+        q.name = "Velto.AXCallQueue.inputSource"
+        q.maxConcurrentOperationCount = 1
+        q.qualityOfService = .userInitiated
+        return q
+    }()
+
     /// 同 key 在 queue 上 pending 的 operation。新来的同 key 任务会先 cancel
     /// 老的;cancel 不一定真停(operation 可能已经 isExecuting),但至少不会
     /// 再额外排一个进去。
@@ -49,6 +61,20 @@ final class AXCallQueue: @unchecked Sendable {
 
     /// `key` 用来同窗口/同 app 的事件节流。`block` 抛错会被吞,只打日志。
     func schedule(_ key: String, _ block: @escaping @Sendable () throws -> Void) {
+        enqueue(key, on: queue, block)
+    }
+
+    /// 输入法切换专用:同 key 节流语义同 `schedule`,但走独立队列,
+    /// 不被 Switcher 后台扫描头阻塞。
+    func scheduleInputSource(_ key: String, _ block: @escaping @Sendable () throws -> Void) {
+        enqueue(key, on: inputSourceQueue, block)
+    }
+
+    private func enqueue(
+        _ key: String,
+        on target: OperationQueue,
+        _ block: @escaping @Sendable () throws -> Void
+    ) {
         let op = BlockOperation()
         // capture `op` weakly inside the closure to break the strong cycle that
         // would otherwise keep finished operations alive in the dictionary.
@@ -79,7 +105,7 @@ final class AXCallQueue: @unchecked Sendable {
             self.lock.unlock()
         }
 
-        queue.addOperation(op)
+        target.addOperation(op)
     }
 
     /// 用于无需节流的一次性后台调用(初次全量扫描等)。
