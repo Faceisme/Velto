@@ -43,9 +43,9 @@ final class InputSourceContextMonitor {
     guard !running else { return }
     running = true
     let nc = NSWorkspace.shared.notificationCenter
-    nc.addObserver(self, selector: #selector(activeAppChanged),
+    nc.addObserver(self, selector: #selector(activeAppChanged(_:)),
                    name: NSWorkspace.didActivateApplicationNotification, object: nil)
-    nc.addObserver(self, selector: #selector(activeAppChanged),
+    nc.addObserver(self, selector: #selector(activeAppChanged(_:)),
                    name: NSWorkspace.activeSpaceDidChangeNotification, object: nil)
     evaluate()
   }
@@ -59,15 +59,29 @@ final class InputSourceContextMonitor {
     pollTimer = nil
   }
 
-  @objc private func activeAppChanged() {
-    evaluate()
+  @objc private func activeAppChanged(_ note: Notification) {
+    // didActivate 的 userInfo 自带「刚激活的 App」,这是权威答案,必须用它。
+    // 通知中心点消息打开 App 这类跨进程激活,didActivate 到达时 frontmostApplication
+    // 经常还滞后在旧 App 上 —— 若按旧 App 算上下文会命中"同上下文"静默跳过,这次
+    // 激活就被永久漏掉(再无后续事件补救),输入法不切。space 变更通知无此字段,回退。
+    let activated = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+    evaluate(activatedApp: activated)
   }
 
   /// 重新计算当前上下文。前台是浏览器则走 AX 读 URL,否则是普通 App。
-  func evaluate() {
-    guard running, let front = NSWorkspace.shared.frontmostApplication,
+  /// activatedApp:didActivate 通知里携带的 App,优先于可能滞后的 frontmostApplication。
+  func evaluate(activatedApp: NSRunningApplication? = nil) {
+    guard running,
+          let front = activatedApp ?? NSWorkspace.shared.frontmostApplication,
           let bundleID = front.bundleIdentifier
     else { return }
+    if let activatedApp,
+       let frontmost = NSWorkspace.shared.frontmostApplication,
+       frontmost.processIdentifier != activatedApp.processIdentifier {
+      InputSourceSwitchDebugLog.log(
+        "didActivate=\(bundleID) 但 frontmost=\(frontmost.bundleIdentifier ?? "?") 滞后,以 didActivate 为准"
+      )
+    }
     if InputSourceSwitchSelector.isTemporaryWindowApplicationActivation(front) {
       return
     }
