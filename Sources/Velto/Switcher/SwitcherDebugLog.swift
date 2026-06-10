@@ -1,6 +1,7 @@
 import ApplicationServices
 import Cocoa
 import Foundation
+import Synchronization
 
 /// 切换器调试通道 —— 用来排查"莫名其妙的窗口出现在切换器里"这类问题。
 ///
@@ -14,11 +15,14 @@ import Foundation
 /// (当前是:微信、Dropbox、1Password)—— 别的 app 静默,免得日志噪音。
 enum SwitcherDebugLog {
     // 运行时可切换:由切换器设置页的"调试日志"开关经 SwitcherController.setEnabled 驱动,
-    // 同时保留环境变量 VELTO_SWITCHER_DEBUG=1 作为开发期强制开启入口。状态只在
-    // stateQueue 内触碰,nonisolated(unsafe) 是经串行化保证的安全例外(与 DebugLog 同款)。
+    // 同时保留环境变量 VELTO_SWITCHER_DEBUG=1 作为开发期强制开启入口。
+    // 开关用 Atomic 镜像(与 MouseScrollDebugLogger 同款):`shouldTrace` 在
+    // Cmd+Tab 召唤路径被 snapshot 按窗口逐个调用,dispatch sync 会给召唤延迟
+    // 加 N 倍常数项;原子 load 让关闭态读取零等待。文件句柄仍由 stateQueue 串行化。
     private static let stateQueue = DispatchQueue(label: "com.velto.switcher.debuglog.state")
-    private nonisolated(unsafe) static var _enabled =
+    private static let enabledFlag = Atomic<Bool>(
         ProcessInfo.processInfo.environment["VELTO_SWITCHER_DEBUG"] == "1"
+    )
     private nonisolated(unsafe) static var _handle: FileHandle?
     private nonisolated(unsafe) static var _handleOpened = false
 
@@ -31,12 +35,12 @@ enum SwitcherDebugLog {
     }()
 
     static var isEnabled: Bool {
-        stateQueue.sync { _enabled }
+        enabledFlag.load(ordering: .relaxed)
     }
 
     /// 由 `SwitcherController` 在启动 / 偏好变更时调用。环境变量为真时强制保持开启。
     static func setEnabled(_ enabled: Bool) {
-        stateQueue.sync { _enabled = enabled || envForced }
+        enabledFlag.store(enabled || envForced, ordering: .relaxed)
     }
 
     /// 首次需要写入时才打开文件句柄(关闭状态下零文件开销;运行时打开也支持)。

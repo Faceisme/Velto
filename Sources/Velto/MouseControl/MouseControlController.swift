@@ -135,6 +135,11 @@ final class MouseControlController: @unchecked Sendable {
     private let animator = MouseSmoothScrollAnimator()
 
     private var preferences = MouseControlPreferences.defaults
+    /// bundleID → 规则的查找索引(由 `lock` 保护)。`snapshot(for:)` 每个滚动 /
+    /// 触发事件都要查一次 per-app 规则,数组线性扫描会随规则数线性退化;偏好
+    /// 变更时一次性重建字典,事件路径 O(1)。重复 bundleID 取首条,与原
+    /// `first(where:)` 语义一致。
+    private var appRuleIndex: [String: MouseAppRule] = [:]
     private var hotkeyState = MouseScrollHotkeyState()
     private var consumedTriggers = Set<MouseRuntimeTriggerKey>()
 
@@ -149,6 +154,10 @@ final class MouseControlController: @unchecked Sendable {
         enabledFlag.store(preferences.enabled, ordering: .relaxed)
         lock.lock()
         self.preferences = preferences
+        appRuleIndex = Dictionary(
+            preferences.appRules.map { ($0.bundleIdentifier, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
         cachedPID = 0
         cachedBundleID = nil
         lock.unlock()
@@ -331,7 +340,7 @@ final class MouseControlController: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         let prefs = preferences
-        guard let rule = prefs.appRules.first(where: { $0.bundleIdentifier == bundleID }) else {
+        guard let bundleID, let rule = appRuleIndex[bundleID] else {
             return (prefs, prefs.scroll, prefs.hotkeys, prefs.buttonBindings, hotkeyState)
         }
         let profile = rule.inheritScroll ? prefs.scroll : rule.scroll

@@ -186,6 +186,18 @@ final class InputSourceSwitchController {
     return nil
   }
 
+  /// 已编译正则缓存(pattern → regex)。规则匹配在每次上下文变化(切 Tab / 切 App)
+  /// 都会对所有启用规则跑一遍,NSRegularExpression 编译是其中最贵的一步;pattern
+  /// 来自用户规则,稳定不变,编译一次终身复用。NSCache 自身线程安全。
+  private static let regexCache = NSCache<NSString, NSRegularExpression>()
+
+  private static func compiledRegex(_ pattern: String) -> NSRegularExpression? {
+    if let cached = regexCache.object(forKey: pattern as NSString) { return cached }
+    guard let re = try? NSRegularExpression(pattern: pattern) else { return nil }
+    regexCache.setObject(re, forKey: pattern as NSString)
+    return re
+  }
+
   /// 浏览器规则匹配。
   static func matches(rule: InputSourceBrowserRule, url: URL) -> Bool {
     switch rule.type {
@@ -194,7 +206,7 @@ final class InputSourceSwitchController {
     case .domainSuffix:
       return (url.host ?? "").hasSuffix(rule.value)
     case .urlRegex:
-      guard let re = try? NSRegularExpression(pattern: rule.value) else { return false }
+      guard let re = compiledRegex(rule.value) else { return false }
       let s = url.absoluteString
       return re.firstMatch(in: s, range: NSRange(s.startIndex..., in: s)) != nil
     }

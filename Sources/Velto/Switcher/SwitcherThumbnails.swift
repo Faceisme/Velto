@@ -1,5 +1,6 @@
 import Cocoa
 import ScreenCaptureKit
+import Synchronization
 
 /// 用 ScreenCaptureKit 抓窗口缩略图。
 ///
@@ -55,14 +56,32 @@ final class SwitcherThumbnails {
         }
     }
 
+    /// 预热节流间隔:同一窗口该时间内不重抓。
+    /// focus 变化每次都触发预热,频繁切窗时等于持续的后台 SCK 抓图(CPU/GPU/功耗);
+    /// 而切换器对几秒内的陈旧缩略图毫无感知 —— 召唤后没图的窗口照常异步刷新。
+    /// 新窗口首抓无历史记录,不受节流影响。
+    private nonisolated static let warmThrottleInterval: CFAbsoluteTime = 5
+    /// wid → 上次预热时刻。warmThumbnail 可被任意线程调,用 Mutex 保护。
+    private nonisolated static let lastWarmAt = Mutex<[CGWindowID: CFAbsoluteTime]>([:])
+
     /// 单窗口预热抓取入口 —— 供 WindowList 在窗口创建 / focus 变化时调用。
     /// 跟主路径的不同:只抓一个,结果直接存进 window.thumbnail。
-    /// 异步,不阻塞调用方。
+    /// 异步,不阻塞调用方。同窗口 `warmThrottleInterval` 内的重复预热直接丢弃。
     ///
     /// 优先级走 `.userInitiated` 而不是 `.background` —— 后者会被 GCD 排到所有
     /// 用户活动后面,新开 app 后立刻 Cmd+Tab 会看到"先 fallback 后图"的过程。
     /// userInitiated 让预热跟用户切换 app 同级,体感即时。
     nonisolated func warmThumbnail(for window: SwitcherWindow) {
+        let wid = window.cgWindowId
+        let now = CFAbsoluteTimeGetCurrent()
+        let throttled = Self.lastWarmAt.withLock { table in
+            if let last = table[wid], now - last < Self.warmThrottleInterval {
+                return true
+            }
+            table[wid] = now
+            return false
+        }
+        if throttled { return }
         let widBox = SwitcherWindowBox(window: window)
         Task.detached(priority: .userInitiated) {
             await Self.warmOne(box: widBox)
