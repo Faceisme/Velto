@@ -79,18 +79,11 @@ struct VeltoGlassSurface: ViewModifier {
         let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
         if #available(macOS 26.0, *) {
             content
-                .background(fill, in: shape)
-                .glassEffect(.regular, in: shape)
-                .overlay {
-                    shape.strokeBorder(Color.mgHair, lineWidth: 0.5)
-                }
+                .glassEffect(.regular.tint(fill.opacity(0.08)), in: shape)
                 .shadow(color: shadow ? Color.mgShadow.opacity(0.08) : .clear, radius: 10, x: 0, y: 4)
         } else {
             content
                 .background(fill, in: shape)
-                .overlay {
-                    shape.strokeBorder(Color.mgHair, lineWidth: 0.5)
-                }
                 .shadow(color: shadow ? Color.mgShadow.opacity(0.04) : .clear, radius: 3, x: 0, y: 1)
         }
     }
@@ -105,9 +98,6 @@ struct VeltoGlassWindow: ViewModifier {
                 .background(Color.mgBg, in: shape)
                 .glassEffect(.regular, in: shape)
                 .clipShape(shape)
-                .overlay {
-                    shape.strokeBorder(Color.mgHair, lineWidth: 0.5)
-                }
         } else {
             content
                 .background(Color.mgBg, in: shape)

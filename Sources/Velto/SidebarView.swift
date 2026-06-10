@@ -189,29 +189,16 @@ private struct SidebarItem: View {
         let shape = RoundedRectangle(cornerRadius: MGRadius.control, style: .continuous)
 
         if active {
-            shape
-                .fill(Color.mgAccent)
-                .overlay(
-                    shape.strokeBorder(Color.white.opacity(0.18), lineWidth: 0.5)
-                )
-                .shadow(color: Color.black.opacity(0.10), radius: 6, x: 0, y: 2)
+            Color.clear
+                .glassEffect(.regular.tint(Color.mgAccent.opacity(0.85)), in: shape)
         } else {
-            ZStack {
-                SettingsSidebarGlassView(
-                    cornerRadius: MGRadius.control,
-                    tintColor: NSColor.windowBackgroundColor.withAlphaComponent(isHovered ? 0.20 : 0.12),
-                    style: .regular
-                )
-                .clipShape(shape)
-                .opacity(isHovered ? 0.82 : 0.58)
-
-                shape
-                    .fill(Color.white.opacity(isHovered ? 0.10 : 0.045))
-
-                shape
-                    .strokeBorder(Color.white.opacity(isHovered ? 0.24 : 0.13), lineWidth: 0.5)
-            }
-            .shadow(color: Color.black.opacity(isHovered ? 0.07 : 0.035), radius: 4, x: 0, y: 1)
+            SettingsSidebarGlassView(
+                cornerRadius: MGRadius.control,
+                tintColor: NSColor.windowBackgroundColor.withAlphaComponent(isHovered ? 0.20 : 0.12),
+                style: .regular
+            )
+            .clipShape(shape)
+            .opacity(isHovered ? 0.85 : 0.45)
         }
     }
 }
@@ -261,14 +248,6 @@ struct StatusCard: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: MGRadius.card, style: .continuous)
-                .fill(Color.mgCard)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: MGRadius.card, style: .continuous)
-                .strokeBorder(Color.mgHair, lineWidth: 0.5)
-        )
-        .shadow(color: Color.black.opacity(0.035), radius: 3, x: 0, y: 1)
+        .veltoGlassSurface(radius: MGRadius.card)
     }
 }

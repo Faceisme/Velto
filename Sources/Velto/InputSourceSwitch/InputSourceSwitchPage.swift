@@ -409,11 +409,8 @@ private struct AppRuleIcon: View {
           .frame(width: 30, height: 30)
           .padding(5)
           .frame(width: 40, height: 40)
-          .background(shape.fill(Color.mgGlassControl))
+          .background(shape.fill(Color.mgGlassControl.opacity(0.35)))
           .veltoNativeGlass(in: shape)
-          .overlay {
-            shape.strokeBorder(Color.mgHair, lineWidth: 0.5)
-          }
       } else {
         ActionIcon(systemName: "app")
       }
@@ -454,11 +451,8 @@ private struct BrowserIcon: View {
           .frame(width: 30, height: 30)
           .padding(5)
           .frame(width: 40, height: 40)
-          .background(shape.fill(Color.mgGlassControl))
+          .background(shape.fill(Color.mgGlassControl.opacity(0.35)))
           .veltoNativeGlass(in: shape)
-          .overlay {
-            shape.strokeBorder(Color.mgHair, lineWidth: 0.5)
-          }
       } else {
         ActionIcon(systemName: "globe")
       }

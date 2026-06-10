@@ -33,11 +33,8 @@ struct Kbd: View {
     private func singleCap(_ key: String) -> some View {
         let bg: Color = inverted
             ? Color.white.opacity(0.24)
-            : Color.mgGlassControl
+            : Color.mgGlassControl.opacity(0.45)
         let fg: Color = inverted ? .white : .mgText2
-        let borderColor: Color = inverted
-            ? Color.white.opacity(0.30)
-            : Color.mgHairStrong
         let dropOpacity: Double = (inverted || muted) ? 0 : 0.055
 
         Text(key)
@@ -51,10 +48,6 @@ struct Kbd: View {
                     .fill(bg)
             )
             .veltoNativeGlass(in: RoundedRectangle(cornerRadius: size.radius, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: size.radius, style: .continuous)
-                    .strokeBorder(borderColor, lineWidth: 1)
-            )
             .shadow(color: Color.mgShadow.opacity(dropOpacity), radius: 2, x: 0, y: 1)
     }
 }
@@ -111,13 +104,9 @@ struct KeyCapSlot<Content: View>: View {
             .frame(minWidth: minWidth)
             .background(
                 RoundedRectangle(cornerRadius: MGRadius.control, style: .continuous)
-                    .fill(Color.mgGlassControl)
+                    .fill(Color.mgGlassControl.opacity(0.35))
             )
             .veltoNativeGlass(in: RoundedRectangle(cornerRadius: MGRadius.control, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: MGRadius.control, style: .continuous)
-                    .strokeBorder(Color.mgHairStrong, lineWidth: 1)
-            )
     }
 }
 
@@ -135,12 +124,9 @@ struct ActionIcon: View {
             .foregroundStyle(Color.mgAccent)
             .frame(width: size, height: size)
             .background(
-                shape.fill(Color.mgAccentSoft)
+                shape.fill(Color.mgAccentSoft.opacity(0.35))
             )
             .veltoNativeGlass(in: shape)
-            .overlay(
-                shape.strokeBorder(Color.mgHair, lineWidth: 0.5)
-            )
     }
 }
 
@@ -220,13 +206,9 @@ struct MGSegmentedPicker<Value: Equatable>: View {
         .padding(3)
         .background(
             RoundedRectangle(cornerRadius: MGRadius.control, style: .continuous)
-                .fill(Color.mgCardAlt)
+                .fill(Color.mgCardAlt.opacity(0.35))
         )
         .veltoNativeGlass(in: RoundedRectangle(cornerRadius: MGRadius.control, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: MGRadius.control, style: .continuous)
-                .strokeBorder(Color.mgHairStrong, lineWidth: 1)
-        )
     }
 }
 
@@ -357,13 +339,9 @@ struct MGSecondaryButtonStyle: ButtonStyle {
             .frame(height: height)
             .background(
                 RoundedRectangle(cornerRadius: MGRadius.controlSm, style: .continuous)
-                    .fill(Color.mgGlassControl)
+                    .fill(Color.mgGlassControl.opacity(0.35))
             )
             .veltoNativeGlass(in: RoundedRectangle(cornerRadius: MGRadius.controlSm, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: MGRadius.controlSm, style: .continuous)
-                    .strokeBorder(Color.mgHairStrong, lineWidth: 1)
-            )
             .opacity(configuration.isPressed ? 0.7 : 1.0)
     }
 }
@@ -399,13 +377,9 @@ struct MGDestructiveButtonStyle: ButtonStyle {
             .frame(height: height)
             .background(
                 RoundedRectangle(cornerRadius: MGRadius.controlSm, style: .continuous)
-                    .fill(Color.mgGlassControl)
+                    .fill(Color.mgDanger.opacity(0.08))
             )
             .veltoNativeGlass(in: RoundedRectangle(cornerRadius: MGRadius.controlSm, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: MGRadius.controlSm, style: .continuous)
-                    .strokeBorder(Color.mgDanger.opacity(0.24), lineWidth: 1)
-            )
             .shadow(color: Color.mgShadow.opacity(0.04), radius: 2, x: 0, y: 1)
             .opacity(configuration.isPressed ? 0.7 : 1.0)
     }
@@ -437,12 +411,8 @@ struct MGStepperField<Value: Strideable>: View where Value: BinaryFloatingPoint 
         .padding(.vertical, 3)
         .background(
             RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(Color.mgGlassControl)
+                .fill(Color.mgGlassControl.opacity(0.35))
         )
         .veltoNativeGlass(in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .strokeBorder(Color.mgHairStrong, lineWidth: 1)
-        )
     }
 }

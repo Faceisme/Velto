@@ -308,12 +308,9 @@ struct BetterFinderPage: View {
             }
             .background(
                 RoundedRectangle(cornerRadius: MGRadius.control, style: .continuous)
-                    .fill(Color.mgCardAlt)
+                    .fill(Color.mgCardAlt.opacity(0.35))
             )
-            .overlay(
-                RoundedRectangle(cornerRadius: MGRadius.control, style: .continuous)
-                    .strokeBorder(Color.mgHairStrong, lineWidth: 1)
-            )
+            .veltoNativeGlass(in: RoundedRectangle(cornerRadius: MGRadius.control, style: .continuous))
         }
     }
 

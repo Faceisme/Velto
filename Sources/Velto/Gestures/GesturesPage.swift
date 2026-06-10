@@ -361,13 +361,6 @@ private struct GestureListItem: View {
                         .fill(selected
                               ? Color.white.opacity(0.18)
                               : Color.mgCardAlt)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 9, style: .continuous)
-                                .strokeBorder(selected
-                                              ? Color.white.opacity(0.20)
-                                              : Color.mgHair,
-                                              lineWidth: 0.5)
-                        )
 
                     if !gesture.templates.isEmpty {
                         GestureTrailView(
@@ -431,18 +424,15 @@ private struct GestureListItem: View {
             .background(
                 Group {
                     if selected {
-                        RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .fill(Color.mgAccent)
+                        Color.clear
+                            .glassEffect(.regular.tint(Color.mgAccent.opacity(0.85)),
+                                         in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                     } else {
                         RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .fill(Color.mgGlassWeak)
+                            .fill(Color.mgGlassWeak.opacity(0.3))
                             .veltoNativeGlass(in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                     }
                 }
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .strokeBorder(selected ? Color.clear : Color.mgHair, lineWidth: 0.5)
             )
             .contentShape(Rectangle())
         }
