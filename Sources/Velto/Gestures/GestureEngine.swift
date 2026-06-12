@@ -311,6 +311,7 @@ final class GestureEngine: @unchecked Sendable {
             if releasePoint != .zero, releasePoint != gestureStart {
                 CGWarpMouseCursorPosition(releasePoint)
                 CGAssociateMouseAndMouseCursorPosition(1)
+                logWarpDiagnostics(reason: "release", from: gestureStart, to: releasePoint)
             }
             lastWarpedPosition = nil
 
@@ -340,6 +341,7 @@ final class GestureEngine: @unchecked Sendable {
             if releasePoint != .zero, releasePoint != lastWarpedPosition {
                 CGWarpMouseCursorPosition(releasePoint)
                 CGAssociateMouseAndMouseCursorPosition(1)
+                logWarpDiagnostics(reason: "cleanupUp", from: lastWarpedPosition ?? .zero, to: releasePoint)
             }
             lastWarpedPosition = nil
             return true
@@ -646,9 +648,28 @@ final class GestureEngine: @unchecked Sendable {
             CGWarpMouseCursorPosition(endPosition)
             CGAssociateMouseAndMouseCursorPosition(1)
             lastWarpedPosition = endPosition
+            logWarpDiagnostics(reason: "cancel", from: startPoint, to: endPosition)
         } else {
             lastWarpedPosition = nil
         }
+    }
+
+    /// 水位计:记录每次 warp 的时机、起止点,并回读三个 event source 状态表的
+    /// suppression interval。`didDisableWarpSuppression` 启动时把它们设成了 0;
+    /// 若这里读回非 0,说明配置没存住(macOS 26 上该路径本就不稳),warp 后的
+    /// 0.25s+ 事件抑制窗就是"手势期间光标粘在起手点、松手才跳过去"的直接来源。
+    private func logWarpDiagnostics(reason: String, from: CGPoint, to: CGPoint) {
+        guard DebugLog.isEnabled else { return }
+        let stateIDs: [CGEventSourceStateID] = [.hidSystemState, .combinedSessionState, .privateState]
+        let suppression = stateIDs.map {
+            CGEventSource(stateID: $0)?.localEventsSuppressionInterval ?? -1
+        }
+        DebugLog.event("warp", [
+            "reason": reason,
+            "fromX": Double(from.x), "fromY": Double(from.y),
+            "toX": Double(to.x), "toY": Double(to.y),
+            "suppression": suppression
+        ])
     }
 
     // MARK: - Timers (CFRunLoopTimer on tap runloop)

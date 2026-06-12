@@ -357,7 +357,42 @@ final class EventTapManager: @unchecked Sendable {
 
     // MARK: - Event dispatch (tap thread)
 
+    /// 水位计阈值:tap 回调单次超过此耗时即落 `tapSlow` 日志。本 tap 监听着
+    /// mouseMoved / 键盘事件,回调一阻塞整个系统的光标和键盘都会冻住;30ms
+    /// 已是肉眼可感的卡顿下限,正常回调在微秒级,不会误报。
+    private static let slowCallbackThresholdMs: Double = 30
+
+    private static func eventTypeName(_ type: CGEventType) -> String {
+        switch type {
+        case .rightMouseDown: return "rightMouseDown"
+        case .rightMouseDragged: return "rightMouseDragged"
+        case .rightMouseUp: return "rightMouseUp"
+        case .leftMouseDown: return "leftMouseDown"
+        case .leftMouseUp: return "leftMouseUp"
+        case .otherMouseDown: return "otherMouseDown"
+        case .otherMouseUp: return "otherMouseUp"
+        case .mouseMoved: return "mouseMoved"
+        case .flagsChanged: return "flagsChanged"
+        case .keyDown: return "keyDown"
+        case .keyUp: return "keyUp"
+        default: return "type\(type.rawValue)"
+        }
+    }
+
     func handle(proxy: CGEventTapProxy, type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
+        // 水位计:量化"哪类事件在 tap 线程卡了多久"。`DebugLog.event` 内部自判
+        // 开关,慢事件才走到那一步;快路径只多两次读时钟,开销可忽略。
+        let watermarkStart = CFAbsoluteTimeGetCurrent()
+        defer {
+            let elapsedMs = (CFAbsoluteTimeGetCurrent() - watermarkStart) * 1000
+            if elapsedMs >= Self.slowCallbackThresholdMs {
+                DebugLog.event("tapSlow", [
+                    "type": Self.eventTypeName(type),
+                    "ms": elapsedMs
+                ])
+            }
+        }
+
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             // tap 被系统禁用期间事件全丢(含 rightMouseUp)。重启后必须把手势引擎也复位,
             // 否则它会卡在 .gesturing 半路,导致之后的手势连环判为 abandoned、整片失灵。
