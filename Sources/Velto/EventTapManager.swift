@@ -475,9 +475,21 @@ final class EventTapManager: @unchecked Sendable {
             if !gestureEngine.isHandlingRightMouse, isInRightClickPassThrough(event) {
                 return Unmanaged.passUnretained(event)
             }
-            return gestureEngine.handleRightMouseDragged(at: event.location)
-                ? nil
-                : Unmanaged.passUnretained(event)
+            if gestureEngine.handleRightMouseDragged(at: event.location) {
+                // 手势期间不吞 drag,而是就地降级成 mouseMoved 透传:
+                // - 事件被投递,光标仍由系统指针管线驱动 —— 原生加速手感,也不会
+                //   触发"消费 + 触控板同时活跃"时多设备仲裁把光标钉死在起手点的
+                //   问题(实测:透传时同样的触控板接触光标跟手正常);
+                // - 目标 app 看到的只是普通 mouseMoved(rightMouseDown 已被吞,
+                //   在 app 眼里本来就没有按键按着),不会出现右键拖选/拖放。
+                // 曾试过逐事件 CGWarpMouseCursorPosition 跟随:功能正确,但绕开
+                // 系统指针管线后移动手感变了(手移距离与光标位移对不上),弃用。
+                event.type = .mouseMoved
+                event.setIntegerValueField(.mouseEventButtonNumber, value: 0)
+                event.setDoubleValueField(.mouseEventPressure, value: 0)
+                return Unmanaged.passUnretained(event)
+            }
+            return Unmanaged.passUnretained(event)
 
         case .rightMouseUp:
             if event.getIntegerValueField(.eventSourceUserData) == gestureEngine.rightClickSyntheticMarker {

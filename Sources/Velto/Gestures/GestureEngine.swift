@@ -89,17 +89,19 @@ final class GestureEngine: @unchecked Sendable {
     private weak var runLoopOwner: AnyObject?
     private var tapRunLoop: CFRunLoop?
 
-    /// cancel 时 warp 过去的位置。mouseUp 时如果 release 位置和这里一致,就不再
-    /// 重复 warp —— 避免连续两次 warp 把 events suppression interval 叠成 1-2s 卡顿。
-    private var lastWarpedPosition: CGPoint?
+    /// 逻辑光标已知同步到的位置。手势期间每个 rightMouseDragged 都被 HID tap
+    /// 降级成 mouseMoved 投递(见 EventTapManager),窗口服务器的逻辑光标一路
+    /// 跟手,投递即同步;收尾兜底 warp 也会更新它。收尾时位置一致就跳过 warp
+    /// —— 冗余 warp 即使无害也是无谓 syscall,真撞上 suppression 还会卡 1-2s。
+    private var lastSyncedCursorPosition: CGPoint?
 
     /// `CGWarpMouseCursorPosition` 默认会引入一段 "events suppression interval"
     /// (系统偏好里默认 0.25s,macOS 26 上实测更长),期间鼠标移动事件被静默丢弃,
     /// 用户感受是"光标卡在原地一两秒才跟手"。
-    /// 原代码靠 `CGAssociateMouseAndMouseCursorPosition(1)` 取消,但在 macOS 26 上
-    /// 这条路径不稳定,需要直接把进程内所有相关 source 的 suppression interval
-    /// 设为 0(老的 `CGSetLocalEventsSuppressionInterval` 在 macOS 26 SDK 里已经
-    /// 标 unavailable,只能用 per-source 接口)。用 `static let` 保证只配一次。
+    /// 注意:2026-06 水位计实测,这里设的 0 从未存住(`logWarpDiagnostics` 回读
+    /// suppression 恒为 0.25)—— 临时 CGEventSource 实例上的配置不影响系统状态表。
+    /// 真正抵消 suppression 的是每次 warp 后紧跟的
+    /// `CGAssociateMouseAndMouseCursorPosition(1)`;此处保留只作 best-effort。
     private static let didDisableWarpSuppression: Bool = {
         for stateID: CGEventSourceStateID in [.hidSystemState, .combinedSessionState, .privateState] {
             CGEventSource(stateID: stateID)?.localEventsSuppressionInterval = 0
@@ -187,6 +189,7 @@ final class GestureEngine: @unchecked Sendable {
             debugThisSession = false
         }
         resetTracking()
+        lastSyncedCursorPosition = nil
     }
 
     /// Returns whether the engine consumed the event. Tap thread.
@@ -221,6 +224,7 @@ final class GestureEngine: @unchecked Sendable {
         switch state {
         case .pending:
             _ = appendPoint(location)
+            lastSyncedCursorPosition = location
             if distance(startPoint, location) >= movementThreshold {
                 state = .gesturing
                 armGestureTimeoutTimer()
@@ -234,6 +238,7 @@ final class GestureEngine: @unchecked Sendable {
 
         case .gesturing:
             let appended = appendPoint(location)
+            lastSyncedCursorPosition = location
             if appended {
                 // Only re-arm the cancellation countdown when the cursor has
                 // actually moved a meaningful distance since the last arm.
@@ -259,6 +264,7 @@ final class GestureEngine: @unchecked Sendable {
 
         case .cleanupAwaitingUp:
             lastPoint = location
+            lastSyncedCursorPosition = location
             return true
 
         case .idle:
@@ -286,6 +292,7 @@ final class GestureEngine: @unchecked Sendable {
         case .pending:
             let point = startPoint
             resetTracking()
+            lastSyncedCursorPosition = nil
             replayRightClickAsync(at: point)
             return true
 
@@ -302,18 +309,18 @@ final class GestureEngine: @unchecked Sendable {
             let gestureStart = startPoint
             resetTracking()
 
-            // 把逻辑光标 warp 到松手处 —— 与 cancel / cleanupAwaitingUp 收尾一致。
-            // 手势进行中我们在 HID tap 吞掉了 rightMouseDragged,视觉光标跟手走了,但
-            // 窗口服务器的逻辑光标还停在 startPoint;手势一结束它就把视觉光标snap回那个
-            // 旧位置 —— 用户看到的就是"卡一下又跳回起点"(手势越长跳得越远越明显)。这里
-            // 主动 warp 到松手处并立即重新关联,配合 didDisableWarpSuppression 消除卡顿。
+            // 收尾兜底 warp。手势期间 drag 已降级成 mouseMoved 投递,逻辑光标
+            // 一路跟手,正常路径下 releasePoint 就是最后一个已投递位置,这里整段
+            // 跳过;仅在"up 自带未经 drag 投递的新坐标"等错位边角才真 warp,并
+            // 立即重新关联 —— warp 自带的事件抑制窗会把光标卡住(实测恒 0.25s,
+            // didDisableWarpSuppression 并未真正生效,associate(1) 才是解药)。
             // 目标窗口已按 capturedTargetPoint(=手势起点)解析,warp 不影响快捷键派发。
-            if releasePoint != .zero, releasePoint != gestureStart {
+            if releasePoint != .zero, !isCursorSynced(to: releasePoint) {
                 CGWarpMouseCursorPosition(releasePoint)
                 CGAssociateMouseAndMouseCursorPosition(1)
                 logWarpDiagnostics(reason: "release", from: gestureStart, to: releasePoint)
             }
-            lastWarpedPosition = nil
+            lastSyncedCursorPosition = nil
 
             Task { @MainActor [weak self] in
                 self?.runGesture(
@@ -331,19 +338,17 @@ final class GestureEngine: @unchecked Sendable {
         case .cleanupAwaitingUp:
             let releasePoint = lastPoint
             resetTracking()
-            // The user may have moved more after cancellation while still
-            // holding the button — same logical/visual divergence accrues
-            // during the cleanup window. Resync once on release so the next
-            // mouseMoved event doesn't snap the cursor to a stale position.
-            // 但要避开 cancel 时已经 warp 过同一个位置的 no-op warp:连续两次
-            // warp 即使 suppression interval = 0 也是无谓 syscall,而且如果哪天
-            // suppression 又被系统加回来,redundant warp 会直接卡 1-2s。
-            if releasePoint != .zero, releasePoint != lastWarpedPosition {
+            // cleanup 窗口内的 drag 同样以 mouseMoved 投递,逻辑光标持续跟手,
+            // 正常路径下 releasePoint 与 lastSyncedCursorPosition 一致、跳过
+            // warp,仅在 up 自带新坐标等错位场景兜底。去重不能省:冗余 warp 即使
+            // suppression interval = 0 也是无谓 syscall,真撞上 suppression
+            // (实测恒 0.25s)会直接卡 1-2s。
+            if releasePoint != .zero, !isCursorSynced(to: releasePoint) {
                 CGWarpMouseCursorPosition(releasePoint)
                 CGAssociateMouseAndMouseCursorPosition(1)
-                logWarpDiagnostics(reason: "cleanupUp", from: lastWarpedPosition ?? .zero, to: releasePoint)
+                logWarpDiagnostics(reason: "cleanupUp", from: lastSyncedCursorPosition ?? .zero, to: releasePoint)
             }
-            lastWarpedPosition = nil
+            lastSyncedCursorPosition = nil
             return true
 
         case .idle:
@@ -634,24 +639,29 @@ final class GestureEngine: @unchecked Sendable {
         frontmostApplicationAtGestureStart = nil
         overlay.hide()
 
-        // While we were suppressing rightMouseDragged at the HID tap, the
-        // on-screen cursor (driven by HID) tracked the actual mouse but the
-        // window server's logical cursor position stayed at startPoint. The
-        // instant we let the gesture lifecycle wind down, the window server
-        // snaps the visual cursor back to that stale logical position. Warp
-        // the logical position to where the user actually is so the snap
-        // doesn't happen. Re-associate immediately to avoid the cursor freeze
-        // that CGWarpMouseCursorPosition can otherwise introduce —— 配合
-        // `didDisableWarpSuppression` 把 suppression interval 设为 0,
-        // 两层防线共同消除"光标卡 1-2 秒"。
+        // 手势期间 drag 已降级成 mouseMoved 投递,逻辑光标一路跟手;取消时
+        // endPosition(最后一个 drag 位置)通常就是 lastSyncedCursorPosition,
+        // 下面的 warp 整段跳过,仅在错位边角兜底。真 warp 后立即重新关联 ——
+        // warp 自带的事件抑制窗(实测恒 0.25s,didDisableWarpSuppression 并未
+        // 真正生效)否则会把光标卡住。
         if endPosition != .zero, endPosition != startPoint {
-            CGWarpMouseCursorPosition(endPosition)
-            CGAssociateMouseAndMouseCursorPosition(1)
-            lastWarpedPosition = endPosition
-            logWarpDiagnostics(reason: "cancel", from: startPoint, to: endPosition)
+            if !isCursorSynced(to: endPosition) {
+                CGWarpMouseCursorPosition(endPosition)
+                CGAssociateMouseAndMouseCursorPosition(1)
+                logWarpDiagnostics(reason: "cancel", from: startPoint, to: endPosition)
+            }
+            lastSyncedCursorPosition = endPosition
         } else {
-            lastWarpedPosition = nil
+            lastSyncedCursorPosition = nil
         }
+    }
+
+    /// 收尾 warp 的去重判定。up 事件的坐标被系统整数化,而 drag 坐标带小数,
+    /// 逐位相等永远判不出"同一位置"(日志实测 release warp 因此每次都触发);
+    /// 1px 内视为已同步 —— 亚像素 warp 本身也毫无意义。
+    private func isCursorSynced(to point: CGPoint) -> Bool {
+        guard let synced = lastSyncedCursorPosition else { return false }
+        return distance(synced, point) < 1.0
     }
 
     /// 水位计:记录每次 warp 的时机、起止点,并回读三个 event source 状态表的
