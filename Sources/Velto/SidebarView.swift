@@ -191,14 +191,11 @@ private struct SidebarItem: View {
         if active {
             Color.clear
                 .glassEffect(.regular.tint(Color.mgAccent.opacity(0.85)), in: shape)
+        } else if isHovered {
+            shape
+                .fill(Color.white.opacity(0.08))
         } else {
-            SettingsSidebarGlassView(
-                cornerRadius: MGRadius.control,
-                tintColor: NSColor.windowBackgroundColor.withAlphaComponent(isHovered ? 0.20 : 0.12),
-                style: .regular
-            )
-            .clipShape(shape)
-            .opacity(isHovered ? 0.85 : 0.45)
+            Color.clear
         }
     }
 }
