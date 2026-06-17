@@ -20,18 +20,21 @@ enum ScreenshotCapturer {
     let content = try await SCShareableContent.current
     var result: [DisplaySnapshot] = []
     for display in content.displays {
+      // I1:在循环顶部缓存 scale,避免每次重复查询 NSScreen
+      let scale = displayScale(display)
       let filter = SCContentFilter(display: display, excludingWindows: [])
       let config = SCStreamConfiguration()
-      config.width = Int(CGFloat(display.width) * displayScale(display.displayID))
-      config.height = Int(CGFloat(display.height) * displayScale(display.displayID))
+      config.width = Int(CGFloat(display.width) * scale)
+      config.height = Int(CGFloat(display.height) * scale)
       config.showsCursor = false
       let image = try await SCScreenshotManager.captureImage(
         contentFilter: filter, configuration: config)
       result.append(DisplaySnapshot(
         displayID: display.displayID,
         image: image,
-        frame: nsScreenFrame(for: display.displayID) ?? display.frame,
-        scale: displayScale(display.displayID)
+        // C1:NSScreen 查不到时用 cgFrameToNSFrame 翻转坐标系,而非直接用 CG 左上原点的 frame
+        frame: nsScreenFrame(for: display.displayID) ?? cgFrameToNSFrame(display.frame),
+        scale: scale
       ))
       ScreenshotDebugLog.log("captured display \(display.displayID) \(image.width)x\(image.height)")
     }
@@ -55,8 +58,24 @@ enum ScreenshotCapturer {
 
   // MARK: - 私有辅助
 
-  private static func displayScale(_ id: CGDirectDisplayID) -> CGFloat {
-    nsScreen(for: id)?.backingScaleFactor ?? 2.0
+  /// I2:接收 SCDisplay,NSScreen 查不到时用 CG API 从像素/点比例推算真实 scale。
+  /// 只有 display.height 为 0 的退化情形才最后退回 2.0。
+  private static func displayScale(_ display: SCDisplay) -> CGFloat {
+    if let s = nsScreen(for: display.displayID)?.backingScaleFactor { return s }
+    let pixelHigh = CGFloat(CGDisplayPixelsHigh(display.displayID))
+    return display.height > 0 ? pixelHigh / CGFloat(display.height) : 2.0
+  }
+
+  /// C1:把 SCDisplay.frame(CG 左上原点)转成 NSScreen 左下原点全局坐标。
+  /// 仅在 NSScreen 查不到对应 displayID 的兜底路径用。
+  private static func cgFrameToNSFrame(_ cgFrame: CGRect) -> CGRect {
+    let primaryHeight = NSScreen.screens.first?.frame.height ?? cgFrame.height
+    return CGRect(
+      x: cgFrame.origin.x,
+      y: primaryHeight - cgFrame.maxY,
+      width: cgFrame.width,
+      height: cgFrame.height
+    )
   }
 
   private static func nsScreen(for id: CGDirectDisplayID) -> NSScreen? {
