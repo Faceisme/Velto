@@ -9,11 +9,6 @@ struct KeyRemapPage: View {
   @State private var importMessage: String = ""
   @State private var showImportResult = false
 
-  // 简单映射工具栏状态
-  @State private var fromKeyCode: UInt16 = KeyCodeMap.modifierKeys.first?.keyCode ?? 57
-  @State private var toKeyCode: UInt16 = KeyCodeMap.functionKeys.first?.keyCode ?? 80
-  @State private var selectedManualID: UUID?
-
   var body: some View {
     ScrollView {
       VStack(alignment: .leading, spacing: 22) {
@@ -76,98 +71,27 @@ struct KeyRemapPage: View {
     }
   }
 
-  // MARK: - 简单映射区
+  // MARK: - 简单映射区(单卡:添加行在顶,每条映射各自带删除)
 
   private var manualSection: some View {
     let manualManipulators = store.rules.first(where: { $0.isManual })?.manipulators ?? []
     return VStack(alignment: .leading, spacing: 10) {
       MGSectionLabel(text: "简单映射")
-
-      // 工具栏:选择器 + 添加 / 删除,独立在列表上方
-      manualToolbar
-
-      // 规则列表:单独一张卡,行可选中
       GroupCard(radius: MGRadius.cardLg) {
         VStack(spacing: 0) {
-          if manualManipulators.isEmpty {
-            Text("还没有映射。在上方选择「源按键 → 目标按键」后点「添加」。")
-              .font(.mgBody)
-              .foregroundStyle(Color.mgText3)
-              .frame(maxWidth: .infinity, alignment: .leading)
-              .padding(16)
-          } else {
-            ForEach(manualManipulators) { m in
-              ManualRemapRow(
-                manipulator: m,
-                selected: selectedManualID == m.id,
-                showDivider: m.id != manualManipulators.first?.id
-              ) {
-                selectedManualID = (selectedManualID == m.id) ? nil : m.id
-              }
+          // 添加行固定在顶部,新映射往下追加
+          AddRemapRow { from, to in
+            store.addManualManipulator(KeyRemapManipulator(from: from, to: [to]))
+          }
+          ForEach(manualManipulators) { m in
+            Divider().padding(.horizontal, 16)
+            ManualRemapRow(manipulator: m) {
+              store.deleteManualManipulator(id: m.id)
             }
           }
         }
       }
     }
-  }
-
-  private var manualToolbar: some View {
-    HStack(spacing: 10) {
-      Picker("", selection: $fromKeyCode) {
-        ForEach(KeyCodeMap.pickerSections, id: \.title) { section in
-          Section(section.title) {
-            ForEach(section.entries, id: \.keyCode) { e in
-              Text(e.displayLabel).tag(e.keyCode)
-            }
-          }
-        }
-      }
-      .labelsHidden()
-      .frame(minWidth: 150)
-
-      Image(systemName: "arrow.right")
-        .foregroundStyle(Color.mgText3)
-
-      Picker("", selection: $toKeyCode) {
-        ForEach(KeyCodeMap.pickerSectionsForTo, id: \.title) { section in
-          Section(section.title) {
-            ForEach(section.entries, id: \.keyCode) { e in
-              Text(e.displayLabel).tag(e.keyCode)
-            }
-          }
-        }
-      }
-      .labelsHidden()
-      .frame(minWidth: 150)
-
-      Spacer()
-
-      Button { addCurrent() } label: {
-        Label("添加", systemImage: "plus")
-      }
-      .buttonStyle(MGSecondaryButtonStyle(foreground: .mgAccent))
-
-      Button { deleteSelected() } label: {
-        Label("删除", systemImage: "minus")
-      }
-      .buttonStyle(MGSecondaryButtonStyle(foreground: Color.red.opacity(0.85)))
-      .disabled(selectedManualID == nil)
-    }
-  }
-
-  private func addCurrent() {
-    guard let fe = KeyCodeMap.byKeyCode[fromKeyCode] else { return }
-    let te: KeyCodeEntry? = toKeyCode == 0xFFFF ? KeyCodeMap.vkNone : KeyCodeMap.byKeyCode[toKeyCode]
-    guard let te else { return }
-    let from = KeyRemapFrom(keyCode: fe.keyCode, isModifier: fe.isModifier, mandatory: [])
-    let to = KeyRemapTo(keyCode: te.keyCode, isModifier: te.isModifier, additionalModifierCodes: [])
-    store.addManualManipulator(KeyRemapManipulator(from: from, to: [to]))
-  }
-
-  private func deleteSelected() {
-    guard let id = selectedManualID else { return }
-    store.deleteManualManipulator(id: id)
-    selectedManualID = nil
   }
 
   // MARK: - 导入规则区
@@ -227,13 +151,70 @@ struct KeyRemapPage: View {
   }
 }
 
-// MARK: - 手动映射行(可选中,删除走顶部工具栏)
+// MARK: - 添加行(选择器 + 添加,卡内顶部)
+
+private struct AddRemapRow: View {
+  let onAdd: (KeyRemapFrom, KeyRemapTo) -> Void
+
+  @State private var fromKeyCode: UInt16 = KeyCodeMap.modifierKeys.first?.keyCode ?? 57
+  @State private var toKeyCode: UInt16 = KeyCodeMap.functionKeys.first?.keyCode ?? 80
+
+  private var fromEntry: KeyCodeEntry? { KeyCodeMap.byKeyCode[fromKeyCode] }
+  private var toEntry: KeyCodeEntry? {
+    toKeyCode == 0xFFFF ? KeyCodeMap.vkNone : KeyCodeMap.byKeyCode[toKeyCode]
+  }
+
+  var body: some View {
+    HStack {
+      Picker("", selection: $fromKeyCode) {
+        ForEach(KeyCodeMap.pickerSections, id: \.title) { section in
+          Section(section.title) {
+            ForEach(section.entries, id: \.keyCode) { e in
+              Text(e.displayLabel).tag(e.keyCode)
+            }
+          }
+        }
+      }
+      .labelsHidden()
+      .frame(minWidth: 150)
+
+      Image(systemName: "arrow.right")
+        .foregroundStyle(Color.mgText3)
+
+      Picker("", selection: $toKeyCode) {
+        ForEach(KeyCodeMap.pickerSectionsForTo, id: \.title) { section in
+          Section(section.title) {
+            ForEach(section.entries, id: \.keyCode) { e in
+              Text(e.displayLabel).tag(e.keyCode)
+            }
+          }
+        }
+      }
+      .labelsHidden()
+      .frame(minWidth: 150)
+
+      Spacer()
+
+      Button {
+        guard let fe = fromEntry, let te = toEntry else { return }
+        let from = KeyRemapFrom(keyCode: fe.keyCode, isModifier: fe.isModifier, mandatory: [])
+        let to = KeyRemapTo(keyCode: te.keyCode, isModifier: te.isModifier, additionalModifierCodes: [])
+        onAdd(from, to)
+      } label: {
+        Label("添加", systemImage: "plus")
+      }
+      .buttonStyle(MGSecondaryButtonStyle(foreground: .mgAccent))
+    }
+    .padding(.horizontal, 16)
+    .padding(.vertical, 10)
+  }
+}
+
+// MARK: - 手动映射行(每行自带删除)
 
 private struct ManualRemapRow: View {
   let manipulator: KeyRemapManipulator
-  let selected: Bool
-  let showDivider: Bool
-  let onSelect: () -> Void
+  let onDelete: () -> Void
 
   var body: some View {
     let fromLabel = KeyCodeMap.byKeyCode[manipulator.from.keyCode]?.displayLabel ?? "#\(manipulator.from.keyCode)"
@@ -241,27 +222,24 @@ private struct ManualRemapRow: View {
       $0.keyCode == 0xFFFF ? "禁用" : (KeyCodeMap.byKeyCode[$0.keyCode]?.displayLabel ?? "#\($0.keyCode)")
     } ?? "—"
 
-    VStack(spacing: 0) {
-      if showDivider {
-        Divider().padding(.horizontal, 16)
+    HStack {
+      Text(fromLabel)
+        .font(.mgBody)
+        .frame(minWidth: 120, alignment: .leading)
+      Image(systemName: "arrow.right")
+        .foregroundStyle(Color.mgText3)
+      Text(toLabel)
+        .font(.mgBody)
+        .frame(minWidth: 120, alignment: .leading)
+      Spacer()
+      Button(role: .destructive) { onDelete() } label: {
+        Image(systemName: "trash")
+          .foregroundStyle(Color.red.opacity(0.8))
       }
-      HStack {
-        Text(fromLabel)
-          .font(.mgBody)
-          .frame(minWidth: 120, alignment: .leading)
-        Image(systemName: "arrow.right")
-          .foregroundStyle(Color.mgText3)
-        Text(toLabel)
-          .font(.mgBody)
-          .frame(minWidth: 120, alignment: .leading)
-        Spacer()
-      }
-      .padding(.horizontal, 16)
-      .padding(.vertical, 10)
-      .background(selected ? Color.mgAccent.opacity(0.12) : Color.clear)
-      .contentShape(Rectangle())
-      .onTapGesture { onSelect() }
+      .buttonStyle(.plain)
     }
+    .padding(.horizontal, 16)
+    .padding(.vertical, 10)
   }
 }
 
