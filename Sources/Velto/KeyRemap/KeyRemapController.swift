@@ -27,6 +27,10 @@ final class KeyRemapController: @unchecked Sendable {
   private var previousFlags: CGEventFlags = []
   private var hyperActive: Bool = false               // hyper key 是否激活中
 
+  // 合成事件用的 event source 建一次复用。每次按键重建要走 IOKit + 查 HID 状态，
+  // 是热路径里最重的一步；这里只在 tap 线程访问，无需加锁。
+  private let eventSource = CGEventSource(stateID: .hidSystemState)
+
   // MARK: - 更新查找表（在 tap 线程调用）
 
   func update(rules: [KeyRemapRule]) {
@@ -145,7 +149,7 @@ final class KeyRemapController: @unchecked Sendable {
 
   private func synthesize(action: CompiledToAction, press: Bool) {
     let marker = ShortcutSynthesizer.syntheticEventMarker
-    guard let src = CGEventSource(stateID: .hidSystemState) else { return }
+    guard let src = eventSource else { return }
 
     switch action {
     case .disable:
