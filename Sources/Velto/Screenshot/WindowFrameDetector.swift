@@ -1,4 +1,3 @@
-import AppKit
 import CoreGraphics
 import Foundation
 
@@ -16,8 +15,8 @@ enum WindowFrameDetector {
     for w in windows {
       if let layer = w[kCGWindowLayer as String] as? Int, layer != 0 { continue }
       if let owner = w[kCGWindowOwnerPID as String] as? pid_t, owner == pid { continue }
-      guard let dict = w[kCGWindowBounds as String] as? [String: CGFloat],
-            let rect = CGRect(dictionaryRepresentation: dict as CFDictionary) else { continue }
+      guard let boundsDict = w[kCGWindowBounds as String] as? NSDictionary,
+            let rect = CGRect(dictionaryRepresentation: boundsDict) else { continue }
       if rect.contains(p) { return rect }
     }
     return nil
