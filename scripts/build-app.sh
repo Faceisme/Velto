@@ -56,9 +56,29 @@ done
 cd "$ROOT_DIR"
 install -d "$BUILD_HOME" "$ROOT_DIR/.build/clang-module-cache" "$ROOT_DIR/.build/swiftpm-cache"
 
+# 下面会把 HOME 改到 .build/home 做缓存隔离,但 codesign 要从这里取登录钥匙串
+# 里的签名证书 —— HOME 一改,钥匙串搜索列表就没有 login.keychain,
+# codesign 找不到 "Apple Development:" 证书会静默退回 ad-hoc 签名,
+# 导致指定要求(designated requirement)变成裸 cdhash,TCC 授权每次重编都失效。
+# 所以先存下真实 HOME,签名时单独用它。
+REAL_HOME="$HOME"
+
 export HOME="$BUILD_HOME"
 export XDG_CACHE_HOME="$ROOT_DIR/.build/swiftpm-cache"
 export CLANG_MODULE_CACHE_PATH="$ROOT_DIR/.build/clang-module-cache"
+
+# 用固定证书签名:必须用真实 HOME 才能访问登录钥匙串里的私钥。
+# 签完顺手校验签名身份不是 ad-hoc,签错了立刻报错中止,绝不带病部署。
+sign_with_cert() {
+    local target="$1" entitlements="$2"
+    HOME="$REAL_HOME" codesign --force --sign "$CODE_SIGN_IDENTITY" \
+        --entitlements "$entitlements" "$target"
+    if codesign -dv --verbose=2 "$target" 2>&1 | grep -q "Signature=adhoc"; then
+        echo "错误:$target 签名退回了 ad-hoc(证书 '$CODE_SIGN_IDENTITY' 不可用)。" >&2
+        echo "      检查 \`security find-identity -v -p codesigning\` 是否能看到该证书。" >&2
+        exit 1
+    fi
+}
 
 # ============ 1. 编译 ============
 swift build -c "$CONFIGURATION" --arch arm64 --scratch-path "$ROOT_DIR/.build" --product Velto
@@ -86,8 +106,8 @@ chmod +x "$FINDER_EXT_MACOS_DIR/BetterFinderExtension"
 # 必须在每次 codesign 之前清一次。
 if command -v codesign >/dev/null 2>&1; then
     xattr -cr "$APP_DIR" 2>/dev/null || true
-    codesign --force --sign "$CODE_SIGN_IDENTITY" --entitlements "$FINDER_EXT_ENTITLEMENTS" "$FINDER_EXT_DIR" >/dev/null
-    codesign --force --sign "$CODE_SIGN_IDENTITY" --entitlements "$APP_ENTITLEMENTS" "$APP_DIR" >/dev/null
+    sign_with_cert "$FINDER_EXT_DIR" "$FINDER_EXT_ENTITLEMENTS"
+    sign_with_cert "$APP_DIR" "$APP_ENTITLEMENTS"
 fi
 
 # ============ 4. 同步到 /Applications/(除非 SKIP_INSTALL=1)============
@@ -108,8 +128,8 @@ cp -R "$APP_DIR" "$INSTALLED_APP"
 
 if command -v codesign >/dev/null 2>&1; then
     xattr -cr "$INSTALLED_APP" 2>/dev/null || true
-    codesign --force --sign "$CODE_SIGN_IDENTITY" --entitlements "$FINDER_EXT_ENTITLEMENTS" "$INSTALLED_FINDER_EXT" >/dev/null
-    codesign --force --sign "$CODE_SIGN_IDENTITY" --entitlements "$APP_ENTITLEMENTS" "$INSTALLED_APP" >/dev/null
+    sign_with_cert "$INSTALLED_FINDER_EXT" "$FINDER_EXT_ENTITLEMENTS"
+    sign_with_cert "$INSTALLED_APP" "$APP_ENTITLEMENTS"
 fi
 
 if [ "${SKIP_FINDER_EXTENSION_REGISTER:-0}" != "1" ] && command -v pluginkit >/dev/null 2>&1; then
