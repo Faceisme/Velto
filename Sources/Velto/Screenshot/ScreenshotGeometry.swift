@@ -29,8 +29,8 @@ enum ScreenshotGeometry {
   }
 
   static func handle(at p: CGPoint, selection s: CGRect, handleSize h: CGFloat) -> ScreenshotHandle? {
-    for (handle, rect) in handleRects(for: s, handleSize: h) where rect.contains(p) { return handle }
-    return nil
+    let rects = handleRects(for: s, handleSize: h)
+    return ScreenshotHandle.allCases.first { rects[$0]?.contains(p) == true }
   }
 
   /// 拖某个手柄到新点后的选区(对边固定,被拖的边/角跟随)。返回未归一化前先归一化。
@@ -58,6 +58,7 @@ enum ScreenshotGeometry {
 
   static func suggestedFileName(date: Date = Date(), format: ScreenshotImageFormat = .png) -> String {
     let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd-HHmmss"
+    f.locale = Locale(identifier: "en_US_POSIX")
     return "Velto-\(f.string(from: date)).\(format.rawValue)"
   }
 }
