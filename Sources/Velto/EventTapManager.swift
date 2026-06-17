@@ -236,7 +236,10 @@ final class EventTapManager: @unchecked Sendable {
             }
         }
 
-        keyRemapController.update(rules: KeyRemapStore.shared.rules)
+        // 总开关关闭时喂空规则,等于整个按键映射特性暂停(查找表为空,所有事件透传)。
+        keyRemapController.update(
+            rules: KeyRemapStore.shared.masterEnabled ? KeyRemapStore.shared.rules : []
+        )
         keyRemapObserver = NotificationCenter.default.addObserver(
             forName: .keyRemapStoreDidChange,
             object: nil,
@@ -244,7 +247,8 @@ final class EventTapManager: @unchecked Sendable {
         ) { [weak self] _ in
             // queue: .main 保证回调在主线程,KeyRemapStore 是 @MainActor。
             MainActor.assumeIsolated {
-                let rules = KeyRemapStore.shared.rules
+                let store = KeyRemapStore.shared
+                let rules = store.masterEnabled ? store.rules : []
                 self?.performOnTapThread { [weak self] in
                     self?.keyRemapController.update(rules: rules)
                 }

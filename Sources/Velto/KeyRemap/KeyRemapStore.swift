@@ -7,10 +7,13 @@ final class KeyRemapStore {
   static let shared = KeyRemapStore()
 
   private let storageKey = "Velto.keyRemaps"
+  private let enabledKey = "Velto.keyRemapEnabled"
   private let encoder = JSONEncoder()
   private let decoder = JSONDecoder()
 
   private(set) var rules: [KeyRemapRule]
+  // 功能总开关:关闭后所有映射规则暂停生效。默认开启,保持既有行为。
+  private(set) var masterEnabled: Bool
 
   private init() {
     if let data = UserDefaults.standard.data(forKey: storageKey),
@@ -19,6 +22,21 @@ final class KeyRemapStore {
     } else {
       rules = []
     }
+    // 从未设置过时默认开启。
+    if UserDefaults.standard.object(forKey: enabledKey) == nil {
+      masterEnabled = true
+    } else {
+      masterEnabled = UserDefaults.standard.bool(forKey: enabledKey)
+    }
+  }
+
+  // MARK: - 总开关
+
+  func setMasterEnabled(_ enabled: Bool) {
+    guard masterEnabled != enabled else { return }
+    masterEnabled = enabled
+    UserDefaults.standard.set(enabled, forKey: enabledKey)
+    notify()
   }
 
   // MARK: - 写操作（每次操作后持久化 + 通知）
