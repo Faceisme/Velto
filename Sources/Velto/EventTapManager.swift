@@ -146,6 +146,7 @@ final class EventTapManager: @unchecked Sendable {
     private let windowShortcutController = WindowShortcutController()
     private let trackpadGestureController = TrackpadGestureController()
     private let betterFinderShortcutController = BetterFinderGlobalShortcutController()
+    private let keyRemapController = KeyRemapController()
 
     /// 手势 / 窗口管理是否启用的 tap 线程快照。只在 tap 线程读写(`handle` 与
     /// `performOnTapThread` 块都在 tap 线程;`init` 在 `start()` 之前于主线程设初值,
@@ -174,6 +175,7 @@ final class EventTapManager: @unchecked Sendable {
     private var activationObserver: NSObjectProtocol?
     private var storeObserver: NSObjectProtocol?
     private var betterFinderObserver: NSObjectProtocol?
+    private var keyRemapObserver: NSObjectProtocol?
 
     @MainActor
     init(store: GestureStore = .shared) {
@@ -233,6 +235,18 @@ final class EventTapManager: @unchecked Sendable {
                 self?.betterFinderShortcutController.updatePreferences(preferences)
             }
         }
+
+        keyRemapController.update(rules: KeyRemapStore.shared.rules)
+        keyRemapObserver = NotificationCenter.default.addObserver(
+            forName: .keyRemapStoreDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            let rules = KeyRemapStore.shared.rules
+            self?.performOnTapThread { [weak self] in
+                self?.keyRemapController.update(rules: rules)
+            }
+        }
     }
 
     deinit {
@@ -244,6 +258,9 @@ final class EventTapManager: @unchecked Sendable {
         }
         if let betterFinderObserver {
             NotificationCenter.default.removeObserver(betterFinderObserver)
+        }
+        if let keyRemapObserver {
+            NotificationCenter.default.removeObserver(keyRemapObserver)
         }
         stop()
     }
@@ -530,6 +547,9 @@ final class EventTapManager: @unchecked Sendable {
             if InputSourceSwitchSelector.isSyntheticEvent(event) {
                 return Unmanaged.passUnretained(event)
             }
+            if keyRemapController.handleFlagsChanged(event: event) {
+                return nil
+            }
             guard !gestureEngine.isHandlingRightMouse else {
                 return Unmanaged.passUnretained(event)
             }
@@ -547,6 +567,9 @@ final class EventTapManager: @unchecked Sendable {
             if kdUserData == ShortcutSynthesizer.syntheticEventMarker
                 || InputSourceSwitchSelector.isSyntheticEvent(event) {
                 return Unmanaged.passUnretained(event)
+            }
+            if keyRemapController.handleKeyDown(event: event) {
+                return nil
             }
             guard !gestureEngine.isHandlingRightMouse else {
                 return Unmanaged.passUnretained(event)
@@ -570,6 +593,9 @@ final class EventTapManager: @unchecked Sendable {
             if kuUserData == ShortcutSynthesizer.syntheticEventMarker
                 || InputSourceSwitchSelector.isSyntheticEvent(event) {
                 return Unmanaged.passUnretained(event)
+            }
+            if keyRemapController.handleKeyUp(event: event) {
+                return nil
             }
             guard !gestureEngine.isHandlingRightMouse else {
                 return Unmanaged.passUnretained(event)
