@@ -63,6 +63,13 @@ struct SidebarView: View {
                     ) { page = .inputSourceSwitch }
 
                     SidebarItem(
+                        icon: MGPage.keyRemap.icon,
+                        label: MGPage.keyRemap.label,
+                        badge: nil,
+                        active: page == .keyRemap
+                    ) { page = .keyRemap }
+
+                    SidebarItem(
                         icon: MGPage.betterFinder.icon,
                         label: MGPage.betterFinder.label,
                         badge: nil,
