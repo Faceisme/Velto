@@ -210,25 +210,40 @@ flagsChanged（right_command 松开）：
 
 ```
 页面标题：按键映射
-副标题：导入 Karabiner 社区规则文件，实现按键重映射
+副标题：手动添加或导入 Karabiner 规则文件，实现按键重映射
 
-[导入 JSON 规则文件]  ← 文件选择器，接受 .json
+─── 简单映射 ─────────────────────────────────────
 
-─── 已导入规则列表 ───────────────────────────────
+  [caps_lock ▼]  →  [f19 ▼]            [🗑]
+  [  空行   ▼]  →  [   ▼]             [🗑]   ← 新建中
 
-┌─ caps_lock → Hyper Key ─────────────────────┐
-│  [toggle: 启用]                  [删除]       │
-│  caps_lock → ⌘⌃⌥⇧                          │
-└──────────────────────────────────────────────┘
+  [+ Add item]
 
-┌─ Vim 方向键 ────────────────────────────────┐
-│  [toggle: 启用]                  [删除]       │
-│  right_cmd + h → ←                          │
-│  right_cmd + j → ↓                          │
-│  right_cmd + k → ↑                          │
-│  right_cmd + l → →                          │
-└──────────────────────────────────────────────┘
+─── 导入的规则 ───────────────────────────────────
+
+  [导入 JSON 规则文件]
+
+  ┌─ caps_lock → Hyper Key ───────────────────┐
+  │  [toggle: 启用]               [删除]        │
+  │  caps_lock → ⌘⌃⌥⇧                        │
+  └────────────────────────────────────────────┘
+
+  ┌─ Vim 方向键 ──────────────────────────────┐
+  │  [toggle: 启用]               [删除]        │
+  │  right_cmd + h → ←                        │
+  │  right_cmd + j → ↓  right_cmd + k → ↑    │
+  │  right_cmd + l → →                        │
+  └────────────────────────────────────────────┘
 ```
+
+### 简单映射区（Add item）
+
+对标 Karabiner Simple Modifications 的行内 Picker：
+- 每行：`[from Picker] → [to Picker] [删除按钮]`
+- from/to Picker 显示按键名，选项列表按分组组织（修饰键 / 功能键 / 字母键 / 数字键 / 方向键 / 媒体键）
+- 选项数据来自 `KeyCodeMap` 的同一份表，保证导入和手动添加用同一套 key_code 命名
+- 手动添加的映射存为一条特殊 `KeyRemapRule`（title = "手动映射"，`isManual = true`），与导入规则共用同一个 `[KeyRemapRule]` 存储，执行引擎无感知区别
+- 页面渲染时"手动映射"规则始终置顶，不显示 enable/disable toggle（始终生效），只显示 Add item 和每行删除按钮
 
 规则卡片样式对齐现有 Velto 设计系统（`GroupCard` 组件）。
 
@@ -261,7 +276,6 @@ if keyRemapController.handleKeyUp(event: event) { return nil }
 
 ## 10. 不在此次范围内
 
-- 手动在 UI 里 Add item（文字下拉选 from/to）—— 可后续加
 - 按设备过滤规则（Karabiner 的 device condition）
 - 规则导出
 - 规则执行顺序调整（拖拽排序）
