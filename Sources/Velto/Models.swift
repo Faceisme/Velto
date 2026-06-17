@@ -84,6 +84,8 @@ struct AppPreferences: Codable, Equatable {
     /// 输入法自动切换的全部配置 —— 子结构定义在
     /// InputSourceSwitch/InputSourceSwitchPreferences.swift。
     var inputSourceSwitch: InputSourceSwitchPreferences
+    /// 截图模块配置 —— 子结构在 Screenshot/ScreenshotPreferences.swift。
+    var screenshot: ScreenshotPreferences
 
     init(
         gesturesEnabled: Bool,
@@ -100,7 +102,8 @@ struct AppPreferences: Codable, Equatable {
         windowMaximizeShortcut: Shortcut?,
         mouseControl: MouseControlPreferences,
         switcher: SwitcherPreferences,
-        inputSourceSwitch: InputSourceSwitchPreferences
+        inputSourceSwitch: InputSourceSwitchPreferences,
+        screenshot: ScreenshotPreferences
     ) {
         self.gesturesEnabled = gesturesEnabled
         self.showTrail = showTrail
@@ -117,6 +120,7 @@ struct AppPreferences: Codable, Equatable {
         self.mouseControl = mouseControl
         self.switcher = switcher
         self.inputSourceSwitch = inputSourceSwitch
+        self.screenshot = screenshot
     }
 
     init(from decoder: Decoder) throws {
@@ -139,6 +143,7 @@ struct AppPreferences: Codable, Equatable {
         mouseControl = try container.decodeIfPresent(MouseControlPreferences.self, forKey: .mouseControl) ?? Self.defaults.mouseControl
         switcher = try container.decodeIfPresent(SwitcherPreferences.self, forKey: .switcher) ?? Self.defaults.switcher
         inputSourceSwitch = try container.decodeIfPresent(InputSourceSwitchPreferences.self, forKey: .inputSourceSwitch) ?? Self.defaults.inputSourceSwitch
+        screenshot = try container.decodeIfPresent(ScreenshotPreferences.self, forKey: .screenshot) ?? Self.defaults.screenshot
     }
 
     static let defaults = AppPreferences(
@@ -156,7 +161,8 @@ struct AppPreferences: Codable, Equatable {
         windowMaximizeShortcut: nil,
         mouseControl: .defaults,
         switcher: .defaults,
-        inputSourceSwitch: .defaults
+        inputSourceSwitch: .defaults,
+        screenshot: .defaults
     )
 }
 
