@@ -242,9 +242,12 @@ final class EventTapManager: @unchecked Sendable {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            let rules = KeyRemapStore.shared.rules
-            self?.performOnTapThread { [weak self] in
-                self?.keyRemapController.update(rules: rules)
+            // queue: .main 保证回调在主线程,KeyRemapStore 是 @MainActor。
+            MainActor.assumeIsolated {
+                let rules = KeyRemapStore.shared.rules
+                self?.performOnTapThread { [weak self] in
+                    self?.keyRemapController.update(rules: rules)
+                }
             }
         }
     }
@@ -543,8 +546,10 @@ final class EventTapManager: @unchecked Sendable {
             return Unmanaged.passUnretained(event)
 
         case .flagsChanged:
-            // 合成的「上一个输入法」快捷键修饰键不能污染鼠标控制/缩放/拖窗的修饰键状态机。
-            if InputSourceSwitchSelector.isSyntheticEvent(event) {
+            // 合成的「上一个输入法」快捷键 / 按键映射修饰键不能污染鼠标控制/缩放/拖窗的修饰键状态机。
+            let fcUserData = event.getIntegerValueField(.eventSourceUserData)
+            if fcUserData == ShortcutSynthesizer.syntheticEventMarker
+                || InputSourceSwitchSelector.isSyntheticEvent(event) {
                 return Unmanaged.passUnretained(event)
             }
             if keyRemapController.handleFlagsChanged(event: event) {
