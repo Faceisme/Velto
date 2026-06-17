@@ -39,6 +39,14 @@ final class KeyRemapStore {
     notify()
   }
 
+  func replaceAll(rules newRules: [KeyRemapRule], masterEnabled newMasterEnabled: Bool) {
+    rules = newRules
+    masterEnabled = newMasterEnabled
+    persist()
+    UserDefaults.standard.set(newMasterEnabled, forKey: enabledKey)
+    notify()
+  }
+
   // MARK: - 写操作（每次操作后持久化 + 通知）
 
   func addRule(_ rule: KeyRemapRule) {

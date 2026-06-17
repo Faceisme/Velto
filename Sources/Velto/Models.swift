@@ -161,7 +161,7 @@ struct AppPreferences: Codable, Equatable {
 }
 
 struct VeltoBackupFile: Codable {
-    static let currentFormatVersion = 2
+    static let currentFormatVersion = 3
 
     var formatVersion: Int
     var appName: String
@@ -169,11 +169,15 @@ struct VeltoBackupFile: Codable {
     var gestures: [GestureCommand]
     var preferences: AppPreferences
     var betterFinderPreferences: BetterFinderPreferences?
+    var keyRemapRules: [KeyRemapRule]?
+    var keyRemapEnabled: Bool?
 
     init(
         gestures: [GestureCommand],
         preferences: AppPreferences,
-        betterFinderPreferences: BetterFinderPreferences? = nil
+        betterFinderPreferences: BetterFinderPreferences? = nil,
+        keyRemapRules: [KeyRemapRule]? = nil,
+        keyRemapEnabled: Bool? = nil
     ) {
         formatVersion = Self.currentFormatVersion
         appName = "Velto"
@@ -181,6 +185,8 @@ struct VeltoBackupFile: Codable {
         self.gestures = gestures
         self.preferences = preferences
         self.betterFinderPreferences = betterFinderPreferences
+        self.keyRemapRules = keyRemapRules
+        self.keyRemapEnabled = keyRemapEnabled
     }
 }
 
@@ -295,7 +301,9 @@ final class GestureStore {
         let backup = VeltoBackupFile(
             gestures: gestures,
             preferences: preferences,
-            betterFinderPreferences: BetterFinderPreferencesStore.shared.preferences
+            betterFinderPreferences: BetterFinderPreferencesStore.shared.preferences,
+            keyRemapRules: KeyRemapStore.shared.rules,
+            keyRemapEnabled: KeyRemapStore.shared.masterEnabled
         )
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
@@ -320,6 +328,10 @@ final class GestureStore {
         if let betterFinderPreferences = backup.betterFinderPreferences {
             BetterFinderPreferencesStore.shared.replace(with: betterFinderPreferences)
         }
+        KeyRemapStore.shared.replaceAll(
+            rules: backup.keyRemapRules ?? [],
+            masterEnabled: backup.keyRemapEnabled ?? true
+        )
         // 尊重备份里的开关状态,不再强制开启(与启动逻辑一致)。
         localizeBuiltInGestureNames()
         gesturesVersion &+= 1
