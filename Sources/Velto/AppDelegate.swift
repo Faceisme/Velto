@@ -196,8 +196,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(NSMenuItem(title: "偏好设置", action: #selector(openSettings), keyEquivalent: ","))
         menu.addItem(NSMenuItem(title: "重启监听", action: #selector(restartListener), keyEquivalent: "r"))
-        // 临时:Task 10 移除
-        menu.addItem(NSMenuItem(title: "测试截图(临时)", action: #selector(debugTestScreenshot), keyEquivalent: ""))
 
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "退出", action: #selector(quit), keyEquivalent: "q"))
@@ -235,9 +233,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsWindow?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
-
-    // 临时:Task 10 移除
-    @objc private func debugTestScreenshot() { ScreenshotController.shared.beginSession() }
 
     @objc private func restartListener() {
         // 诊断用:无条件重启 tap(不再受手势开关限制)。

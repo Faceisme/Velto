@@ -75,6 +75,13 @@ struct SidebarView: View {
                         badge: nil,
                         active: page == .betterFinder
                     ) { page = .betterFinder }
+
+                    SidebarItem(
+                        icon: MGPage.screenshot.icon,
+                        label: MGPage.screenshot.label,
+                        badge: nil,
+                        active: page == .screenshot
+                    ) { page = .screenshot }
                 }
 
                 Spacer().frame(height: 14)
