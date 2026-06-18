@@ -234,19 +234,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // 临时:Task 10 移除
-    private var debugOverlays: [ScreenshotOverlayWindow] = []
-
-    // 临时:Task 10 移除
-    @objc private func debugTestScreenshot() {
-        Task { @MainActor in
-            guard PermissionManager.isScreenRecordingTrusted else {
-                PermissionManager.requestScreenRecordingPrompt()
-                return
-            }
-            guard let snaps = try? await ScreenshotCapturer.captureAllDisplays() else { return }
-            debugOverlays = ScreenshotOverlayWindow.present(for: snaps, delegate: self)
-        }
-    }
+    @objc private func debugTestScreenshot() { ScreenshotController.shared.beginSession() }
 
     @objc private func restartListener() {
         // 诊断用:无条件重启 tap(不再受手势开关限制)。
@@ -270,16 +258,3 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
-// 临时:Task 10 移除
-extension AppDelegate: ScreenshotOverlayDelegate {
-    func overlayDidCancel() {
-        debugOverlays.forEach { $0.dismiss() }
-        debugOverlays = []
-    }
-
-    func overlayDidRequest(_ action: ScreenshotSessionAction, globalRect: CGRect) {
-        ScreenshotDebugLog.log("temp overlay request \(action) \(globalRect)")
-        debugOverlays.forEach { $0.dismiss() }
-        debugOverlays = []   // 临时:验证回调通路,Task 8 接真实输出
-    }
-}
