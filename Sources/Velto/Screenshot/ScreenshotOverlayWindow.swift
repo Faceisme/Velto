@@ -27,6 +27,7 @@ final class ScreenshotOverlayWindow: NSWindow {
     ignoresMouseEvents = false
     acceptsMouseMovedEvents = true   // 否则收不到 mouseMoved,选窗高亮失效
     hasShadow = false
+    animationBehavior = .none       // 关闭出现/消失的缩放动画,避免整屏“duang”地弹一下
     collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]
     contentView = overlayView
   }
@@ -40,6 +41,8 @@ final class ScreenshotOverlayWindow: NSWindow {
     for snapshots: [DisplaySnapshot],
     delegate: ScreenshotOverlayDelegate
   ) -> [ScreenshotOverlayWindow] {
+    // 菜单栏 agent 应用默认非前台;先激活,覆盖层才能立即接收键盘与“首次”鼠标拖拽。
+    NSApp.activate()
     let windows = snapshots.map { ScreenshotOverlayWindow(screenSnapshot: $0, delegate: delegate) }
     for w in windows { w.orderFrontRegardless() }
     windows.first?.makeKey()

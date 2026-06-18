@@ -43,12 +43,16 @@ final class ScreenshotOverlayView: NSView {
   private var hoverWindowRectLocal: CGRect?
   /// 最近一次鼠标位置(视图局部点),供放大镜定位。
   private var lastMouseLocal: CGPoint?
+  /// 选窗高亮的窗口列表查询较重,用时间戳限频。
+  private var lastHoverQueryTime: TimeInterval = 0
 
   private let handleSize: CGFloat = 8
   /// 命中手柄的判定半径放大,便于点中。
   private var handleHitSize: CGFloat { handleSize * 2 }
 
   override var acceptsFirstResponder: Bool { true }
+  /// agent 应用未激活时,首次点击默认仅用于“激活窗口”而被吞掉;返回 true 让首次点击即开始框选。
+  override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
   override func resetCursorRects() { addCursorRect(bounds, cursor: .crosshair) }
 
   // MARK: - 坐标换算 helper(本任务关键决策:不走 DisplayCoordinateConverter)
@@ -130,6 +134,11 @@ final class ScreenshotOverlayView: NSView {
     needsDisplay = true
   }
 
+  override func rightMouseDown(with event: NSEvent) {
+    // 右键退出截图(与 Esc 等价)。
+    delegate?.overlayDidCancel()
+  }
+
   override func mouseMoved(with event: NSEvent) {
     let local = convert(event.locationInWindow, from: nil)
     lastMouseLocal = local
@@ -139,14 +148,19 @@ final class ScreenshotOverlayView: NSView {
       needsDisplay = true
       return
     }
-    let topLeft = appKitGlobalToTopLeft(localToAppKitGlobal(local))
-    if let g = WindowFrameDetector.windowFrame(
-      atGlobalPoint: topLeft,
-      excludingPID: ProcessInfo.processInfo.processIdentifier
-    ) {
-      hoverWindowRectLocal = appKitGlobalRectToLocal(topLeftRectToAppKitGlobal(g))
-    } else {
-      hoverWindowRectLocal = nil
+    // 窗口列表查询较重,限频 ~20Hz;两次查询之间沿用上次高亮结果。
+    let now = ProcessInfo.processInfo.systemUptime
+    if now - lastHoverQueryTime >= 0.05 {
+      lastHoverQueryTime = now
+      let topLeft = appKitGlobalToTopLeft(localToAppKitGlobal(local))
+      if let g = WindowFrameDetector.windowFrame(
+        atGlobalPoint: topLeft,
+        excludingPID: ProcessInfo.processInfo.processIdentifier
+      ) {
+        hoverWindowRectLocal = appKitGlobalRectToLocal(topLeftRectToAppKitGlobal(g))
+      } else {
+        hoverWindowRectLocal = nil
+      }
     }
     needsDisplay = true
   }
@@ -180,38 +194,35 @@ final class ScreenshotOverlayView: NSView {
   override func draw(_ dirtyRect: NSRect) {
     guard let ctx = NSGraphicsContext.current?.cgContext else { return }
 
-    // 1) 底图与暗罩:
-    //    - 有选区:整屏压暗,选区内清掉暗罩重绘原快照。
-    //    - 无选区有悬停:整屏压暗,悬停窗口区域清掉暗罩重绘原快照 + 描高亮边框。
-    //    - 都没有:整屏压暗罩。
+    // 底图整幅只画一次(亮),再仅在“选区/悬停区以外”压暗罩。
+    // 关键性能点:旧实现每帧把全屏快照画两遍(底图 + 选区重绘),拖拽时严重卡顿;
+    // 改为单次绘图 + even-odd 裁剪压暗,效果一致但开销减半。
     if let img = snapshotImage { ctx.draw(img, in: bounds) }
+
+    let brightRegion = (selection ?? hoverWindowRectLocal)?.intersection(bounds)
     ctx.setFillColor(NSColor.black.withAlphaComponent(dimAlpha).cgColor)
-    ctx.fill(bounds)
+    if let bright = brightRegion, !bright.isNull, bright.width > 0, bright.height > 0 {
+      ctx.saveGState()
+      ctx.addRect(bounds)
+      ctx.addRect(bright)
+      ctx.clip(using: .evenOdd)   // 裁到“bounds 去掉 bright”的区域,只压暗选区以外
+      ctx.fill(bounds)
+      ctx.restoreGState()
+    } else {
+      ctx.fill(bounds)
+    }
 
     if let s = selection {
-      revealSnapshot(in: s, ctx: ctx)
       drawSelectionBorder(s, ctx: ctx)
       drawHandles(for: s, ctx: ctx)
       drawSizeLabel(for: s, ctx: ctx)
     } else if let hover = hoverWindowRectLocal {
-      revealSnapshot(in: hover, ctx: ctx)
       drawHoverBorder(hover, ctx: ctx)
     }
 
     if showMagnifier, let p = lastMouseLocal {
       drawMagnifier(at: p, ctx: ctx)
     }
-  }
-
-  /// 在指定区域去掉暗罩并重绘该区原快照(原快照亮、其余压暗的效果)。
-  private func revealSnapshot(in rect: CGRect, ctx: CGContext) {
-    let r = rect.intersection(bounds)
-    guard !r.isNull, r.width > 0, r.height > 0, let img = snapshotImage else { return }
-    ctx.saveGState()
-    ctx.clip(to: r)
-    ctx.clear(r)
-    ctx.draw(img, in: bounds)   // 整图绘制但被 clip 限制在 r 内
-    ctx.restoreGState()
   }
 
   private func drawSelectionBorder(_ s: CGRect, ctx: CGContext) {
