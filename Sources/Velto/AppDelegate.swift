@@ -276,4 +276,10 @@ extension AppDelegate: ScreenshotOverlayDelegate {
         debugOverlays.forEach { $0.dismiss() }
         debugOverlays = []
     }
+
+    func overlayDidRequest(_ action: ScreenshotSessionAction, globalRect: CGRect) {
+        ScreenshotDebugLog.log("temp overlay request \(action) \(globalRect)")
+        debugOverlays.forEach { $0.dismiss() }
+        debugOverlays = []   // 临时:验证回调通路,Task 8 接真实输出
+    }
 }
