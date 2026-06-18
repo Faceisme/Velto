@@ -5,6 +5,7 @@ protocol ScreenshotOverlayDelegate: AnyObject {
   func overlayDidCancel()
 }
 
+@MainActor
 final class ScreenshotOverlayWindow: NSWindow {
   private let overlayView: ScreenshotOverlayView
 
@@ -20,7 +21,6 @@ final class ScreenshotOverlayWindow: NSWindow {
     hasShadow = false
     collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]
     contentView = overlayView
-    setFrame(snap.frame, display: false)
   }
 
   override var canBecomeKey: Bool { true }
