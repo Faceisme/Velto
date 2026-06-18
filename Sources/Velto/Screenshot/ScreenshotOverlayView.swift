@@ -78,6 +78,8 @@ final class ScreenshotOverlayView: NSView {
   // MARK: - 鼠标
 
   override func mouseDown(with event: NSEvent) {
+    // 多屏:点哪块屏就把那块屏的覆盖窗口提为 key,保证后续空格/⌘S 键盘确认落到本 View。
+    window?.makeKey()
     let p = convert(event.locationInWindow, from: nil)
     lastMouseLocal = p
     if let s = selection, let h = ScreenshotGeometry.handle(at: p, selection: s, handleSize: handleHitSize) {
