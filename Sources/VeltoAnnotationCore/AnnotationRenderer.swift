@@ -48,7 +48,14 @@ public enum AnnotationRenderer {
     context.scaleBy(x: scale, y: -scale)
 
     context.interpolationQuality = .high
+    // The base image is an upright (top-left origin) bitmap; under the y-down
+    // annotation CTM `draw` would render it upside down, so flip it back just for
+    // the image. Mosaics and vectors keep the y-down CTM (annotation coordinates).
+    context.saveGState()
+    context.translateBy(x: 0, y: canvas.height)
+    context.scaleBy(x: 1, y: -1)
     context.draw(baseImage, in: canvas)
+    context.restoreGState()
 
     for case .mosaic(let mosaic) in document.elements {
       AnnotationMosaicRenderer.draw(mosaic, baseImage: baseImage, scale: scale, in: context)

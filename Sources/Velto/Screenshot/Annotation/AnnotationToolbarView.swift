@@ -52,6 +52,11 @@ final class AnnotationToolbarView: NSGlassEffectView {
     fatalError("not implemented")
   }
 
+  /// 覆盖父覆盖层的全屏十字光标:工具栏上恢复普通箭头。
+  override func resetCursorRects() {
+    addCursorRect(bounds, cursor: .arrow)
+  }
+
   /// 自然尺寸:外层布局据此放置玻璃面板,内容随玻璃 bounds 自动铺满。
   var barSize: NSSize {
     NSSize(width: contentStack.fittingSize.width, height: Self.barHeight)

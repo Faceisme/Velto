@@ -11,6 +11,8 @@ final class ScreenshotSession: ScreenshotOverlayDelegate {
   private weak var activeOverlay: ScreenshotOverlayView?
   /// 输出失败时工具栏附近的非阻塞提示窗口;3 秒后自动消失。
   private var failureToast: NSWindow?
+  /// 触发截图前的前台 app;结束时恢复,避免 NSApp.activate 抢占后系统乱提其它窗口。
+  private var previousApp: NSRunningApplication?
 
   init(snapshots: [DisplaySnapshot], preferences: ScreenshotPreferences, onFinish: @escaping () -> Void) {
     self.snapshots = snapshots
@@ -19,6 +21,8 @@ final class ScreenshotSession: ScreenshotOverlayDelegate {
   }
 
   func start() {
+    // present 内部 NSApp.activate() 会抢前台,先记下原前台 app 以便结束时还原。
+    previousApp = NSWorkspace.shared.frontmostApplication
     ScreenshotHotCornerGuard.shared.activate(displayIDs: snapshots.map(\.displayID))
     windows = ScreenshotOverlayWindow.present(for: snapshots, delegate: self)
   }
@@ -169,6 +173,11 @@ final class ScreenshotSession: ScreenshotOverlayDelegate {
     windows = []
     activeOverlay = nil
     ScreenshotHotCornerGuard.shared.deactivate()
+    // 把前台还给截图前的 app(取消/完成皆然),否则 macOS 会把某个后台窗口提到最前。
+    if let previousApp, previousApp != .current {
+      previousApp.activate(from: .current)
+    }
+    previousApp = nil
     onFinish()
   }
 }

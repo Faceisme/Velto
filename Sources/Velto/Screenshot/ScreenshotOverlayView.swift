@@ -472,6 +472,7 @@ final class ScreenshotOverlayView: NSView {
     canvas.frame = s
     canvas.onDocumentChange = { [weak self] _ in self?.syncAnnotationChrome() }
     canvas.onRequestCancelSession = { [weak self] in self?.delegate?.overlayDidCancel() }
+    canvas.onRequestComplete = { [weak self] in self?.confirm(.copy) }
     canvas.onBeginTextEditing = { [weak self] frame, existing in
       self?.beginTextEditing(annotationFrame: frame, existing: existing)
     }
@@ -490,6 +491,9 @@ final class ScreenshotOverlayView: NSView {
 
     layoutAnnotationBars()
     syncAnnotationChrome()
+    // 玻璃条刚挂上,强制重建光标区,确保其箭头光标覆盖父层的全屏十字。
+    window?.invalidateCursorRects(for: bar)
+    window?.invalidateCursorRects(for: property)
     window?.makeFirstResponder(canvas)
   }
 

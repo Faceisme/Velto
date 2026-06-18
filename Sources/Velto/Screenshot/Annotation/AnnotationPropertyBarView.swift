@@ -51,6 +51,11 @@ final class AnnotationPropertyBarView: NSGlassEffectView {
     fatalError("not implemented")
   }
 
+  /// 覆盖父覆盖层的全屏十字光标:属性条上恢复普通箭头。
+  override func resetCursorRects() {
+    addCursorRect(bounds, cursor: .arrow)
+  }
+
   var barSize: NSSize {
     NSSize(width: max(120, contentStack.fittingSize.width), height: Self.barHeight)
   }

@@ -16,6 +16,8 @@ final class AnnotationCanvasView: NSView {
 
   var onDocumentChange: ((AnnotationDocument) -> Void)?
   var onRequestCancelSession: (() -> Void)?
+  /// 选择模式下双击空白请求完成截图(复制并退出),与 Xnip 一致。
+  var onRequestComplete: (() -> Void)?
   /// 通知覆盖层开始原位文字编辑:frame 为标注坐标矩形,existing 为双击重开的对象。
   var onBeginTextEditing: ((CGRect, TextAnnotation?) -> Void)?
 
@@ -84,11 +86,18 @@ final class AnnotationCanvasView: NSView {
     window?.makeFirstResponder(self)
     let point = annotationPoint(for: event)
 
-    if event.clickCount == 2,
-       let id = AnnotationGeometry.hitTest(point, elements: editor.document.elements),
-       case .text(let text)? = editor.document.elements.first(where: { $0.id == id }) {
-      startTextEditing(annotationFrame: text.rect, existing: text)
-      return
+    if event.clickCount == 2 {
+      let hitID = AnnotationGeometry.hitTest(point, elements: editor.document.elements)
+      if let id = hitID,
+         case .text(let text)? = editor.document.elements.first(where: { $0.id == id }) {
+        startTextEditing(annotationFrame: text.rect, existing: text)
+        return
+      }
+      // 选择模式(无活动工具)下双击空白处 = 完成截图并复制退出。
+      if editor.document.activeTool == nil, hitID == nil {
+        onRequestComplete?()
+        return
+      }
     }
 
     if editor.document.activeTool == .text {
@@ -250,7 +259,13 @@ final class AnnotationCanvasView: NSView {
     context.translateBy(x: 0, y: bounds.height)
     context.scaleBy(x: 1, y: -1)
     context.interpolationQuality = .high
+    // 底图是正立(左上原点)位图,在 y-down 标注 CTM 下直接 draw 会上下颠倒,
+    // 故只为底图再翻正一次;马赛克与矢量保持 y-down(标注坐标)。
+    context.saveGState()
+    context.translateBy(x: 0, y: bounds.height)
+    context.scaleBy(x: 1, y: -1)
     context.draw(baseImage, in: CGRect(origin: .zero, size: bounds.size))
+    context.restoreGState()
 
     for case .mosaic(let mosaic) in document.elements {
       AnnotationMosaicRenderer.draw(mosaic, baseImage: baseImage, scale: scale, in: context)
