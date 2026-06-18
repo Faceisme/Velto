@@ -1,4 +1,5 @@
 import AppKit
+import VeltoAnnotationCore
 
 /// 截图覆盖层的核心交互视图。
 /// 坐标模型:本视图保持默认**非 flipped(左下原点)**——下方所有 helper、draw、放大镜采样都依赖这一点,切勿加 isFlipped。
@@ -23,6 +24,23 @@ final class ScreenshotOverlayView: NSView {
       x: s.minX + globalFrame.minX, y: s.minY + globalFrame.minY,
       width: s.width, height: s.height
     )
+  }
+
+  /// 本屏是否允许框选;另一块屏激活选区后会被会话置为 false。
+  var selectionEnabled: Bool = true { didSet { needsDisplay = true } }
+
+  // MARK: - 标注 UI(选区激活后挂载)
+
+  /// 选区一旦激活就置 true:此后不再画自带选区 chrome / 放大镜,交给画布与工具栏。
+  private var hasActivated = false
+  private var canvasView: AnnotationCanvasView?
+  private var toolbar: AnnotationToolbarView?
+  private var propertyBar: AnnotationPropertyBarView?
+  private var textEditor: AnnotationTextEditor?
+
+  /// 还没画任何标注前,选区仍可用手柄缩放并重建画布。
+  private var canEditSelectionGeometry: Bool {
+    !hasActivated || (canvasView?.editor.document.elements.isEmpty ?? true)
   }
 
   // MARK: - 交互状态
@@ -84,11 +102,17 @@ final class ScreenshotOverlayView: NSView {
   override func mouseDown(with event: NSEvent) {
     // 多屏:点哪块屏就把那块屏的覆盖窗口提为 key,保证后续空格/⌘S 键盘确认落到本 View。
     window?.makeKey()
+    guard selectionEnabled else { return }
     let p = ScreenshotGeometry.snapPointToBoundsEdges(
       convert(event.locationInWindow, from: nil), bounds: bounds)
     lastMouseLocal = p
-    if let s = selection, let h = ScreenshotGeometry.handle(at: p, selection: s, handleSize: handleHitSize) {
+    if let s = selection,
+       let h = ScreenshotGeometry.handle(at: p, selection: s, handleSize: handleHitSize),
+       canEditSelectionGeometry {
       mode = .dragHandle(h)
+    } else if hasActivated {
+      // 选区已锁定:画布外的点击(压暗区/手柄)不再新建或移动选区。
+      return
     } else if let s = selection, s.contains(p) {
       mode = .moving
       dragOrigin = p
@@ -101,6 +125,7 @@ final class ScreenshotOverlayView: NSView {
   }
 
   override func mouseDragged(with event: NSEvent) {
+    guard selectionEnabled else { return }
     let p = ScreenshotGeometry.snapPointToBoundsEdges(
       convert(event.locationInWindow, from: nil), bounds: bounds)
     lastMouseLocal = p
@@ -129,6 +154,7 @@ final class ScreenshotOverlayView: NSView {
   }
 
   override func mouseUp(with event: NSEvent) {
+    guard selectionEnabled else { return }
     // 单击未拖(尺寸≈0)且有悬停窗口 → 采纳整窗为选区。
     if case .dragging = mode, let s = selection, s.width < 3, s.height < 3, let w = hoverWindowRectLocal {
       selection = ScreenshotGeometry.clamp(w, to: bounds)
@@ -136,6 +162,7 @@ final class ScreenshotOverlayView: NSView {
     }
     mode = .idle
     needsDisplay = true
+    activateSelectionIfNeeded()
   }
 
   override func rightMouseDown(with event: NSEvent) {
@@ -190,7 +217,7 @@ final class ScreenshotOverlayView: NSView {
 
   private func confirm(_ action: ScreenshotSessionAction) {
     guard let g = currentSelectionGlobal, g.width > 1, g.height > 1 else { return }
-    delegate?.overlayDidRequest(action, globalRect: g)
+    delegate?.overlayDidRequest(action, globalRect: g, document: canvasView?.editor.document)
   }
 
   // MARK: - 绘制
@@ -202,6 +229,13 @@ final class ScreenshotOverlayView: NSView {
     // 关键性能点:旧实现每帧把全屏快照画两遍(底图 + 选区重绘),拖拽时严重卡顿;
     // 改为单次绘图 + even-odd 裁剪压暗,效果一致但开销减半。
     if let img = snapshotImage { ctx.draw(img, in: bounds) }
+
+    // 非活动屏(另一块屏已激活选区):整屏压暗,无选区交互。
+    guard selectionEnabled else {
+      ctx.setFillColor(NSColor.black.withAlphaComponent(dimAlpha).cgColor)
+      ctx.fill(bounds)
+      return
+    }
 
     let brightRegion = (selection ?? hoverWindowRectLocal)?.intersection(bounds)
     ctx.setFillColor(NSColor.black.withAlphaComponent(dimAlpha).cgColor)
@@ -216,6 +250,11 @@ final class ScreenshotOverlayView: NSView {
       ctx.fill(bounds)
     }
 
+    // 已激活且画过标注:选区 chrome 与放大镜交给画布/工具栏,这里只保留压暗罩。
+    if hasActivated && !canEditSelectionGeometry {
+      return
+    }
+
     if let s = selection {
       drawSelectionBorder(s, ctx: ctx)
       drawHandles(for: s, ctx: ctx)
@@ -224,7 +263,8 @@ final class ScreenshotOverlayView: NSView {
       drawHoverBorder(hover, ctx: ctx)
     }
 
-    if showMagnifier, let p = lastMouseLocal {
+    // 放大镜只在选区激活前(像素级框选阶段)出现。
+    if showMagnifier, !hasActivated, let p = lastMouseLocal {
       drawMagnifier(at: p, ctx: ctx)
     }
   }
@@ -404,5 +444,162 @@ final class ScreenshotOverlayView: NSView {
     NSGraphicsContext.saveGraphicsState()
     text.draw(in: rect, withAttributes: attrs)
     NSGraphicsContext.restoreGraphicsState()
+  }
+
+  // MARK: - 标注 UI 挂载
+
+  /// 选区有效后激活标注:首次激活通知会话锁定本屏;尚无标注时允许重建画布以跟随缩放。
+  private func activateSelectionIfNeeded() {
+    guard let s = selection, s.width > 2, s.height > 2 else { return }
+    if !hasActivated {
+      hasActivated = true
+      delegate?.overlayDidActivateSelection(self)
+      mountAnnotationUI(selection: s)
+    } else if canvasView?.editor.document.elements.isEmpty == true {
+      mountAnnotationUI(selection: s)
+    }
+  }
+
+  private func mountAnnotationUI(selection s: CGRect) {
+    tearDownAnnotationUI()
+    guard let snapshot = snapshotImage,
+          let baseImage = croppedSelectionImage(snapshot: snapshot, selection: s) else {
+      return
+    }
+
+    let editor = AnnotationEditor(canvasSize: s.size)
+    let canvas = AnnotationCanvasView(editor: editor, baseImage: baseImage, scale: scale)
+    canvas.frame = s
+    canvas.onDocumentChange = { [weak self] _ in self?.syncAnnotationChrome() }
+    canvas.onRequestCancelSession = { [weak self] in self?.delegate?.overlayDidCancel() }
+    canvas.onBeginTextEditing = { [weak self] frame, existing in
+      self?.beginTextEditing(annotationFrame: frame, existing: existing)
+    }
+    addSubview(canvas)
+    canvasView = canvas
+
+    let bar = AnnotationToolbarView(frame: .zero)
+    bar.onAction = { [weak self] action in self?.handleToolbarAction(action) }
+    addSubview(bar)
+    toolbar = bar
+
+    let property = AnnotationPropertyBarView(frame: .zero)
+    property.onStyleChange = { [weak self] style in self?.applyAnnotationStyle(style) }
+    addSubview(property)
+    propertyBar = property
+
+    layoutAnnotationBars()
+    syncAnnotationChrome()
+    window?.makeFirstResponder(canvas)
+  }
+
+  /// 选区(视图局部、左下原点)→ 快照像素图(左上原点),作为画布底图。
+  private func croppedSelectionImage(snapshot: CGImage, selection s: CGRect) -> CGImage? {
+    let px = CGRect(
+      x: s.minX * scale,
+      y: (bounds.height - s.maxY) * scale,
+      width: s.width * scale,
+      height: s.height * scale
+    ).integral
+    guard px.width >= 1, px.height >= 1 else { return nil }
+    return snapshot.cropping(to: px)
+  }
+
+  private func layoutAnnotationBars() {
+    guard let s = selection, let toolbar, let propertyBar else { return }
+    let placement = AnnotationToolbarLayout.place(
+      selection: s,
+      screenBounds: bounds,
+      mainSize: toolbar.barSize,
+      propertySize: propertyBar.barSize
+    )
+    toolbar.frame = placement.mainFrame
+    propertyBar.frame = placement.propertyFrame
+    propertyBar.isHidden = (canvasView?.editor.document.activeTool == nil)
+  }
+
+  private func syncAnnotationChrome() {
+    guard let canvas = canvasView, let toolbar, let propertyBar else { return }
+    let editor = canvas.editor
+    toolbar.update(
+      activeTool: editor.document.activeTool,
+      canUndo: editor.canUndo,
+      canRedo: editor.canRedo
+    )
+    propertyBar.update(
+      tool: editor.document.activeTool,
+      style: editor.style,
+      cropRect: editor.document.cropRect
+    )
+    layoutAnnotationBars()
+  }
+
+  private func handleToolbarAction(_ action: AnnotationToolbarAction) {
+    guard let canvas = canvasView else { return }
+    switch action {
+    case .selectTool(let tool):
+      // 再次点击当前工具回到选择/移动模式。
+      let next = (canvas.editor.document.activeTool == tool) ? nil : tool
+      canvas.editor.selectTool(next)
+      canvas.needsDisplay = true
+      syncAnnotationChrome()
+    case .undo:
+      canvas.editor.undo()
+      canvas.needsDisplay = true
+      syncAnnotationChrome()
+    case .redo:
+      canvas.editor.redo()
+      canvas.needsDisplay = true
+      syncAnnotationChrome()
+    case .cancel:
+      delegate?.overlayDidCancel()
+    case .save:
+      confirm(.save)
+    case .copy, .complete:
+      confirm(.copy)
+    }
+  }
+
+  private func applyAnnotationStyle(_ style: AnnotationStyle) {
+    guard let canvas = canvasView else { return }
+    canvas.editor.applyStyle(style)
+    canvas.needsDisplay = true
+    syncAnnotationChrome()
+  }
+
+  private func beginTextEditing(annotationFrame: CGRect, existing: TextAnnotation?) {
+    guard let canvas = canvasView else { return }
+    textEditor?.cancel()
+
+    let style = existing?.style ?? canvas.editor.style
+    let frameInCanvas = canvas.viewRect(forAnnotation: annotationFrame)
+    let editor = AnnotationTextEditor(frame: .zero)
+    editor.onCommit = { [weak self, weak canvas] text, committedFrame in
+      guard let canvas else { return }
+      canvas.commitTextEditing(text, annotationRect: canvas.annotationRect(forView: committedFrame))
+      self?.textEditor = nil
+      self?.window?.makeFirstResponder(canvas)
+      self?.syncAnnotationChrome()
+    }
+    editor.onCancel = { [weak self, weak canvas] in
+      canvas?.cancelTextEditing()
+      self?.textEditor = nil
+      if let canvas { self?.window?.makeFirstResponder(canvas) }
+      self?.syncAnnotationChrome()
+    }
+    editor.begin(text: existing?.text ?? "", frame: frameInCanvas, style: style, in: canvas)
+    textEditor = editor
+  }
+
+  /// 拆除标注 UI:先结束文字编辑,再移除画布/工具栏(连带其 history 与马赛克缓存)。
+  func tearDownAnnotationUI() {
+    textEditor?.cancel()
+    textEditor = nil
+    canvasView?.removeFromSuperview()
+    canvasView = nil
+    toolbar?.removeFromSuperview()
+    toolbar = nil
+    propertyBar?.removeFromSuperview()
+    propertyBar = nil
   }
 }

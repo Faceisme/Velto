@@ -1,13 +1,21 @@
 import AppKit
+import VeltoAnnotationCore
 
 /// 会话内的确认动作:复制 / 保存 / 滚动长截图(滚动为 Phase 3 占位)。
 enum ScreenshotSessionAction { case copy, save, scroll }
 
 @MainActor
 protocol ScreenshotOverlayDelegate: AnyObject {
+  /// 某块屏幕的选区刚被激活并挂上标注 UI;会话据此锁定唯一活动 overlay。
+  func overlayDidActivateSelection(_ overlay: ScreenshotOverlayView)
   func overlayDidCancel()
   /// 用户在选区上确认某个动作;globalRect 为 AppKit 全局 rect(左下原点)。
-  func overlayDidRequest(_ action: ScreenshotSessionAction, globalRect: CGRect)
+  /// document 为该选区的标注文档(无标注时可能为 nil),供输出阶段合成。
+  func overlayDidRequest(
+    _ action: ScreenshotSessionAction,
+    globalRect: CGRect,
+    document: AnnotationDocument?
+  )
 }
 
 @MainActor
@@ -33,6 +41,14 @@ final class ScreenshotOverlayWindow: NSWindow {
   }
 
   override var canBecomeKey: Bool { true }
+
+  /// 暴露内部覆盖层视图,供会话锁定活动屏与拆除标注 UI。
+  var screenshotOverlayView: ScreenshotOverlayView { overlayView }
+
+  /// 非活动屏在另一块屏激活选区后被禁用框选,只剩压暗的快照。
+  func setSelectionEnabled(_ enabled: Bool) {
+    overlayView.selectionEnabled = enabled
+  }
 
   func dismiss() { orderOut(nil) }
 

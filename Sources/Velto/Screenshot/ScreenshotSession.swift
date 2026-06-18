@@ -1,4 +1,5 @@
 import AppKit
+import VeltoAnnotationCore
 
 @MainActor
 final class ScreenshotSession: ScreenshotOverlayDelegate {
@@ -6,6 +7,8 @@ final class ScreenshotSession: ScreenshotOverlayDelegate {
   private let preferences: ScreenshotPreferences
   private let onFinish: () -> Void
   private var windows: [ScreenshotOverlayWindow] = []
+  /// 多屏下唯一允许编辑的活动 overlay;其余屏被禁用框选。
+  private weak var activeOverlay: ScreenshotOverlayView?
 
   init(snapshots: [DisplaySnapshot], preferences: ScreenshotPreferences, onFinish: @escaping () -> Void) {
     self.snapshots = snapshots
@@ -23,7 +26,19 @@ final class ScreenshotSession: ScreenshotOverlayDelegate {
 
   func overlayDidCancel() { teardown() }
 
-  func overlayDidRequest(_ action: ScreenshotSessionAction, globalRect: CGRect) {
+  /// 锁定唯一活动 overlay:只有它能继续编辑,其余屏禁用框选。
+  func overlayDidActivateSelection(_ overlay: ScreenshotOverlayView) {
+    activeOverlay = overlay
+    for window in windows {
+      window.setSelectionEnabled(window.screenshotOverlayView === overlay)
+    }
+  }
+
+  func overlayDidRequest(
+    _ action: ScreenshotSessionAction,
+    globalRect: CGRect,
+    document: AnnotationDocument?
+  ) {
     switch action {
     case .scroll:
       // Phase 3 占位:本期不实现滚动拼接,轻提示后留在会话。
@@ -49,8 +64,11 @@ final class ScreenshotSession: ScreenshotOverlayDelegate {
   }
 
   private func teardown() {
+    // 先收尾标注 UI(结束文字编辑、释放 history 与马赛克缓存),再撤窗。
+    windows.forEach { $0.screenshotOverlayView.tearDownAnnotationUI() }
     windows.forEach { $0.dismiss() }
     windows = []
+    activeOverlay = nil
     ScreenshotHotCornerGuard.shared.deactivate()
     onFinish()
   }
