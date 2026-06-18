@@ -3,18 +3,29 @@ import CoreGraphics
 import Foundation
 import UniformTypeIdentifiers
 
+/// 输出失败的具体原因;会话据此决定提示文案并保留标注会话(不撤窗)。
+enum ScreenshotWriteError: Error {
+  case encodingFailed
+  case clipboardRejected
+  case fileWriteFailed(String)
+}
+
 enum ScreenshotImageWriter {
-  static func copyToClipboard(_ image: CGImage) {
-    guard let data = encode(image, as: .png) else { return }
+  static func copyToClipboard(_ image: CGImage) -> Result<Void, ScreenshotWriteError> {
+    guard let data = encode(image, as: .png) else { return .failure(.encodingFailed) }
     let pb = NSPasteboard.general
     pb.clearContents()
-    pb.setData(data, forType: .png)
+    guard pb.setData(data, forType: .png) else { return .failure(.clipboardRejected) }
     ScreenshotDebugLog.log("copied \(image.width)x\(image.height) to clipboard")
+    return .success(())
   }
 
   @discardableResult
   static func save(_ image: CGImage, toDirectory dir: String,
-                   format: ScreenshotImageFormat, alsoCopy: Bool) -> URL? {
+                   format: ScreenshotImageFormat, alsoCopy: Bool) -> Result<URL, ScreenshotWriteError> {
+    // 先编码,编码不出来就没必要碰文件系统。
+    guard let data = encode(image, as: format) else { return .failure(.encodingFailed) }
+
     let fm = FileManager.default
     var targetDir = dir
     var isDir: ObjCBool = false
@@ -27,15 +38,19 @@ enum ScreenshotImageWriter {
     }
     let name = ScreenshotGeometry.suggestedFileName(format: format)
     let url = uniqueURL(inDirectory: targetDir, fileName: name)
-    guard let data = encode(image, as: format) else { return nil }
     do {
       try data.write(to: url)
-      if alsoCopy { copyToClipboard(image) }
+      if alsoCopy {
+        // 已成功落盘;附带复制失败不该让“保存”整体算失败,记录即可。
+        if case .failure(let error) = copyToClipboard(image) {
+          ScreenshotDebugLog.log("saved but clipboard copy failed: \(error)")
+        }
+      }
       ScreenshotDebugLog.log("saved to \(url.path)")
-      return url
+      return .success(url)
     } catch {
       ScreenshotDebugLog.log("save failed: \(error.localizedDescription)")
-      return nil
+      return .failure(.fileWriteFailed(error.localizedDescription))
     }
   }
 
