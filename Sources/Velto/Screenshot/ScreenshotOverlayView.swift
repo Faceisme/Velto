@@ -194,22 +194,14 @@ final class ScreenshotOverlayView: NSView {
   override func draw(_ dirtyRect: NSRect) {
     guard let ctx = NSGraphicsContext.current?.cgContext else { return }
 
-    // 底图整幅只画一次(亮),再仅在“选区/悬停区以外”压暗罩。
-    // 关键性能点:旧实现每帧把全屏快照画两遍(底图 + 选区重绘),拖拽时严重卡顿;
-    // 改为单次绘图 + even-odd 裁剪压暗,效果一致但开销减半。
-    if let img = snapshotImage { ctx.draw(img, in: bounds) }
-
-    let brightRegion = (selection ?? hoverWindowRectLocal)?.intersection(bounds)
+    // 快照由下层 ScreenshotSnapshotBackgroundView 静态绘制(只画一次、GPU 合成)。
+    // 本层每帧只:铺半透明暗罩 → 把选区/悬停区 clear 成透明露出下层亮快照 → 画选框/手柄/放大镜。
+    // 关键性能点:不再每帧重绘全屏快照(那是拖拽卡顿的根因),只做一次暗罩填充。
     ctx.setFillColor(NSColor.black.withAlphaComponent(dimAlpha).cgColor)
-    if let bright = brightRegion, !bright.isNull, bright.width > 0, bright.height > 0 {
-      ctx.saveGState()
-      ctx.addRect(bounds)
-      ctx.addRect(bright)
-      ctx.clip(using: .evenOdd)   // 裁到“bounds 去掉 bright”的区域,只压暗选区以外
-      ctx.fill(bounds)
-      ctx.restoreGState()
-    } else {
-      ctx.fill(bounds)
+    ctx.fill(bounds)
+    if let bright = (selection ?? hoverWindowRectLocal)?.intersection(bounds),
+       !bright.isNull, bright.width > 0, bright.height > 0 {
+      ctx.clear(bright)
     }
 
     if let s = selection {
