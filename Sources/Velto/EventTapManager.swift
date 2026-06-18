@@ -147,6 +147,7 @@ final class EventTapManager: @unchecked Sendable {
     private let trackpadGestureController = TrackpadGestureController()
     private let betterFinderShortcutController = BetterFinderGlobalShortcutController()
     private let keyRemapController = KeyRemapController()
+    private let screenshotShortcutController = ScreenshotShortcutController()
 
     /// 手势 / 窗口管理是否启用的 tap 线程快照。只在 tap 线程读写(`handle` 与
     /// `performOnTapThread` 块都在 tap 线程;`init` 在 `start()` 之前于主线程设初值,
@@ -589,6 +590,10 @@ final class EventTapManager: @unchecked Sendable {
             if betterFinderShortcutController.handleKeyDown(event: event, normalizedFlags: raw) {
                 return nil
             }
+            // 截图全局触发键(不受窗口管理总开关门控)。
+            if screenshotShortcutController.handleKeyDown(event: event, normalizedFlags: raw) {
+                return nil
+            }
             // 窗口快捷键(如最大化)归窗口管理,受总开关门控。
             guard windowManagementEnabledForTap else {
                 return Unmanaged.passUnretained(event)
@@ -755,6 +760,7 @@ final class EventTapManager: @unchecked Sendable {
         )
         contentZoomController.updateModifierFlag(preferences.contentZoomModifierFlags)
         windowShortcutController.updateShortcut(preferences.windowMaximizeShortcut)
+        screenshotShortcutController.updateShortcut(preferences.screenshot.triggerShortcut)
         trackpadGestureController.setEnabled(preferences.trackpadGesturesEnabled)
     }
 

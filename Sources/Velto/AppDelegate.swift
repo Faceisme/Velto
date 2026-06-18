@@ -34,6 +34,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // 启动输入法自动切换:监听前台 App/浏览器上下文 → 按规则切输入法。
         InputSourceSwitchController.shared.start()
+
+        // 预热 ScreenCaptureKit,减少首次截图延迟。
+        ScreenshotCapturer.prewarm()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
