@@ -17,6 +17,9 @@ final class ScreenshotSession: ScreenshotOverlayDelegate {
     windows = ScreenshotOverlayWindow.present(for: snapshots, delegate: self)
   }
 
+  /// 外部(如热键)取消会话:dismiss 所有覆盖窗口并回收。
+  func cancel() { teardown() }
+
   func overlayDidCancel() { teardown() }
 
   func overlayDidRequest(_ action: ScreenshotSessionAction, globalRect: CGRect) {
@@ -28,7 +31,11 @@ final class ScreenshotSession: ScreenshotOverlayDelegate {
       return
     case .copy, .save:
       guard let snap = snapshots.first(where: { $0.frame.intersects(globalRect) }),
-            let image = ScreenshotCapturer.crop(snap, toPointRect: globalRect) else { teardown(); return }
+            let image = ScreenshotCapturer.crop(snap, toPointRect: globalRect) else {
+        NSSound.beep()
+        teardown()
+        return
+      }
       if action == .copy {
         ScreenshotImageWriter.copyToClipboard(image)
       } else {
