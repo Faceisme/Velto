@@ -71,8 +71,23 @@ export CLANG_MODULE_CACHE_PATH="$ROOT_DIR/.build/clang-module-cache"
 # 签完顺手校验签名身份不是 ad-hoc,签错了立刻报错中止,绝不带病部署。
 sign_with_cert() {
     local target="$1" entitlements="$2"
-    HOME="$REAL_HOME" codesign --force --sign "$CODE_SIGN_IDENTITY" \
-        --entitlements "$entitlements" "$target"
+    # Dropbox 的 file provider 会在清掉扩展属性后的瞬间重新挂上(com.apple.FinderInfo /
+    # com.dropbox.attrs),与 codesign 形成竞态。因此贴身在每次签名前清一次,并对
+    # "resource fork ... not allowed" 这类 detritus 错误重试几次,关掉竞态窗口。
+    local attempt
+    for attempt in 1 2 3 4 5; do
+        xattr -cr "$target" 2>/dev/null || true
+        if HOME="$REAL_HOME" codesign --force --sign "$CODE_SIGN_IDENTITY" \
+            --entitlements "$entitlements" "$target" 2>"$ROOT_DIR/.build/codesign.err"; then
+            break
+        fi
+        if [ "$attempt" -lt 5 ] && grep -qiE "resource fork|detritus|not allowed" "$ROOT_DIR/.build/codesign.err"; then
+            sleep 0.3
+            continue
+        fi
+        cat "$ROOT_DIR/.build/codesign.err" >&2
+        exit 1
+    done
     if codesign -dv --verbose=2 "$target" 2>&1 | grep -q "Signature=adhoc"; then
         echo "错误:$target 签名退回了 ad-hoc(证书 '$CODE_SIGN_IDENTITY' 不可用)。" >&2
         echo "      检查 \`security find-identity -v -p codesigning\` 是否能看到该证书。" >&2
