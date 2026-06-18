@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import VeltoAnnotationCore
 
 /// 截图模块设置页。
 /// 所有写入走 GestureStore.shared.updatePreferences { $0.screenshot.xxx = ... }
@@ -27,6 +28,7 @@ struct ScreenshotPage: View {
         triggerSection
         sessionKeysSection
         saveSection
+        annotationSection
         magnifierSection
       }
       .padding(.horizontal, 32)
@@ -280,6 +282,118 @@ struct ScreenshotPage: View {
           }
         }
       }
+    }
+  }
+
+  // MARK: - 标注默认样式
+
+  private var annotationSection: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      MGSectionLabel(text: "标注默认样式")
+      GroupCard(radius: MGRadius.cardLg) {
+        VStack(spacing: 0) {
+          row(
+            icon: "paintpalette",
+            title: "默认颜色",
+            desc: "新建标注的描边与文字颜色。",
+            showDivider: false
+          ) {
+            AnyView(
+              ColorPicker("", selection: Binding(
+                get: { Color(prefs.annotationColor.nsColor) },
+                set: { newValue in
+                  if let resolved = AnnotationColor(resolving: NSColor(newValue)) {
+                    updatePrefs { $0.screenshot.annotationColor = resolved }
+                  }
+                }
+              ))
+              .labelsHidden()
+            )
+          }
+
+          row(icon: "pencil.tip", title: "线宽", desc: nil, showDivider: true) {
+            AnyView(
+              Picker("", selection: Binding(
+                get: { prefs.annotationLineWidth },
+                set: { v in updatePrefs { $0.screenshot.annotationLineWidth = v } }
+              )) {
+                ForEach([CGFloat(1), 3, 5], id: \.self) { Text("\(Int($0))").tag($0) }
+              }
+              .pickerStyle(.segmented)
+              .labelsHidden()
+              .fixedSize()
+            )
+          }
+
+          row(icon: "textformat.size", title: "字号", desc: nil, showDivider: true) {
+            AnyView(
+              Picker("", selection: Binding(
+                get: { prefs.annotationFontSize },
+                set: { v in updatePrefs { $0.screenshot.annotationFontSize = v } }
+              )) {
+                ForEach([CGFloat(14), 18, 24, 32], id: \.self) { Text("\(Int($0))").tag($0) }
+              }
+              .pickerStyle(.segmented)
+              .labelsHidden()
+              .fixedSize()
+            )
+          }
+
+          row(
+            icon: "highlighter",
+            title: "高亮透明度",
+            desc: nil,
+            showDivider: true
+          ) {
+            AnyView(opacitySlider(
+              value: prefs.annotationHighlightOpacity, range: 0.15...0.65
+            ) { v in updatePrefs { $0.screenshot.annotationHighlightOpacity = v } })
+          }
+
+          row(icon: "square.grid.3x3", title: "马赛克粒度", desc: nil, showDivider: true) {
+            AnyView(
+              Picker("", selection: Binding(
+                get: { prefs.annotationMosaicBlockSize },
+                set: { v in updatePrefs { $0.screenshot.annotationMosaicBlockSize = v } }
+              )) {
+                ForEach([8, 12, 16, 24], id: \.self) { Text("\($0)").tag($0) }
+              }
+              .pickerStyle(.segmented)
+              .labelsHidden()
+              .fixedSize()
+            )
+          }
+
+          row(
+            icon: "drop",
+            title: "填充透明度",
+            desc: "形状内部填充,0 为空心。",
+            showDivider: true
+          ) {
+            AnyView(opacitySlider(
+              value: prefs.annotationFillOpacity, range: 0...1
+            ) { v in updatePrefs { $0.screenshot.annotationFillOpacity = v } })
+          }
+        }
+      }
+    }
+  }
+
+  /// 透明度滑杆 + 百分比读数,供高亮/填充复用。
+  private func opacitySlider(
+    value: CGFloat,
+    range: ClosedRange<CGFloat>,
+    onChange: @escaping (CGFloat) -> Void
+  ) -> some View {
+    HStack(spacing: 10) {
+      Slider(value: Binding(get: { value }, set: onChange), in: range)
+        .frame(width: 160)
+        .controlSize(.small)
+        .tint(.mgAccent)
+      Text(String(format: "%.0f%%", value * 100))
+        .font(.mgMeta)
+        .foregroundStyle(Color.mgText2)
+        .frame(width: 40, alignment: .trailing)
     }
   }
 

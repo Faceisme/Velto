@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import VeltoAnnotationCore
 
 enum ScreenshotImageFormat: String, Codable, Equatable, CaseIterable {
   case png
@@ -27,6 +28,37 @@ struct ScreenshotPreferences: Codable, Equatable {
   /// 取色放大镜,默认开
   var showMagnifier: Bool
 
+  // MARK: - 标注默认样式(新建画布与重置工具时的初值)
+
+  /// 描边/文字默认颜色,默认系统红。
+  var annotationColor: AnnotationColor
+  /// 形状/箭头默认线宽,默认 3。
+  var annotationLineWidth: CGFloat
+  /// 文字默认字号,默认 18。
+  var annotationFontSize: CGFloat
+  /// 高亮笔默认透明度,默认 0.35。
+  var annotationHighlightOpacity: CGFloat
+  /// 马赛克默认粒度,默认 12。
+  var annotationMosaicBlockSize: Int
+  /// 形状默认填充透明度,默认 0(空心)。
+  var annotationFillOpacity: CGFloat
+
+  /// 把六个默认设置映射为编辑器初始 AnnotationStyle;其余字段沿用编辑器约定。
+  var annotationStyle: AnnotationStyle {
+    AnnotationStyle(
+      strokeColor: annotationColor,
+      lineWidth: annotationLineWidth,
+      fillColor: annotationColor,
+      fillOpacity: annotationFillOpacity,
+      fontSize: annotationFontSize,
+      isBold: false,
+      textAlignment: .left,
+      highlightOpacity: annotationHighlightOpacity,
+      mosaicBlockSize: annotationMosaicBlockSize,
+      sequenceDiameter: 28
+    )
+  }
+
   static let defaults = ScreenshotPreferences(
     enabled: true,
     triggerShortcut: nil,
@@ -42,13 +74,21 @@ struct ScreenshotPreferences: Codable, Equatable {
       ?? NSHomeDirectory() + "/Desktop"),
     saveAlsoCopiesToClipboard: false,
     imageFormat: .png,
-    showMagnifier: true
+    showMagnifier: true,
+    annotationColor: .systemRed,
+    annotationLineWidth: 3,
+    annotationFontSize: 18,
+    annotationHighlightOpacity: 0.35,
+    annotationMosaicBlockSize: 12,
+    annotationFillOpacity: 0
   )
 
   init(
     enabled: Bool, triggerShortcut: Shortcut?, copyKeyCode: UInt16, saveShortcut: Shortcut,
     cancelKeyCode: UInt16, scrollKeyCode: UInt16, saveDirectoryPath: String,
-    saveAlsoCopiesToClipboard: Bool, imageFormat: ScreenshotImageFormat, showMagnifier: Bool
+    saveAlsoCopiesToClipboard: Bool, imageFormat: ScreenshotImageFormat, showMagnifier: Bool,
+    annotationColor: AnnotationColor, annotationLineWidth: CGFloat, annotationFontSize: CGFloat,
+    annotationHighlightOpacity: CGFloat, annotationMosaicBlockSize: Int, annotationFillOpacity: CGFloat
   ) {
     self.enabled = enabled
     self.triggerShortcut = triggerShortcut
@@ -60,6 +100,12 @@ struct ScreenshotPreferences: Codable, Equatable {
     self.saveAlsoCopiesToClipboard = saveAlsoCopiesToClipboard
     self.imageFormat = imageFormat
     self.showMagnifier = showMagnifier
+    self.annotationColor = annotationColor
+    self.annotationLineWidth = annotationLineWidth
+    self.annotationFontSize = annotationFontSize
+    self.annotationHighlightOpacity = annotationHighlightOpacity
+    self.annotationMosaicBlockSize = annotationMosaicBlockSize
+    self.annotationFillOpacity = annotationFillOpacity
   }
 
   init(from decoder: Decoder) throws {
@@ -75,5 +121,11 @@ struct ScreenshotPreferences: Codable, Equatable {
     saveAlsoCopiesToClipboard = try c.decodeIfPresent(Bool.self, forKey: .saveAlsoCopiesToClipboard) ?? d.saveAlsoCopiesToClipboard
     imageFormat = try c.decodeIfPresent(ScreenshotImageFormat.self, forKey: .imageFormat) ?? d.imageFormat
     showMagnifier = try c.decodeIfPresent(Bool.self, forKey: .showMagnifier) ?? d.showMagnifier
+    annotationColor = try c.decodeIfPresent(AnnotationColor.self, forKey: .annotationColor) ?? d.annotationColor
+    annotationLineWidth = try c.decodeIfPresent(CGFloat.self, forKey: .annotationLineWidth) ?? d.annotationLineWidth
+    annotationFontSize = try c.decodeIfPresent(CGFloat.self, forKey: .annotationFontSize) ?? d.annotationFontSize
+    annotationHighlightOpacity = try c.decodeIfPresent(CGFloat.self, forKey: .annotationHighlightOpacity) ?? d.annotationHighlightOpacity
+    annotationMosaicBlockSize = try c.decodeIfPresent(Int.self, forKey: .annotationMosaicBlockSize) ?? d.annotationMosaicBlockSize
+    annotationFillOpacity = try c.decodeIfPresent(CGFloat.self, forKey: .annotationFillOpacity) ?? d.annotationFillOpacity
   }
 }
