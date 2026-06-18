@@ -17,9 +17,13 @@ let package = Package(
             name: "betterfinder",
             path: "Sources/betterfinder"
         ),
+        .target(
+            name: "VeltoAnnotationCore",
+            path: "Sources/VeltoAnnotationCore"
+        ),
         .executableTarget(
             name: "Velto",
-            dependencies: ["betterfinder"],
+            dependencies: ["betterfinder", "VeltoAnnotationCore"],
             path: "Sources/Velto",
             linkerSettings: [
                 // 切换器要用 SkyLight 私有框架里的 CGS / SLPS / _AXUIElementGetWindow
@@ -42,7 +46,7 @@ let package = Package(
         ),
         .testTarget(
             name: "VeltoTests",
-            dependencies: ["betterfinder"],
+            dependencies: ["betterfinder", "VeltoAnnotationCore"],
             path: "Tests/VeltoTests"
         )
     ],
