@@ -293,8 +293,10 @@ final class EventTapManager: @unchecked Sendable {
             | eventMask(for: .rightMouseDragged)
             | eventMask(for: .rightMouseUp)
             | eventMask(for: .leftMouseDown)
+            | eventMask(for: .leftMouseDragged)
             | eventMask(for: .leftMouseUp)
             | eventMask(for: .otherMouseDown)
+            | eventMask(for: .otherMouseDragged)
             | eventMask(for: .otherMouseUp)
             | eventMask(for: .mouseMoved)
             | eventMask(for: .flagsChanged)
@@ -393,8 +395,10 @@ final class EventTapManager: @unchecked Sendable {
         case .rightMouseDragged: return "rightMouseDragged"
         case .rightMouseUp: return "rightMouseUp"
         case .leftMouseDown: return "leftMouseDown"
+        case .leftMouseDragged: return "leftMouseDragged"
         case .leftMouseUp: return "leftMouseUp"
         case .otherMouseDown: return "otherMouseDown"
+        case .otherMouseDragged: return "otherMouseDragged"
         case .otherMouseUp: return "otherMouseUp"
         case .mouseMoved: return "mouseMoved"
         case .flagsChanged: return "flagsChanged"
@@ -434,6 +438,13 @@ final class EventTapManager: @unchecked Sendable {
             }
             onStatusChange?("监听中(tap 已重启)")
             return nil
+        }
+
+        switch type {
+        case .mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged:
+            ScreenshotHotCornerGuard.shared.rewriteLocationIfNeeded(in: event)
+        default:
+            break
         }
 
         // Compute the normalized modifier flags exactly once for all

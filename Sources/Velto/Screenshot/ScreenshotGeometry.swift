@@ -6,6 +6,20 @@ enum ScreenshotHandle: CaseIterable {
 }
 
 enum ScreenshotGeometry {
+  /// 触发角守卫会把系统指针限制在角内侧；框选坐标仍吸附到真实屏幕边缘。
+  static func snapPointToBoundsEdges(
+    _ point: CGPoint,
+    bounds: CGRect,
+    threshold: CGFloat = ScreenshotHotCornerGuard.cornerInset + 1
+  ) -> CGPoint {
+    var point = point
+    if abs(point.x - bounds.minX) <= threshold { point.x = bounds.minX }
+    if abs(point.x - bounds.maxX) <= threshold { point.x = bounds.maxX }
+    if abs(point.y - bounds.minY) <= threshold { point.y = bounds.minY }
+    if abs(point.y - bounds.maxY) <= threshold { point.y = bounds.maxY }
+    return point
+  }
+
   /// 任意方向的两点 → 正矩形(始终非负宽高)。
   static func normalizedRect(from a: CGPoint, to b: CGPoint) -> CGRect {
     CGRect(x: min(a.x, b.x), y: min(a.y, b.y), width: abs(a.x - b.x), height: abs(a.y - b.y))
@@ -14,6 +28,17 @@ enum ScreenshotGeometry {
   /// 把选区夹进 bounds(超出部分截断)。
   static func clamp(_ rect: CGRect, to bounds: CGRect) -> CGRect {
     rect.intersection(bounds)
+  }
+
+  /// 平移选区时只约束位置，不裁剪宽高。越过边界的部分通过夹住 origin 拉回屏幕内。
+  static func moved(_ rect: CGRect, by delta: CGPoint, within bounds: CGRect) -> CGRect {
+    let maxOriginX = max(bounds.minX, bounds.maxX - rect.width)
+    let maxOriginY = max(bounds.minY, bounds.maxY - rect.height)
+    let origin = CGPoint(
+      x: min(max(rect.minX + delta.x, bounds.minX), maxOriginX),
+      y: min(max(rect.minY + delta.y, bounds.minY), maxOriginY)
+    )
+    return CGRect(origin: origin, size: rect.size)
   }
 
   /// 八个手柄各自的命中矩形(以手柄中心 ± handleSize/2)。

@@ -14,6 +14,7 @@ final class ScreenshotSession: ScreenshotOverlayDelegate {
   }
 
   func start() {
+    ScreenshotHotCornerGuard.shared.activate(displayIDs: snapshots.map(\.displayID))
     windows = ScreenshotOverlayWindow.present(for: snapshots, delegate: self)
   }
 
@@ -50,6 +51,7 @@ final class ScreenshotSession: ScreenshotOverlayDelegate {
   private func teardown() {
     windows.forEach { $0.dismiss() }
     windows = []
+    ScreenshotHotCornerGuard.shared.deactivate()
     onFinish()
   }
 }

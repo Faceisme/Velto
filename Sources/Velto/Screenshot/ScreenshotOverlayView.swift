@@ -84,7 +84,8 @@ final class ScreenshotOverlayView: NSView {
   override func mouseDown(with event: NSEvent) {
     // 多屏:点哪块屏就把那块屏的覆盖窗口提为 key,保证后续空格/⌘S 键盘确认落到本 View。
     window?.makeKey()
-    let p = convert(event.locationInWindow, from: nil)
+    let p = ScreenshotGeometry.snapPointToBoundsEdges(
+      convert(event.locationInWindow, from: nil), bounds: bounds)
     lastMouseLocal = p
     if let s = selection, let h = ScreenshotGeometry.handle(at: p, selection: s, handleSize: handleHitSize) {
       mode = .dragHandle(h)
@@ -100,7 +101,8 @@ final class ScreenshotOverlayView: NSView {
   }
 
   override func mouseDragged(with event: NSEvent) {
-    let p = convert(event.locationInWindow, from: nil)
+    let p = ScreenshotGeometry.snapPointToBoundsEdges(
+      convert(event.locationInWindow, from: nil), bounds: bounds)
     lastMouseLocal = p
     switch mode {
     case .dragging:
@@ -112,10 +114,12 @@ final class ScreenshotOverlayView: NSView {
           ScreenshotGeometry.resized(s, handle: h, to: p), to: bounds)
       }
     case .moving:
-      if var s = selection {
-        s.origin.x += p.x - dragOrigin.x
-        s.origin.y += p.y - dragOrigin.y
-        selection = ScreenshotGeometry.clamp(s, to: bounds)
+      if let s = selection {
+        selection = ScreenshotGeometry.moved(
+          s,
+          by: CGPoint(x: p.x - dragOrigin.x, y: p.y - dragOrigin.y),
+          within: bounds
+        )
         dragOrigin = p
       }
     case .idle:
@@ -227,21 +231,21 @@ final class ScreenshotOverlayView: NSView {
 
   private func drawSelectionBorder(_ s: CGRect, ctx: CGContext) {
     ctx.setStrokeColor(NSColor.controlAccentColor.cgColor)
-    ctx.setLineWidth(1)
-    ctx.stroke(s.insetBy(dx: 0.5, dy: 0.5))
+    ctx.setLineWidth(2)
+    ctx.stroke(s.insetBy(dx: 1, dy: 1))
   }
 
   private func drawHoverBorder(_ r: CGRect, ctx: CGContext) {
     ctx.setStrokeColor(NSColor.controlAccentColor.withAlphaComponent(0.9).cgColor)
-    ctx.setLineWidth(1)
-    ctx.stroke(r.insetBy(dx: 0.5, dy: 0.5))
+    ctx.setLineWidth(2)
+    ctx.stroke(r.insetBy(dx: 1, dy: 1))
   }
 
   private func drawHandles(for s: CGRect, ctx: CGContext) {
     let rects = ScreenshotGeometry.handleRects(for: s, handleSize: handleSize)
     ctx.setFillColor(NSColor.white.cgColor)
     ctx.setStrokeColor(NSColor.controlAccentColor.cgColor)
-    ctx.setLineWidth(1)
+    ctx.setLineWidth(1.5)
     for handle in ScreenshotHandle.allCases {
       guard let r = rects[handle] else { continue }
       ctx.fill(r)
