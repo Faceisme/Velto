@@ -160,25 +160,24 @@ final class ScrollCaptureKeyTap: @unchecked Sendable {
       return Unmanaged.passUnretained(event)
     }
     guard type == .keyDown else { return Unmanaged.passUnretained(event) }
-    guard event.getIntegerValueField(.keyboardEventAutorepeat) == 0 else {
-      return Unmanaged.passUnretained(event)
-    }
 
     let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
     let modifiers = ModifierFormatter.normalizedRawValue(from: event.flags)
+    let isAutorepeat = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
+    let action: Action
     if keyCode == saveKeyCode, modifiers == saveModifierFlags {
-      dispatchToMain(.save)
-      return nil
+      action = .save
+    } else if modifiers == 0, keyCode == copyKeyCode || keyCode == 36 {
+      action = .copy
+    } else if modifiers == 0, keyCode == cancelKeyCode {
+      action = .cancel
+    } else {
+      return Unmanaged.passUnretained(event)
     }
-    if modifiers == 0, keyCode == copyKeyCode || keyCode == 36 {
-      dispatchToMain(.copy)
-      return nil
+    if !isAutorepeat {
+      dispatchToMain(action)
     }
-    if modifiers == 0, keyCode == cancelKeyCode {
-      dispatchToMain(.cancel)
-      return nil
-    }
-    return Unmanaged.passUnretained(event)
+    return nil
   }
 
   private func dispatchToMain(_ action: Action) {
