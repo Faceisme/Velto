@@ -56,6 +56,32 @@ enum ScreenshotCapturer {
     return snapshot.image.cropping(to: px.integral)
   }
 
+  /// 实时捕获快照显示器内的全局点坐标选区。
+  static func captureRegion(in snapshot: DisplaySnapshot, globalRect: CGRect) async throws -> CGImage? {
+    let content = try await SCShareableContent.current
+    guard let display = content.displays.first(where: { $0.displayID == snapshot.displayID }) else {
+      return nil
+    }
+
+    let localX = globalRect.minX - snapshot.frame.minX
+    let localTopY = snapshot.frame.maxY - globalRect.maxY
+    let filter = SCContentFilter(display: display, excludingWindows: [])
+    let config = SCStreamConfiguration()
+    config.showsCursor = false
+    config.sourceRect = CGRect(
+      x: localX,
+      y: localTopY,
+      width: globalRect.width,
+      height: globalRect.height
+    )
+    config.width = Int(globalRect.width * snapshot.scale)
+    config.height = Int(globalRect.height * snapshot.scale)
+    return try await SCScreenshotManager.captureImage(
+      contentFilter: filter,
+      configuration: config
+    )
+  }
+
   // MARK: - 私有辅助
 
   /// I2:接收 SCDisplay,NSScreen 查不到时用 CG API 从像素/点比例推算真实 scale。
