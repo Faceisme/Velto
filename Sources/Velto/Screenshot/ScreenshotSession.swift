@@ -19,6 +19,7 @@ final class ScreenshotSession: ScreenshotOverlayDelegate {
   private var scrollRegion: CGRect?
   private var scrollSnapshot: DisplaySnapshot?
   private var scrollCapturing = false
+  private var scrollKeyTap: ScrollCaptureKeyTap?
 
   init(snapshots: [DisplaySnapshot], preferences: ScreenshotPreferences, onFinish: @escaping () -> Void) {
     self.snapshots = snapshots
@@ -130,12 +131,28 @@ final class ScreenshotSession: ScreenshotOverlayDelegate {
     overlayWindow.alphaValue = 0
 
     let hud = ScrollCaptureHUD(onScreen: snapshot.frame)
+    hud.configureShortcuts(using: preferences)
     hud.onCopy = { [weak self] in self?.finishScrollCapture(.copy) }
     hud.onSave = { [weak self] in self?.finishScrollCapture(.save) }
     hud.onCancel = { [weak self] in self?.cancelScrollCapture() }
     hud.orderFrontRegardless()
-    hud.makeKey()
     scrollHUD = hud
+
+    let keyTap = ScrollCaptureKeyTap(preferences: preferences)
+    keyTap.onCopy = { [weak self] in self?.finishScrollCapture(.copy) }
+    keyTap.onSave = { [weak self] in self?.finishScrollCapture(.save) }
+    keyTap.onCancel = { [weak self] in self?.cancelScrollCapture() }
+    scrollKeyTap = keyTap
+    if keyTap.start() {
+      // 完成键由全局 tap 接管,前台还给目标 App 以支持拖滚动条和键盘滚动。
+      previousApp?.activate(from: .current)
+      ScreenshotDebugLog.log("滚动截图快捷键接管成功:已激活目标 App")
+    } else {
+      scrollKeyTap = nil
+      ScreenshotDebugLog.log("滚动截图快捷键接管失败:退化为 HUD 键盘输入")
+      NSSound.beep()
+      hud.makeKey()
+    }
 
     let timer = DispatchSource.makeTimerSource(queue: .main)
     timer.schedule(
@@ -245,6 +262,7 @@ final class ScreenshotSession: ScreenshotOverlayDelegate {
   private func cancelScrollCapture() {
     stopScrollTimer()
     teardownScrollUI()
+    NSApp.activate()
     if let overlay = activeOverlay, let overlayWindow = overlay.window {
       overlayWindow.ignoresMouseEvents = false
       overlayWindow.alphaValue = 1
@@ -256,6 +274,8 @@ final class ScreenshotSession: ScreenshotOverlayDelegate {
   }
 
   private func teardownScrollUI() {
+    scrollKeyTap?.stop()
+    scrollKeyTap = nil
     scrollHUD?.orderOut(nil)
     scrollHUD?.onCopy = nil
     scrollHUD?.onSave = nil
