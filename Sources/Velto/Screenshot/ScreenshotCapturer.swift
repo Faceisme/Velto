@@ -11,6 +11,8 @@ struct DisplaySnapshot {
 }
 
 enum ScreenshotCapturer {
+  @MainActor private static var regionCaptureFilters: [CGDirectDisplayID: SCContentFilter] = [:]
+
   /// 启动后预热,SCShareableContent 首次查询有延迟。
   static func prewarm() {
     Task.detached(priority: .utility) { _ = try? await SCShareableContent.current }
@@ -57,15 +59,29 @@ enum ScreenshotCapturer {
   }
 
   /// 实时捕获快照显示器内的全局点坐标选区。
+  @MainActor
   static func captureRegion(in snapshot: DisplaySnapshot, globalRect: CGRect) async throws -> CGImage? {
-    let content = try await SCShareableContent.current
-    guard let display = content.displays.first(where: { $0.displayID == snapshot.displayID }) else {
-      return nil
+    let filter: SCContentFilter
+    if let cachedFilter = regionCaptureFilters[snapshot.displayID] {
+      filter = cachedFilter
+    } else {
+      let content = try await SCShareableContent.current
+      guard let display = content.displays.first(where: { $0.displayID == snapshot.displayID }) else {
+        return nil
+      }
+      let excludedApplications = content.applications.filter {
+        $0.processID == ProcessInfo.processInfo.processIdentifier
+      }
+      filter = SCContentFilter(
+        display: display,
+        excludingApplications: excludedApplications,
+        exceptingWindows: []
+      )
+      regionCaptureFilters[snapshot.displayID] = filter
     }
 
     let localX = globalRect.minX - snapshot.frame.minX
     let localTopY = snapshot.frame.maxY - globalRect.maxY
-    let filter = SCContentFilter(display: display, excludingWindows: [])
     let config = SCStreamConfiguration()
     config.showsCursor = false
     config.sourceRect = CGRect(
