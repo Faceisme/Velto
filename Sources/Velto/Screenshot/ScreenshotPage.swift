@@ -217,21 +217,19 @@ struct ScreenshotPage: View {
             )
           }
 
-          // 滚动长截图:Phase 3 占位,灰显
+          // 滚动长截图:裸 keyCode(默认 S 1),只读展示
           row(
             icon: "scroll",
             title: "滚动长截图",
-            desc: "即将支持(Phase 3)",
+            desc: "框选后按键进入滚动捕获",
             showDivider: true
           ) {
             AnyView(
               Text(keyName(for: prefs.scrollKeyCode))
                 .font(.mgBody)
-                .foregroundStyle(Color.mgText3)
+                .foregroundStyle(Color.mgText2)
             )
           }
-          .disabled(true)
-          .opacity(0.5)
         }
       }
 

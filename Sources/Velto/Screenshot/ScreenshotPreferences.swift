@@ -18,7 +18,7 @@ struct ScreenshotPreferences: Codable, Equatable {
   var saveShortcut: Shortcut
   /// 会话内:取消(默认 Esc 53)
   var cancelKeyCode: UInt16
-  /// 会话内:滚动长截图(默认 S 1)—— Phase 3 占位,本期不实现拼接
+  /// 会话内:滚动长截图(默认 S 1)
   var scrollKeyCode: UInt16
   /// ⌘S 静默保存目录,默认桌面
   var saveDirectoryPath: String

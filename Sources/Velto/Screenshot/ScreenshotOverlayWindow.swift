@@ -1,7 +1,7 @@
 import AppKit
 import VeltoAnnotationCore
 
-/// 会话内的确认动作:复制 / 保存 / 滚动长截图(滚动为 Phase 3 占位)。
+/// 会话内的确认动作:复制 / 保存 / 滚动长截图。
 enum ScreenshotSessionAction { case copy, save, scroll }
 
 @MainActor

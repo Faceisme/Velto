@@ -19,7 +19,7 @@ final class ScreenshotOverlayView: NSView {
   /// 触发截图时的前台 app PID:窗口自动识别只认它的窗口,忽略后台窗口(0=未知,退化为光标下窗口)。
   var activeAppPID: pid_t = 0
 
-  /// 选区确认后传给 delegate 的全局 rect(AppKit 左下原点),供 Task 8 的 ScreenshotCapturer.crop 使用。
+  /// 选区确认后传给 delegate 的全局 rect(AppKit 左下原点),供 ScreenshotCapturer.crop 使用。
   var currentSelectionGlobal: CGRect? {
     guard let s = selection else { return nil }
     return CGRect(
@@ -223,7 +223,7 @@ final class ScreenshotOverlayView: NSView {
       confirm(.copy)
     case 1 where event.modifierFlags.contains(.command):       // ⌘S = 保存
       confirm(.save)
-    case 1:                                                     // S = 滚动(Task 8 占位)
+    case 1:                                                     // S = 滚动长截图
       confirm(.scroll)
     default:
       super.keyDown(with: event)
