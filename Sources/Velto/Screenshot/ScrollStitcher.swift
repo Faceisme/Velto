@@ -14,17 +14,24 @@ final class ScrollStitcher {
   private static let samplesPerRow = 32
 
   private let maxPixelHeight: Int
+  private let maxPixelCount: Int
   private var pixelWidth = 0
   private(set) var pixelHeight = 0
   private var strips: [CGImage] = []
   private var fingerprints: [UInt64] = []
 
-  init(maxPixelHeight: Int = 30_000) {
+  init(maxPixelHeight: Int = 30_000, maxPixelCount: Int = 50_000_000) {
     self.maxPixelHeight = max(0, maxPixelHeight)
+    self.maxPixelCount = max(0, maxPixelCount)
   }
 
   func append(frame: CGImage) -> Outcome {
     guard pixelHeight < maxPixelHeight else { return .reachedLimit }
+    if !strips.isEmpty {
+      guard frame.width == pixelWidth else { return .skippedNoOverlap }
+    }
+    let rowLimit = pixelRowLimit(forWidth: frame.width)
+    guard pixelHeight < rowLimit else { return .reachedLimit }
 
     let frameFingerprints = Self.rowFingerprints(
       of: frame,
@@ -33,7 +40,7 @@ final class ScrollStitcher {
     guard frameFingerprints.count == frame.height else { return .skippedNoOverlap }
 
     if strips.isEmpty {
-      let rows = min(frame.height, maxPixelHeight)
+      let rows = min(frame.height, rowLimit)
       guard rows > 0,
             let strip = crop(frame, fromTopRow: 0, rowCount: rows) else {
         return .reachedLimit
@@ -42,10 +49,10 @@ final class ScrollStitcher {
       pixelHeight = rows
       strips.append(strip)
       fingerprints.append(contentsOf: frameFingerprints.prefix(rows))
+      if rows == rowLimit { return .reachedLimit }
       return .first(rows: rows)
     }
 
-    guard frame.width == pixelWidth else { return .skippedNoOverlap }
     let canvasTail = Array(fingerprints.suffix(frameFingerprints.count))
     guard let appendableRows = ScrollOverlapDetector.appendableRowCount(
       canvasTail: canvasTail,
@@ -55,7 +62,7 @@ final class ScrollStitcher {
     }
     guard appendableRows > 0 else { return .unchanged }
 
-    let rows = min(appendableRows, maxPixelHeight - pixelHeight)
+    let rows = min(appendableRows, rowLimit - pixelHeight)
     guard rows > 0 else { return .reachedLimit }
     let firstNewRow = frame.height - appendableRows
     guard let strip = crop(frame, fromTopRow: firstNewRow, rowCount: rows) else {
@@ -65,6 +72,7 @@ final class ScrollStitcher {
     strips.append(strip)
     fingerprints.append(contentsOf: frameFingerprints[firstNewRow..<(firstNewRow + rows)])
     pixelHeight += rows
+    if pixelHeight == rowLimit { return .reachedLimit }
     return .grew(rows: rows)
   }
 
@@ -160,9 +168,26 @@ final class ScrollStitcher {
 
   // MARK: - 私有辅助
 
+  private func pixelRowLimit(forWidth width: Int) -> Int {
+    guard width > 0 else { return 0 }
+    return min(maxPixelHeight, maxPixelCount / width)
+  }
+
   private func crop(_ image: CGImage, fromTopRow row: Int, rowCount: Int) -> CGImage? {
     guard row >= 0, rowCount > 0, row + rowCount <= image.height else { return nil }
-    return image.cropping(to: CGRect(x: 0, y: row, width: image.width, height: rowCount))
+    guard let cropped = image.cropping(to: CGRect(
+      x: 0,
+      y: row,
+      width: image.width,
+      height: rowCount
+    )), let context = makeContext(width: cropped.width, height: cropped.height) else {
+      return nil
+    }
+
+    // cropping 可能与整帧共用 provider；重绘后条带只保留自身尺寸的 backing。
+    context.interpolationQuality = .none
+    context.draw(cropped, in: CGRect(x: 0, y: 0, width: cropped.width, height: cropped.height))
+    return context.makeImage()
   }
 
   private func makeContext(width: Int, height: Int) -> CGContext? {
