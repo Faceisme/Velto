@@ -13,6 +13,12 @@ final class ScreenshotSession: ScreenshotOverlayDelegate {
   private var failureToast: NSWindow?
   /// 触发截图前的前台 app;结束时恢复,避免 NSApp.activate 抢占后系统乱提其它窗口。
   private var previousApp: NSRunningApplication?
+  private var scrollStitcher: ScrollStitcher?
+  private var scrollHUD: ScrollCaptureHUD?
+  private var scrollTimer: DispatchSourceTimer?
+  private var scrollRegion: CGRect?
+  private var scrollSnapshot: DisplaySnapshot?
+  private var scrollCapturing = false
 
   init(snapshots: [DisplaySnapshot], preferences: ScreenshotPreferences, onFinish: @escaping () -> Void) {
     self.snapshots = snapshots
@@ -57,9 +63,7 @@ final class ScreenshotSession: ScreenshotOverlayDelegate {
       + "annotations=\(document?.elements.count ?? 0)")
     switch action {
     case .scroll:
-      // Phase 3 占位:本期不实现滚动拼接,轻提示后留在会话。
-      ScreenshotDebugLog.log("scroll capture not implemented yet")
-      NSSound.beep()
+      beginScrollCapture(globalRect: globalRect)
       return
     case .copy, .save:
       guard let snap = snapshots.first(where: { $0.frame.intersects(globalRect) }),
@@ -102,6 +106,172 @@ final class ScreenshotSession: ScreenshotOverlayDelegate {
         presentOutputFailure(describe(error), screenFrame: snap.frame, near: globalRect)
       }
     }
+  }
+
+  // MARK: - 滚动截图
+
+  private func beginScrollCapture(globalRect: CGRect) {
+    guard scrollStitcher == nil,
+          let overlay = activeOverlay,
+          let overlayWindow = overlay.window,
+          let snapshot = snapshots.first(where: { $0.frame == overlay.globalFrame }) else {
+      ScreenshotDebugLog.log("滚动截图启动失败:缺少活动选区或对应屏幕快照")
+      NSSound.beep()
+      return
+    }
+
+    scrollRegion = globalRect
+    scrollSnapshot = snapshot
+    scrollCapturing = false
+    scrollStitcher = ScrollStitcher()
+
+    // 隐藏覆盖层并让滚轮穿透到底下的目标窗口。
+    overlayWindow.ignoresMouseEvents = true
+    overlayWindow.alphaValue = 0
+
+    let hud = ScrollCaptureHUD(onScreen: snapshot.frame)
+    hud.onCopy = { [weak self] in self?.finishScrollCapture(.copy) }
+    hud.onSave = { [weak self] in self?.finishScrollCapture(.save) }
+    hud.onCancel = { [weak self] in self?.cancelScrollCapture() }
+    hud.orderFrontRegardless()
+    hud.makeKey()
+    scrollHUD = hud
+
+    let timer = DispatchSource.makeTimerSource(queue: .main)
+    timer.schedule(
+      deadline: .now() + .milliseconds(120),
+      repeating: .milliseconds(120)
+    )
+    timer.setEventHandler { [weak self] in self?.scrollTick() }
+    scrollTimer = timer
+    timer.resume()
+
+    ScreenshotDebugLog.log("滚动截图开始: displayID=\(snapshot.displayID) region="
+      + "\(Int(globalRect.minX)),\(Int(globalRect.minY)) "
+      + "\(Int(globalRect.width))x\(Int(globalRect.height)) intervalMs=120")
+  }
+
+  private func scrollTick() {
+    guard !scrollCapturing,
+          let snapshot = scrollSnapshot,
+          let globalRect = scrollRegion,
+          let stitcher = scrollStitcher,
+          let hud = scrollHUD else { return }
+    scrollCapturing = true
+
+    Task { @MainActor [weak self, weak stitcher, weak hud] in
+      guard let self, let stitcher, let hud else { return }
+      defer {
+        if self.scrollStitcher === stitcher { self.scrollCapturing = false }
+      }
+
+      do {
+        guard let frame = try await ScreenshotCapturer.captureRegion(
+          in: snapshot,
+          globalRect: globalRect
+        ) else {
+          ScreenshotDebugLog.log("滚动截图帧失败: result=empty displayID=\(snapshot.displayID)")
+          return
+        }
+        // 定时器停止或滚动状态被替换后,丢弃仍在飞的旧帧。
+        guard self.scrollTimer != nil,
+              self.scrollStitcher === stitcher,
+              self.scrollHUD === hud else { return }
+
+        let outcome = stitcher.append(frame: frame)
+        let hint: String?
+        switch outcome {
+        case .skippedNoOverlap:
+          hint = "滚慢一点,刚才那段没接上"
+        case .reachedLimit:
+          hint = "已达最大长度,可按 Enter 完成"
+        case .first, .grew, .unchanged:
+          hint = nil
+        }
+        hud.update(
+          thumbnail: stitcher.thumbnail(maxHeight: 260),
+          heightPx: stitcher.pixelHeight,
+          hint: hint
+        )
+        ScreenshotDebugLog.log("滚动截图帧: outcome=\(outcome) frame="
+          + "\(frame.width)x\(frame.height) stitchedHeight=\(stitcher.pixelHeight)")
+      } catch {
+        ScreenshotDebugLog.log("滚动截图帧失败: error=\(error.localizedDescription)")
+      }
+    }
+  }
+
+  private func finishScrollCapture(_ action: ScreenshotSessionAction) {
+    stopScrollTimer()
+    guard let stitcher = scrollStitcher,
+          let image = stitcher.finalize() else {
+      ScreenshotDebugLog.log("滚动截图完成失败:没有可输出的长图")
+      NSSound.beep()
+      cancelScrollCapture()
+      return
+    }
+
+    let outcome: Result<Void, ScreenshotWriteError>
+    switch action {
+    case .copy:
+      outcome = ScreenshotImageWriter.copyToClipboard(image)
+    case .save:
+      outcome = ScreenshotImageWriter.save(
+        image,
+        toDirectory: preferences.saveDirectoryPath,
+        format: preferences.imageFormat,
+        alsoCopy: preferences.saveAlsoCopiesToClipboard
+      ).map { _ in () }
+    case .scroll:
+      return
+    }
+
+    switch outcome {
+    case .success:
+      ScreenshotDebugLog.log("滚动截图输出成功: action=\(action) image="
+        + "\(image.width)x\(image.height)")
+      teardownScrollUI()
+      teardown()
+    case .failure(let error):
+      ScreenshotDebugLog.log("滚动截图输出失败: action=\(action) error=\(describe(error))")
+      presentOutputFailure(
+        describe(error),
+        screenFrame: scrollSnapshot?.frame,
+        near: scrollRegion ?? .zero
+      )
+    }
+  }
+
+  private func cancelScrollCapture() {
+    stopScrollTimer()
+    teardownScrollUI()
+    if let overlay = activeOverlay, let overlayWindow = overlay.window {
+      overlayWindow.ignoresMouseEvents = false
+      overlayWindow.alphaValue = 1
+      overlayWindow.orderFrontRegardless()
+      overlayWindow.makeKey()
+      overlay.needsDisplay = true
+    }
+    ScreenshotDebugLog.log("滚动截图取消:已返回选区编辑")
+  }
+
+  private func teardownScrollUI() {
+    scrollHUD?.orderOut(nil)
+    scrollHUD?.onCopy = nil
+    scrollHUD?.onSave = nil
+    scrollHUD?.onCancel = nil
+    scrollHUD = nil
+    scrollStitcher = nil
+    scrollSnapshot = nil
+    scrollRegion = nil
+    scrollCapturing = false
+    activeOverlay?.window?.ignoresMouseEvents = false
+    activeOverlay?.window?.alphaValue = 1
+  }
+
+  private func stopScrollTimer() {
+    scrollTimer?.cancel()
+    scrollTimer = nil
   }
 
   // MARK: - 失败保留
@@ -176,6 +346,8 @@ final class ScreenshotSession: ScreenshotOverlayDelegate {
   }
 
   private func teardown() {
+    stopScrollTimer()
+    teardownScrollUI()
     failureToast?.orderOut(nil)
     failureToast = nil
     // 先收尾标注 UI(结束文字编辑、释放 history 与马赛克缓存),再撤窗。
