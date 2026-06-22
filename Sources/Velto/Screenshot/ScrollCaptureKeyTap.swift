@@ -18,7 +18,9 @@ final class ScrollCaptureKeyTap: @unchecked Sendable {
   private var tap: CFMachPort?
   private var runLoopSource: CFRunLoopSource?
   private var tapRunLoop: CFRunLoop?
-  private var tapThread: Thread?
+  /// 运行中的 Thread 由系统保活;这里弱持有以避免 thread 闭包与 self 构成引用环。
+  private weak var tapThread: Thread?
+  private var threadStopped: DispatchSemaphore?
 
   init(preferences: ScreenshotPreferences) {
     copyKeyCode = preferences.copyKeyCode
@@ -53,12 +55,20 @@ final class ScrollCaptureKeyTap: @unchecked Sendable {
     }
 
     let ready = DispatchSemaphore(value: 0)
-    let thread = Thread { [weak self] in
+    let stopped = DispatchSemaphore(value: 0)
+    let thread = Thread { [self] in
+      defer {
+        clearTapRunLoop(for: Thread.current)
+        stopped.signal()
+      }
       guard let runLoop = CFRunLoopGetCurrent() else {
         ready.signal()
         return
       }
-      self?.setTapRunLoop(runLoop)
+      guard installTapRunLoop(runLoop, for: Thread.current) else {
+        ready.signal()
+        return
+      }
       CFRunLoopAddSource(runLoop, source, .commonModes)
       ready.signal()
       CFRunLoopRun()
@@ -71,10 +81,18 @@ final class ScrollCaptureKeyTap: @unchecked Sendable {
     self.tap = tap
     runLoopSource = source
     tapThread = thread
+    threadStopped = stopped
     lifecycleLock.unlock()
 
     thread.start()
     ready.wait()
+    lifecycleLock.lock()
+    let didStart = self.tap === tap && tapRunLoop != nil
+    lifecycleLock.unlock()
+    guard didStart else {
+      stop()
+      return false
+    }
     CGEvent.tapEnable(tap: tap, enable: true)
     return true
   }
@@ -85,10 +103,13 @@ final class ScrollCaptureKeyTap: @unchecked Sendable {
     let tap = tap
     let source = runLoopSource
     let runLoop = tapRunLoop
+    let thread = tapThread
+    let stopped = threadStopped
     self.tap = nil
     runLoopSource = nil
     tapRunLoop = nil
     tapThread = nil
+    threadStopped = nil
     lifecycleLock.unlock()
 
     if let tap {
@@ -101,13 +122,26 @@ final class ScrollCaptureKeyTap: @unchecked Sendable {
     if let runLoop {
       CFRunLoopStop(runLoop)
     }
+    if let thread, let stopped {
+      if Thread.current !== thread {
+        stopped.wait()
+      }
+    }
   }
 
   deinit { stop() }
 
-  private func setTapRunLoop(_ runLoop: CFRunLoop) {
+  private func installTapRunLoop(_ runLoop: CFRunLoop, for thread: Thread) -> Bool {
     lifecycleLock.lock()
+    defer { lifecycleLock.unlock() }
+    guard tap != nil, tapThread === thread else { return false }
     tapRunLoop = runLoop
+    return true
+  }
+
+  private func clearTapRunLoop(for thread: Thread) {
+    lifecycleLock.lock()
+    if tapThread === thread { tapRunLoop = nil }
     lifecycleLock.unlock()
   }
 
