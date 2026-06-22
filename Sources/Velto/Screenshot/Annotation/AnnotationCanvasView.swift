@@ -101,6 +101,13 @@ final class AnnotationCanvasView: NSView {
     }
 
     if editor.document.activeTool == .text {
+      // 先把按下交给编辑器:命中已有对象会进入移动/缩放手势,这样文字框(及任意图形)即便在
+      // 文字工具下也能直接挪动;只有按在空白处(无手势)才新建一个文字框。
+      applyChange { $0.pointerDown(at: point, modifiers: self.modifiers(for: event)) }
+      if editor.hasActiveGesture {
+        isTrackingPointer = true
+        return
+      }
       let height = max(editor.style.fontSize * 1.6, 28)
       let frame = CGRect(x: point.x, y: point.y, width: Self.defaultTextWidth, height: height)
       startTextEditing(annotationFrame: frame, existing: nil)
@@ -172,6 +179,20 @@ final class AnnotationCanvasView: NSView {
     if result == .cancelSession {
       onRequestCancelSession?()
     }
+  }
+
+  // MARK: - Menu actions (responder chain)
+
+  /// 主菜单 撤销/重做(⌘Z / ⌘⇧Z)是 `undo:`/`redo:` 这类响应链动作,会先于 keyDown 被
+  /// 派发。画布是第一响应者时必须自己接住它们、走标注历史栈;否则会落到窗口的
+  /// NSUndoManager(残留文字编辑器的悬垂注册)而崩溃。文字编辑时第一响应者是 NSTextView,
+  /// 撤销自然落到它的专属管理器,不会进到这里。
+  @objc func undo(_ sender: Any?) {
+    applyChange { $0.undo() }
+  }
+
+  @objc func redo(_ sender: Any?) {
+    applyChange { $0.redo() }
   }
 
   // MARK: - Text editing bridge

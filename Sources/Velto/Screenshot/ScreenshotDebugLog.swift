@@ -14,6 +14,14 @@ enum ScreenshotDebugLog {
   static var isEnabled: Bool { stateQueue.sync { _enabled } }
   static func setEnabled(_ enabled: Bool) { stateQueue.sync { _enabled = enabled || envForced } }
 
+  /// 调试日志文件路径(`~/Library/Logs/Velto/screenshot-debug.log`),供设置页"打开日志"用。
+  static var logFileURL: URL? {
+    FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first?
+      .appendingPathComponent("Logs", isDirectory: true)
+      .appendingPathComponent("Velto", isDirectory: true)
+      .appendingPathComponent("screenshot-debug.log")
+  }
+
   static func log(_ message: @autoclosure () -> String) {
     guard isEnabled else { return }
     let line = "[\(dateFormatter.string(from: Date()))] \(message())\n"

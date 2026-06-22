@@ -13,6 +13,9 @@ final class AnnotationTextEditor: NSView, NSTextViewDelegate {
   private let textView = NSTextView()
   private var finished = false
   private var cancelling = false
+  /// 专属撤销栈:绝不让 NSTextView 把撤销注册到窗口的 NSUndoManager。否则编辑器销毁后
+  /// 这些注册的目标对象失效、成为悬垂指针,之后任意 ⌘Z 调用窗口撤销栈即崩溃。
+  private let textUndoManager = UndoManager()
 
   override init(frame frameRect: NSRect) {
     super.init(frame: frameRect)
@@ -72,7 +75,7 @@ final class AnnotationTextEditor: NSView, NSTextViewDelegate {
     guard !finished else { return }
     finished = true
     onCommit?(textView.string, frame)
-    removeFromSuperview()
+    teardown()
   }
 
   func cancel() {
@@ -80,6 +83,12 @@ final class AnnotationTextEditor: NSView, NSTextViewDelegate {
     finished = true
     cancelling = true
     onCancel?()
+    teardown()
+  }
+
+  /// 移除视图前先清空专属撤销栈,确保不留任何指向即将释放对象的注册。
+  private func teardown() {
+    textUndoManager.removeAllActions()
     removeFromSuperview()
   }
 
@@ -98,6 +107,11 @@ final class AnnotationTextEditor: NSView, NSTextViewDelegate {
   }
 
   // MARK: - NSTextViewDelegate
+
+  /// 把字内撤销引到专属管理器,而非窗口的共享 NSUndoManager。
+  func undoManager(for view: NSTextView) -> UndoManager? {
+    textUndoManager
+  }
 
   func textView(_ textView: NSTextView, doCommandBy selector: Selector) -> Bool {
     switch selector {

@@ -16,6 +16,8 @@ final class ScreenshotOverlayView: NSView {
   var globalFrame: CGRect = .zero
   /// 快照像素相对点的缩放(backingScaleFactor)。
   var scale: CGFloat = 2.0
+  /// 触发截图时的前台 app PID:窗口自动识别只认它的窗口,忽略后台窗口(0=未知,退化为光标下窗口)。
+  var activeAppPID: pid_t = 0
 
   /// 选区确认后传给 delegate 的全局 rect(AppKit 左下原点),供 Task 8 的 ScreenshotCapturer.crop 使用。
   var currentSelectionGlobal: CGRect? {
@@ -159,6 +161,8 @@ final class ScreenshotOverlayView: NSView {
     if case .dragging = mode, let s = selection, s.width < 3, s.height < 3, let w = hoverWindowRectLocal {
       selection = ScreenshotGeometry.clamp(w, to: bounds)
       hoverWindowRectLocal = nil
+      ScreenshotDebugLog.log("window-snap adopted localRect="
+        + "\(Int(w.minX)),\(Int(w.minY)) \(Int(w.width))x\(Int(w.height))")
     }
     mode = .idle
     needsDisplay = true
@@ -184,9 +188,20 @@ final class ScreenshotOverlayView: NSView {
     if now - lastHoverQueryTime >= 0.05 {
       lastHoverQueryTime = now
       let topLeft = appKitGlobalToTopLeft(localToAppKitGlobal(local))
+      // 仅排除本截图覆盖层窗口,保留对 Velto 其它普通窗口(如设置窗)的识别能力。
+      let excluded = Set([window?.windowNumber].compactMap { $0 })
+      if ScreenshotDebugLog.isEnabled {
+        let primaryHeight = NSScreen.screens.first?.frame.height ?? bounds.height
+        ScreenshotDebugLog.log(
+          "[hover] local=\(Int(local.x)),\(Int(local.y)) globalFrame=\(Int(globalFrame.minX)),\(Int(globalFrame.minY)) "
+          + "primaryH=\(Int(primaryHeight)) excluded=\(excluded.sorted()) topLeft=\(Int(topLeft.x)),\(Int(topLeft.y))\n"
+          + WindowFrameDetector.diagnostics(
+            atGlobalPoint: topLeft, excludingWindowNumbers: excluded, activeAppPID: activeAppPID))
+      }
       if let g = WindowFrameDetector.windowFrame(
         atGlobalPoint: topLeft,
-        excludingPID: ProcessInfo.processInfo.processIdentifier
+        excludingWindowNumbers: excluded,
+        activeAppPID: activeAppPID
       ) {
         hoverWindowRectLocal = appKitGlobalRectToLocal(topLeftRectToAppKitGlobal(g))
       } else {

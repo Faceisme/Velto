@@ -22,11 +22,12 @@ protocol ScreenshotOverlayDelegate: AnyObject {
 final class ScreenshotOverlayWindow: NSWindow {
   private let overlayView: ScreenshotOverlayView
 
-  init(screenSnapshot snap: DisplaySnapshot, delegate: ScreenshotOverlayDelegate) {
+  init(screenSnapshot snap: DisplaySnapshot, delegate: ScreenshotOverlayDelegate, activeAppPID: pid_t) {
     overlayView = ScreenshotOverlayView(frame: CGRect(origin: .zero, size: snap.frame.size))
     overlayView.snapshotImage = snap.image
     overlayView.globalFrame = snap.frame   // 本窗口在全局点坐标(左下原点)中的 frame,用于点↔全局换算
     overlayView.scale = snap.scale
+    overlayView.activeAppPID = activeAppPID
     overlayView.delegate = delegate
     super.init(contentRect: snap.frame, styleMask: [.borderless], backing: .buffered, defer: false)
     isOpaque = false
@@ -55,11 +56,14 @@ final class ScreenshotOverlayWindow: NSWindow {
   /// 为每块屏建一个覆盖窗口并显示;第一个设为 key 以接键盘。
   static func present(
     for snapshots: [DisplaySnapshot],
-    delegate: ScreenshotOverlayDelegate
+    delegate: ScreenshotOverlayDelegate,
+    activeAppPID: pid_t
   ) -> [ScreenshotOverlayWindow] {
     // 菜单栏 agent 应用默认非前台;先激活,覆盖层才能立即接收键盘与“首次”鼠标拖拽。
     NSApp.activate()
-    let windows = snapshots.map { ScreenshotOverlayWindow(screenSnapshot: $0, delegate: delegate) }
+    let windows = snapshots.map {
+      ScreenshotOverlayWindow(screenSnapshot: $0, delegate: delegate, activeAppPID: activeAppPID)
+    }
     for w in windows { w.orderFrontRegardless() }
     windows.first?.makeKey()
     return windows

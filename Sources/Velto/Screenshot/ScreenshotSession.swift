@@ -23,8 +23,13 @@ final class ScreenshotSession: ScreenshotOverlayDelegate {
   func start() {
     // present 内部 NSApp.activate() 会抢前台,先记下原前台 app 以便结束时还原。
     previousApp = NSWorkspace.shared.frontmostApplication
+    // 触发瞬间的前台 app = 用户眼中的"活动窗口"所属 app;窗口自动识别据此只认它的窗口。
+    let activeAppPID = previousApp?.processIdentifier ?? 0
     ScreenshotHotCornerGuard.shared.activate(displayIDs: snapshots.map(\.displayID))
-    windows = ScreenshotOverlayWindow.present(for: snapshots, delegate: self)
+    windows = ScreenshotOverlayWindow.present(for: snapshots, delegate: self, activeAppPID: activeAppPID)
+    ScreenshotDebugLog.log("session start: presented \(windows.count) overlay window(s), "
+      + "previousApp=\(previousApp?.bundleIdentifier ?? "nil") activeAppPID=\(activeAppPID) "
+      + "overlayWindowNumbers=\(windows.map { $0.windowNumber })")
   }
 
   /// 外部(如热键)取消会话:dismiss 所有覆盖窗口并回收。
@@ -35,6 +40,8 @@ final class ScreenshotSession: ScreenshotOverlayDelegate {
   /// 锁定唯一活动 overlay:只有它能继续编辑,其余屏禁用框选。
   func overlayDidActivateSelection(_ overlay: ScreenshotOverlayView) {
     activeOverlay = overlay
+    ScreenshotDebugLog.log("selection activated on overlay globalFrame="
+      + "\(Int(overlay.globalFrame.minX)),\(Int(overlay.globalFrame.minY))")
     for window in windows {
       window.setSelectionEnabled(window.screenshotOverlayView === overlay)
     }
@@ -45,6 +52,9 @@ final class ScreenshotSession: ScreenshotOverlayDelegate {
     globalRect: CGRect,
     document: AnnotationDocument?
   ) {
+    ScreenshotDebugLog.log("request action=\(action) globalRect="
+      + "\(Int(globalRect.minX)),\(Int(globalRect.minY)) \(Int(globalRect.width))x\(Int(globalRect.height)) "
+      + "annotations=\(document?.elements.count ?? 0)")
     switch action {
     case .scroll:
       // Phase 3 占位:本期不实现滚动拼接,轻提示后留在会话。
@@ -86,6 +96,7 @@ final class ScreenshotSession: ScreenshotOverlayDelegate {
       }
       switch outcome {
       case .success:
+        ScreenshotDebugLog.log("action=\(action) success")
         teardown()
       case .failure(let error):
         presentOutputFailure(describe(error), screenFrame: snap.frame, near: globalRect)

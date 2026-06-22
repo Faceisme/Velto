@@ -99,24 +99,35 @@ public struct AnnotationEditor: Sendable {
 
     switch document.activeTool {
     case .rectangle:
+      if grabExistingObject(at: point) { return }
       beginBox(.rectangle, at: point)
     case .ellipse:
+      if grabExistingObject(at: point) { return }
       beginBox(.ellipse, at: point)
     case .line:
+      if grabExistingObject(at: point) { return }
       beginSegment(.line, at: point)
     case .arrow:
+      if grabExistingObject(at: point) { return }
       beginSegment(.arrow, at: point)
     case .pen:
+      if grabExistingObject(at: point) { return }
       beginPath(.freehand, at: point)
     case .highlight:
+      if grabExistingObject(at: point) { return }
       beginPath(.highlight, at: point)
     case .mosaic:
+      if grabExistingObject(at: point) { return }
       beginMosaic(at: point)
     case .sequence:
+      if grabExistingObject(at: point) { return }
       beginSequence(at: point)
     case .crop:
       gesture = .crop
     case .text:
+      // 文字工具下也先尝试抓取已有对象(文字框或任意图形)用于挪动/缩放;抓不到再保持
+      // 无手势,交由画布在空白处开新文字会话。这样文字框画完即可挪动。
+      if grabExistingObject(at: point) { return }
       gesture = .none
     case nil:
       beginSelectionOrMove(at: point)
@@ -420,27 +431,35 @@ public struct AnnotationEditor: Sendable {
 
   // MARK: - Selection / move / resize
 
-  private mutating func beginSelectionOrMove(at point: CGPoint) {
+  /// 抓取已有对象作为移动/缩放手势:命中已选中对象的控制点→缩放;落在已选中对象框内
+  /// (即便只有描边也能从内部拖)→移动;否则命中最上层对象→选中并移动。绘制工具激活时先
+  /// 调它,这样刚画完的框/圈无需切到选择模式即可挪动;按在空白处返回 false,交回工具创建。
+  private mutating func grabExistingObject(at point: CGPoint) -> Bool {
     if let selected = document.selectedElementID,
        let element = document.elements.first(where: { $0.id == selected }) {
       if let handle = handle(at: point, for: element) {
         gesture = .resize(id: selected, handle: handle)
-        return
+        return true
       }
       // An already-selected object can be dragged from anywhere inside its frame,
       // even when it is only outlined.
       if selectionGrabContains(point, element) {
         gesture = .move(id: selected, lastPoint: point)
-        return
+        return true
       }
     }
     guard let hitID = AnnotationGeometry.hitTest(point, elements: document.elements) else {
-      document.selectedElementID = nil
-      gesture = .none
-      return
+      return false
     }
     document.selectedElementID = hitID
     gesture = .move(id: hitID, lastPoint: point)
+    return true
+  }
+
+  private mutating func beginSelectionOrMove(at point: CGPoint) {
+    if grabExistingObject(at: point) { return }
+    document.selectedElementID = nil
+    gesture = .none
   }
 
   private func selectionGrabContains(_ point: CGPoint, _ element: AnnotationElement) -> Bool {
@@ -507,6 +526,10 @@ public struct AnnotationEditor: Sendable {
     if case .none = gesture { return false }
     return true
   }
+
+  /// 当前是否有进行中的手势(创建/移动/缩放/裁剪)。画布据此判定文字工具单击是抓取了已有
+  /// 对象(挪动),还是落在空白处需要新建文字框。
+  public var hasActiveGesture: Bool { isGestureActive }
 
   private mutating func finalizeCreation(id: UUID, discardWhen shouldDiscard: Bool) {
     if shouldDiscard {

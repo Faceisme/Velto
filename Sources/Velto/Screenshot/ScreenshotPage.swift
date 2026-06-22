@@ -30,6 +30,7 @@ struct ScreenshotPage: View {
         saveSection
         annotationSection
         magnifierSection
+        debugSection
       }
       .padding(.horizontal, 32)
       .padding(.top, 28)
@@ -420,6 +421,59 @@ struct ScreenshotPage: View {
           )
         }
       }
+    }
+  }
+
+  // MARK: - 调试
+
+  private var debugSection: some View {
+    GroupCard(radius: MGRadius.cardLg) {
+      VStack(spacing: 0) {
+        row(
+          icon: "ladybug",
+          title: "调试日志",
+          desc: "把截图会话、窗口识别等细节写入日志文件,排查问题时开启;反馈问题时附上日志更精准。",
+          showDivider: false
+        ) {
+          AnyView(
+            Toggle("", isOn: Binding(
+              get: { prefs.debugLoggingEnabled },
+              set: { v in
+                updatePrefs { $0.screenshot.debugLoggingEnabled = v }
+                ScreenshotDebugLog.setEnabled(v)
+              }
+            ))
+            .labelsHidden()
+            .toggleStyle(.switch)
+            .controlSize(.small)
+            .tint(.mgAccent)
+          )
+        }
+
+        row(
+          icon: "doc.text.magnifyingglass",
+          title: "日志文件",
+          desc: "~/Library/Logs/Velto/screenshot-debug.log",
+          showDivider: true
+        ) {
+          AnyView(
+            Button("在访达中显示") { revealDebugLog() }
+              .buttonStyle(MGSecondaryButtonStyle(foreground: .mgAccent))
+          )
+        }
+      }
+    }
+  }
+
+  /// 在访达中定位日志文件;文件还没生成时打开其所在目录。
+  private func revealDebugLog() {
+    guard let url = ScreenshotDebugLog.logFileURL else { return }
+    if FileManager.default.fileExists(atPath: url.path) {
+      NSWorkspace.shared.activateFileViewerSelecting([url])
+    } else {
+      let dir = url.deletingLastPathComponent()
+      try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+      NSWorkspace.shared.open(dir)
     }
   }
 

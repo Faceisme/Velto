@@ -27,6 +27,9 @@ struct ScreenshotPreferences: Codable, Equatable {
   var imageFormat: ScreenshotImageFormat
   /// 取色放大镜,默认开
   var showMagnifier: Bool
+  /// 调试日志:开启后把截图会话、窗口识别等细节写入 `~/Library/Logs/Velto/screenshot-debug.log`,
+  /// 供排查问题用,默认关。
+  var debugLoggingEnabled: Bool
 
   // MARK: - 标注默认样式(新建画布与重置工具时的初值)
 
@@ -75,6 +78,7 @@ struct ScreenshotPreferences: Codable, Equatable {
     saveAlsoCopiesToClipboard: false,
     imageFormat: .png,
     showMagnifier: true,
+    debugLoggingEnabled: false,
     annotationColor: .systemRed,
     annotationLineWidth: 3,
     annotationFontSize: 18,
@@ -87,6 +91,7 @@ struct ScreenshotPreferences: Codable, Equatable {
     enabled: Bool, triggerShortcut: Shortcut?, copyKeyCode: UInt16, saveShortcut: Shortcut,
     cancelKeyCode: UInt16, scrollKeyCode: UInt16, saveDirectoryPath: String,
     saveAlsoCopiesToClipboard: Bool, imageFormat: ScreenshotImageFormat, showMagnifier: Bool,
+    debugLoggingEnabled: Bool,
     annotationColor: AnnotationColor, annotationLineWidth: CGFloat, annotationFontSize: CGFloat,
     annotationHighlightOpacity: CGFloat, annotationMosaicBlockSize: Int, annotationFillOpacity: CGFloat
   ) {
@@ -100,6 +105,7 @@ struct ScreenshotPreferences: Codable, Equatable {
     self.saveAlsoCopiesToClipboard = saveAlsoCopiesToClipboard
     self.imageFormat = imageFormat
     self.showMagnifier = showMagnifier
+    self.debugLoggingEnabled = debugLoggingEnabled
     self.annotationColor = annotationColor
     self.annotationLineWidth = annotationLineWidth
     self.annotationFontSize = annotationFontSize
@@ -121,6 +127,7 @@ struct ScreenshotPreferences: Codable, Equatable {
     saveAlsoCopiesToClipboard = try c.decodeIfPresent(Bool.self, forKey: .saveAlsoCopiesToClipboard) ?? d.saveAlsoCopiesToClipboard
     imageFormat = try c.decodeIfPresent(ScreenshotImageFormat.self, forKey: .imageFormat) ?? d.imageFormat
     showMagnifier = try c.decodeIfPresent(Bool.self, forKey: .showMagnifier) ?? d.showMagnifier
+    debugLoggingEnabled = try c.decodeIfPresent(Bool.self, forKey: .debugLoggingEnabled) ?? d.debugLoggingEnabled
     annotationColor = try c.decodeIfPresent(AnnotationColor.self, forKey: .annotationColor) ?? d.annotationColor
     annotationLineWidth = try c.decodeIfPresent(CGFloat.self, forKey: .annotationLineWidth) ?? d.annotationLineWidth
     annotationFontSize = try c.decodeIfPresent(CGFloat.self, forKey: .annotationFontSize) ?? d.annotationFontSize

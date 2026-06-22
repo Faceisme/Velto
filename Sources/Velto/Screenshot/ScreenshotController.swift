@@ -16,10 +16,19 @@ final class ScreenshotController {
       return
     }
     let prefs = GestureStore.shared.preferences.screenshot
+    // 按偏好开关调试日志(环境变量 VELTO_SCREENSHOT_DEBUG=1 仍可强制开)。
+    ScreenshotDebugLog.setEnabled(prefs.debugLoggingEnabled)
+    ScreenshotDebugLog.log("=== beginSession === trigger=\(prefs.triggerShortcut?.displayName ?? "nil")")
     isStarting = true
     Task { @MainActor in
       defer { isStarting = false }
-      guard let snaps = try? await ScreenshotCapturer.captureAllDisplays(), !snaps.isEmpty else { return }
+      guard let snaps = try? await ScreenshotCapturer.captureAllDisplays(), !snaps.isEmpty else {
+        ScreenshotDebugLog.log("capture failed or no displays")
+        return
+      }
+      ScreenshotDebugLog.log("captured \(snaps.count) display(s): "
+        + snaps.map { "id=\($0.displayID) frame=\(Int($0.frame.minX)),\(Int($0.frame.minY)) "
+          + "\(Int($0.frame.width))x\(Int($0.frame.height)) scale=\($0.scale)" }.joined(separator: " | "))
       let s = ScreenshotSession(snapshots: snaps, preferences: prefs) { [weak self] in self?.session = nil }
       self.session = s
       s.start()
