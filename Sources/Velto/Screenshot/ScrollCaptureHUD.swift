@@ -10,7 +10,9 @@ final class ScrollCaptureHUD: NSWindow {
 
   private let imageView = NSImageView()
   private let hintLabel = NSTextField(labelWithString: "")
-  private static let defaultHint = "向下滚动目标窗口(滚慢一点)\nEnter/空格 完成 · ⌘S 保存 · Esc 取消"
+  private var copyKeyCode = ScreenshotPreferences.defaults.copyKeyCode
+  private var cancelKeyCode = ScreenshotPreferences.defaults.cancelKeyCode
+  private var saveShortcut = ScreenshotPreferences.defaults.saveShortcut
 
   init(onScreen screenFrame: CGRect) {
     let size = NSSize(width: 240, height: 340)
@@ -29,8 +31,10 @@ final class ScrollCaptureHUD: NSWindow {
     level = .screenSaver
     hasShadow = true
     animationBehavior = .none
+    ignoresMouseEvents = true
     collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]
     setupContent(size: size)
+    configureShortcuts(using: GestureStore.shared.preferences.screenshot)
   }
 
   override var canBecomeKey: Bool { true }
@@ -58,28 +62,58 @@ final class ScrollCaptureHUD: NSWindow {
     hintLabel.alignment = .center
     hintLabel.maximumNumberOfLines = 3
     hintLabel.lineBreakMode = .byWordWrapping
-    hintLabel.stringValue = Self.defaultHint
+    hintLabel.stringValue = configuredHint
     container.addSubview(hintLabel)
     contentView = container
+  }
+
+  /// 复用本次截图会话的快捷键配置,并同步更新浮窗提示。
+  func configureShortcuts(using preferences: ScreenshotPreferences) {
+    copyKeyCode = preferences.copyKeyCode
+    cancelKeyCode = preferences.cancelKeyCode
+    saveShortcut = preferences.saveShortcut
+    hintLabel.stringValue = configuredHint
   }
 
   func update(thumbnail: CGImage?, heightPx: Int, hint: String?) {
     if let thumbnail {
       imageView.image = NSImage(cgImage: thumbnail, size: .zero)
     }
-    hintLabel.stringValue = hint ?? Self.defaultHint
+    hintLabel.stringValue = hint ?? configuredHint
   }
 
   override func keyDown(with event: NSEvent) {
-    switch event.keyCode {
-    case 36, 49:
-      onCopy?()
-    case 1 where event.modifierFlags.contains(.command):
+    let normalizedModifiers = ModifierFormatter.normalizedRawValue(from: event.modifierFlags)
+    if event.keyCode == saveShortcut.keyCode,
+       normalizedModifiers == saveShortcut.modifierFlags {
       onSave?()
-    case 53:
+    } else if normalizedModifiers == 0, event.keyCode == copyKeyCode {
+      onCopy?()
+    } else if normalizedModifiers == 0, event.keyCode == cancelKeyCode {
       onCancel?()
-    default:
+    } else if normalizedModifiers == 0, event.keyCode == 36 {
+      onCopy?()
+    } else {
       super.keyDown(with: event)
+    }
+  }
+
+  private var configuredHint: String {
+    let copyName = Self.keyName(for: copyKeyCode)
+    let finishKeys = copyKeyCode == 36 ? "Enter" : "Enter/\(copyName)"
+    return "向下滚动目标窗口(滚慢一点)\n"
+      + "\(finishKeys) 完成 · \(saveShortcut.displayName) 保存 · "
+      + "\(Self.keyName(for: cancelKeyCode)) 取消"
+  }
+
+  private static func keyName(for keyCode: UInt16) -> String {
+    switch keyCode {
+    case 36: return "Enter"
+    case 48: return "Tab"
+    case 49: return "空格"
+    case 51: return "删除"
+    case 53: return "Esc"
+    default: return "keyCode \(keyCode)"
     }
   }
 }
