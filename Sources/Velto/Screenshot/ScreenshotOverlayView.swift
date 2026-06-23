@@ -19,6 +19,14 @@ final class ScreenshotOverlayView: NSView {
   /// 触发截图时的前台 app PID:窗口自动识别只认它的窗口,忽略后台窗口(0=未知,退化为光标下窗口)。
   var activeAppPID: pid_t = 0
 
+  /// 会话内按键(由偏好注入,替代写死的 keyCode);与滚动阶段的 keytap/HUD 用同一份配置,
+  /// 保证用户自定义的保存快捷键在框选/标注阶段同样生效。saveModifierFlags 已是归一化值。
+  var copyKeyCode: UInt16 = ScreenshotPreferences.defaults.copyKeyCode
+  var cancelKeyCode: UInt16 = ScreenshotPreferences.defaults.cancelKeyCode
+  var scrollKeyCode: UInt16 = ScreenshotPreferences.defaults.scrollKeyCode
+  var saveKeyCode: UInt16 = ScreenshotPreferences.defaults.saveShortcut.keyCode
+  var saveModifierFlags: UInt64 = ScreenshotPreferences.defaults.saveShortcut.modifierFlags
+
   /// 选区确认后传给 delegate 的全局 rect(AppKit 左下原点),供 ScreenshotCapturer.crop 使用。
   var currentSelectionGlobal: CGRect? {
     guard let s = selection else { return nil }
@@ -294,18 +302,20 @@ final class ScreenshotOverlayView: NSView {
   // MARK: - 键盘
 
   override func keyDown(with event: NSEvent) {
-    switch event.keyCode {
-    case 53:                                                   // Esc
-      delegate?.overlayDidCancel()
-    case 49:                                                   // 空格 = 复制
-      confirm(.copy)
-    case 36:                                                   // Enter = 默认动作(复制)
-      confirm(.copy)
-    case 1 where event.modifierFlags.contains(.command):       // ⌘S = 保存
-      confirm(.save)
-    case 1:                                                     // S = 滚动长截图
-      confirm(.scroll)
-    default:
+    let keyCode = event.keyCode
+    let modifiers = ModifierFormatter.normalizedRawValue(from: event.modifierFlags)
+    // 保存键带修饰,先于无修饰的复制/滚动判断,避免 ⌘S 被当成 S(滚动)。
+    if keyCode == saveKeyCode, modifiers == saveModifierFlags {
+      confirm(.save)                                  // 保存(默认 ⌘S)
+    } else if modifiers == 0, keyCode == cancelKeyCode {
+      delegate?.overlayDidCancel()                    // 取消(默认 Esc)
+    } else if modifiers == 0, keyCode == copyKeyCode {
+      confirm(.copy)                                  // 复制(默认 空格)
+    } else if modifiers == 0, keyCode == 36 {
+      confirm(.copy)                                  // Enter 始终 = 默认动作(复制)
+    } else if modifiers == 0, keyCode == scrollKeyCode {
+      confirm(.scroll)                                // 滚动长截图(默认 S)
+    } else {
       super.keyDown(with: event)
     }
   }

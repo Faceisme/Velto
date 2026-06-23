@@ -20,8 +20,9 @@ final class ScreenshotController {
     ScreenshotDebugLog.setEnabled(prefs.debugLoggingEnabled)
     ScreenshotDebugLog.log("=== beginSession === trigger=\(prefs.triggerShortcut?.displayName ?? "nil")")
     isStarting = true
-    Task { @MainActor in
-      defer { isStarting = false }
+    Task { @MainActor [weak self] in
+      guard let self else { return }
+      defer { self.isStarting = false }
       guard let snaps = try? await ScreenshotCapturer.captureAllDisplays(), !snaps.isEmpty else {
         ScreenshotDebugLog.log("capture failed or no displays")
         return

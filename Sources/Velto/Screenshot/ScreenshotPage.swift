@@ -382,7 +382,7 @@ struct ScreenshotPage: View {
   private func opacitySlider(
     value: CGFloat,
     range: ClosedRange<CGFloat>,
-    onChange: @escaping (CGFloat) -> Void
+    onChange: @escaping @MainActor (CGFloat) -> Void
   ) -> some View {
     HStack(spacing: 10) {
       Slider(value: Binding(get: { value }, set: onChange), in: range)

@@ -95,6 +95,31 @@ sign_with_cert() {
     fi
 }
 
+# ============ 0. 工具链护栏 ============
+# macOS 26+ SDK 把 SwiftUI 的 @State/@Binding 变成宏(SwiftUIMacros 插件)。裸 Command Line
+# Tools 不带这个插件,会在第一个 @State 上直接编译失败、根本走不到业务代码。这里确保生效的
+# 工具链是一个完整 Xcode;若不是,就自动探测 /Applications 下的 Xcode(-beta) 临时顶上,
+# 都没有再给出明确指引后中止 —— 免得又对着 "SwiftUIMacros not found" 的报错排查半天。
+ensure_full_xcode_toolchain() {
+    local plugin_rel="Platforms/MacOSX.platform/Developer/usr/lib/swift/host/plugins/libSwiftUIMacros.dylib"
+    if [ -f "$(xcode-select -p 2>/dev/null)/$plugin_rel" ]; then
+        return 0
+    fi
+    local candidate
+    for candidate in /Applications/Xcode.app /Applications/Xcode-beta.app; do
+        if [ -f "$candidate/Contents/Developer/$plugin_rel" ]; then
+            export DEVELOPER_DIR="$candidate/Contents/Developer"
+            echo "提示:当前 xcode-select 工具链缺少 SwiftUIMacros 插件,已临时改用 $candidate 编译(仅本次)。" >&2
+            echo "      永久修复:sudo xcode-select -s \"$candidate/Contents/Developer\"" >&2
+            return 0
+        fi
+    done
+    echo "错误:找不到完整的 Xcode 工具链。裸 Command Line Tools 缺少 SwiftUIMacros 宏插件,无法编译 SwiftUI 的 @State。" >&2
+    echo "      请安装 Xcode 后执行:sudo xcode-select -s /Applications/Xcode.app/Contents/Developer" >&2
+    exit 1
+}
+ensure_full_xcode_toolchain
+
 # ============ 1. 编译 ============
 swift build -c "$CONFIGURATION" --arch arm64 --scratch-path "$ROOT_DIR/.build" --product Velto
 swift build -c "$CONFIGURATION" --arch arm64 --scratch-path "$ROOT_DIR/.build" --product BetterFinderExtension

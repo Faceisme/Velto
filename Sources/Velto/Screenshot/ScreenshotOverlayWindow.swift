@@ -22,13 +22,25 @@ protocol ScreenshotOverlayDelegate: AnyObject {
 final class ScreenshotOverlayWindow: NSWindow {
   private let overlayView: ScreenshotOverlayView
 
-  init(screenSnapshot snap: DisplaySnapshot, delegate: ScreenshotOverlayDelegate, activeAppPID: pid_t) {
+  init(
+    screenSnapshot snap: DisplaySnapshot,
+    delegate: ScreenshotOverlayDelegate,
+    activeAppPID: pid_t,
+    preferences: ScreenshotPreferences
+  ) {
     overlayView = ScreenshotOverlayView(frame: CGRect(origin: .zero, size: snap.frame.size))
     overlayView.snapshotImage = snap.image
     overlayView.globalFrame = snap.frame   // 本窗口在全局点坐标(左下原点)中的 frame,用于点↔全局换算
     overlayView.scale = snap.scale
     overlayView.activeAppPID = activeAppPID
     overlayView.delegate = delegate
+    // 会话内按键 + 放大镜开关从偏好注入,保证框选/标注阶段与设置页一致。
+    overlayView.showMagnifier = preferences.showMagnifier
+    overlayView.copyKeyCode = preferences.copyKeyCode
+    overlayView.cancelKeyCode = preferences.cancelKeyCode
+    overlayView.scrollKeyCode = preferences.scrollKeyCode
+    overlayView.saveKeyCode = preferences.saveShortcut.keyCode
+    overlayView.saveModifierFlags = preferences.saveShortcut.modifierFlags
     super.init(contentRect: snap.frame, styleMask: [.borderless], backing: .buffered, defer: false)
     isOpaque = false
     backgroundColor = .clear
@@ -57,12 +69,14 @@ final class ScreenshotOverlayWindow: NSWindow {
   static func present(
     for snapshots: [DisplaySnapshot],
     delegate: ScreenshotOverlayDelegate,
-    activeAppPID: pid_t
+    activeAppPID: pid_t,
+    preferences: ScreenshotPreferences
   ) -> [ScreenshotOverlayWindow] {
     // 菜单栏 agent 应用默认非前台;先激活,覆盖层才能立即接收键盘与“首次”鼠标拖拽。
     NSApp.activate()
     let windows = snapshots.map {
-      ScreenshotOverlayWindow(screenSnapshot: $0, delegate: delegate, activeAppPID: activeAppPID)
+      ScreenshotOverlayWindow(
+        screenSnapshot: $0, delegate: delegate, activeAppPID: activeAppPID, preferences: preferences)
     }
     for w in windows { w.orderFrontRegardless() }
     windows.first?.makeKey()

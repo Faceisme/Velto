@@ -318,9 +318,10 @@ final class ScrollCaptureController {
     return observation.alignmentTransform.ty
   }
 
-  private func pixelData(for image: CGImage) -> UnsafePointer<UInt8>? {
-    guard let data = image.dataProvider?.data else { return nil }
-    return CFDataGetBytePtr(data)
+  /// 返回 CGImage 底层像素 buffer 的 CFData。**必须由调用方持有返回值至指针用完**——
+  /// 直接在这里 `CFDataGetBytePtr` 再返回裸指针会在 CFData 释放后悬垂。
+  private func pixelData(for image: CGImage) -> CFData? {
+    image.dataProvider?.data
   }
 
   // MARK: - Scrollbar and frozen header
@@ -328,8 +329,10 @@ final class ScrollCaptureController {
   private func detectRightMargin(current: CGImage, previous: CGImage) {
     rightMarginDetected = true
     guard current.width == previous.width, current.height == previous.height,
-          let currentData = pixelData(for: current),
-          let previousData = pixelData(for: previous) else { return }
+          let currentCFData = pixelData(for: current),
+          let previousCFData = pixelData(for: previous),
+          let currentData = CFDataGetBytePtr(currentCFData),
+          let previousData = CFDataGetBytePtr(previousCFData) else { return }
 
     let width = current.width
     let height = current.height
@@ -365,8 +368,10 @@ final class ScrollCaptureController {
 
   private func detectHeader(current: CGImage, previous: CGImage, shiftPx: Int) {
     guard current.width == previous.width, current.height == previous.height, shiftPx > 5,
-          let currentData = pixelData(for: current),
-          let previousData = pixelData(for: previous) else { return }
+          let currentCFData = pixelData(for: current),
+          let previousCFData = pixelData(for: previous),
+          let currentData = CFDataGetBytePtr(currentCFData),
+          let previousData = CFDataGetBytePtr(previousCFData) else { return }
 
     let width = current.width
     let height = current.height

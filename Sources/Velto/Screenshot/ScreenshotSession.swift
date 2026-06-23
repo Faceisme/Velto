@@ -36,7 +36,8 @@ final class ScreenshotSession: ScreenshotOverlayDelegate {
     // 触发瞬间的前台 app = 用户眼中的"活动窗口"所属 app;窗口自动识别据此只认它的窗口。
     let activeAppPID = previousApp?.processIdentifier ?? 0
     ScreenshotHotCornerGuard.shared.activate(displayIDs: snapshots.map(\.displayID))
-    windows = ScreenshotOverlayWindow.present(for: snapshots, delegate: self, activeAppPID: activeAppPID)
+    windows = ScreenshotOverlayWindow.present(
+      for: snapshots, delegate: self, activeAppPID: activeAppPID, preferences: preferences)
     ScreenshotDebugLog.log("session start: presented \(windows.count) overlay window(s), "
       + "previousApp=\(previousApp?.bundleIdentifier ?? "nil") activeAppPID=\(activeAppPID) "
       + "overlayWindowNumbers=\(windows.map { $0.windowNumber })")
