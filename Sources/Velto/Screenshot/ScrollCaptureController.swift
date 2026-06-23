@@ -145,7 +145,6 @@ final class ScrollCaptureController {
   }
 
   private func captureSettledFrame() async -> CGImage? {
-    var previousTIFF: Data?
     var previousCG: CGImage?
     var wait = Duration.milliseconds(10)
 
@@ -154,16 +153,28 @@ final class ScrollCaptureController {
         try? await Task.sleep(for: .milliseconds(30))
         continue
       }
-      let currentTIFF = NSBitmapImageRep(cgImage: cg).tiffRepresentation
-      if let previousTIFF, currentTIFF == previousTIFF {
+      // 连续两帧逐像素相同即认定画面已静止。等价于此前的 TIFF 全等比较,但省掉把整幅
+      // retina 图编码成 TIFF 的开销:两帧均为 normalizeFrame 输出的紧凑 BGRA,尺寸一致
+      // 时可直接比较底层字节。
+      if let previousCG, framesPixelEqual(previousCG, cg) {
         return cg
       }
-      previousTIFF = currentTIFF
       previousCG = cg
       try? await Task.sleep(for: wait)
       wait = min(wait * 3 / 2, .milliseconds(80))
     }
     return previousCG
+  }
+
+  /// 两帧逐像素全等判定。两帧都经 normalizeFrame 输出紧凑 BGRA(bytesPerRow == width*4),
+  /// 尺寸/行距一致时直接 memcmp 底层字节,与旧的 TIFF 全等比较结果逐位一致。
+  private func framesPixelEqual(_ a: CGImage, _ b: CGImage) -> Bool {
+    guard a.width == b.width, a.height == b.height, a.bytesPerRow == b.bytesPerRow,
+          let aData = pixelData(for: a), let bData = pixelData(for: b) else { return false }
+    let length = CFDataGetLength(aData)
+    guard length == CFDataGetLength(bData),
+          let aPtr = CFDataGetBytePtr(aData), let bPtr = CFDataGetBytePtr(bData) else { return false }
+    return memcmp(aPtr, bPtr, length) == 0
   }
 
   private func captureAndCompare() async -> Bool {
