@@ -57,6 +57,9 @@ final class AnnotationToolbarView: NSGlassEffectView {
     addCursorRect(bounds, cursor: .arrow)
   }
 
+  /// 玻璃面板可能把 hitTest 命中返回到容器自身;同样接受首次点击,避免取消滚动后点两次。
+  override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
   /// 自然尺寸:外层布局据此放置玻璃面板,内容随玻璃 bounds 自动铺满。
   var barSize: NSSize {
     NSSize(width: contentStack.fittingSize.width, height: Self.barHeight)
@@ -181,6 +184,10 @@ final class AnnotationToolbarButton: NSView {
   override var intrinsicContentSize: NSSize {
     NSSize(width: AnnotationToolbarView.buttonSize, height: AnnotationToolbarView.buttonSize)
   }
+
+  /// 滚动截图取消后 app 刚夺回前台、窗口尚未 active 时,第一次点击默认会被系统吞去
+  /// "激活窗口"——这就是"标注栏要点两次才生效"的根因。返回 true 让首次点击直接触发按钮。
+  override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
   override func draw(_ dirtyRect: NSRect) {
     let inset = bounds.insetBy(dx: 2, dy: 2)
