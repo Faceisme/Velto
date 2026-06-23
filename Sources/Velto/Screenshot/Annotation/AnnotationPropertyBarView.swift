@@ -56,9 +56,6 @@ final class AnnotationPropertyBarView: NSGlassEffectView {
     addCursorRect(bounds, cursor: .arrow)
   }
 
-  /// 与主工具栏一致:接受首次点击,避免取消滚动后属性条要点两次。
-  override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-
   var barSize: NSSize {
     NSSize(width: max(120, contentStack.fittingSize.width), height: Self.barHeight)
   }

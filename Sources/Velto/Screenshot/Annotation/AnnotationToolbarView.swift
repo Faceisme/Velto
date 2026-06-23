@@ -57,9 +57,6 @@ final class AnnotationToolbarView: NSGlassEffectView {
     addCursorRect(bounds, cursor: .arrow)
   }
 
-  /// 玻璃面板可能把 hitTest 命中返回到容器自身;同样接受首次点击,避免取消滚动后点两次。
-  override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-
   /// 自然尺寸:外层布局据此放置玻璃面板,内容随玻璃 bounds 自动铺满。
   var barSize: NSSize {
     NSSize(width: contentStack.fittingSize.width, height: Self.barHeight)
@@ -185,8 +182,8 @@ final class AnnotationToolbarButton: NSView {
     NSSize(width: AnnotationToolbarView.buttonSize, height: AnnotationToolbarView.buttonSize)
   }
 
-  /// 滚动截图取消后 app 刚夺回前台、窗口尚未 active 时,第一次点击默认会被系统吞去
-  /// "激活窗口"——这就是"标注栏要点两次才生效"的根因。返回 true 让首次点击直接触发按钮。
+  /// 与 iconView 同理:点到图标外的按钮边缘区会命中按钮自身,失活后(滚动截图取消回到
+  /// 框选)同样要放行首次点击,否则被系统吞去激活、要点两次。主因见 AnnotationIconView。
   override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
   override func draw(_ dirtyRect: NSRect) {
@@ -275,6 +272,11 @@ final class AnnotationIconView: NSView {
   }
 
   override var isFlipped: Bool { true }
+
+  /// 图标视图是按钮里最深的子视图,hitTest 命中的是它(不是按钮、也不是玻璃容器),AppKit 的
+  /// first-mouse 只问命中视图——它默认拒绝就会让"失活后首次点击"被系统吞去激活、不派发到按钮。
+  /// 这正是滚动截图取消回到框选后"标注栏要点两次"的根因。放行后 mouseDown 经响应链上传到按钮。
+  override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
   override var intrinsicContentSize: NSSize {
     NSSize(width: 24, height: 24)
