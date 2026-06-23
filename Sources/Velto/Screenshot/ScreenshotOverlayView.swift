@@ -47,6 +47,11 @@ final class ScreenshotOverlayView: NSView {
     !hasActivated || (canvasView?.editor.document.elements.isEmpty ?? true)
   }
 
+  /// 缩放/平移选区是否可用:还没画标注、且当前没有激活的标注工具(处于选择/移动模式)。
+  private var canAdjustSelectionGeometry: Bool {
+    canEditSelectionGeometry && (canvasView?.editor.document.activeTool == nil)
+  }
+
   // MARK: - 交互状态
 
   private enum Mode {
@@ -75,7 +80,37 @@ final class ScreenshotOverlayView: NSView {
   override var acceptsFirstResponder: Bool { true }
   /// agent 应用未激活时,首次点击默认仅用于“激活窗口”而被吞掉;返回 true 让首次点击即开始框选。
   override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-  override func resetCursorRects() { addCursorRect(bounds, cursor: .crosshair) }
+  override func resetCursorRects() {
+    addCursorRect(bounds, cursor: .crosshair)
+    // 选区仍可调整时,在八个手柄命中区盖上对应的缩放光标(后加的 rect 在其区域内覆盖十字)。
+    guard selectionEnabled, canAdjustSelectionGeometry, let s = selection else { return }
+    let rects = ScreenshotGeometry.handleRects(for: s, handleSize: handleHitSize)
+    for handle in ScreenshotHandle.allCases {
+      guard let rect = rects[handle] else { continue }
+      addCursorRect(rect, cursor: Self.cursor(for: handle))
+    }
+  }
+
+  /// 手柄 → 缩放光标。对角光标用私有 NSCursor(项目本就用私有 API),取不到时退化为左右缩放。
+  private static func cursor(for handle: ScreenshotHandle) -> NSCursor {
+    switch handle {
+    case .left, .right: return .resizeLeftRight
+    case .top, .bottom: return .resizeUpDown
+    case .topLeft, .bottomRight:
+      return diagonalCursor("_windowResizeNorthWestSouthEastCursor", fallback: .resizeLeftRight)
+    case .topRight, .bottomLeft:
+      return diagonalCursor("_windowResizeNorthEastSouthWestCursor", fallback: .resizeLeftRight)
+    }
+  }
+
+  private static func diagonalCursor(_ selectorName: String, fallback: NSCursor) -> NSCursor {
+    let selector = NSSelectorFromString(selectorName)
+    if NSCursor.responds(to: selector),
+       let cursor = NSCursor.perform(selector)?.takeUnretainedValue() as? NSCursor {
+      return cursor
+    }
+    return fallback
+  }
 
   // MARK: - 坐标换算 helper(本任务关键决策:不走 DisplayCoordinateConverter)
 
@@ -103,6 +138,24 @@ final class ScreenshotOverlayView: NSView {
 
   // MARK: - 鼠标
 
+  /// 选区成形后,标注画布(冻结快照)铺满整个选区,既挡住边缘缩放手柄,又吞掉"拖内部平移"。
+  /// 这里在仍可调整几何时,把命中手柄 / 选区内部(无激活工具)的点击改交回覆盖层自身处理。
+  override func hitTest(_ point: NSPoint) -> NSView? {
+    let result = super.hitTest(point)
+    guard result === canvasView, selectionEnabled, canAdjustSelectionGeometry,
+          let s = selection else {
+      return result
+    }
+    let local = convert(point, from: superview)
+    if ScreenshotGeometry.handle(at: local, selection: s, handleSize: handleHitSize) != nil {
+      return self
+    }
+    if s.contains(local) {
+      return self
+    }
+    return result
+  }
+
   override func mouseDown(with event: NSEvent) {
     // 多屏:点哪块屏就把那块屏的覆盖窗口提为 key,保证后续空格/⌘S 键盘确认落到本 View。
     window?.makeKey()
@@ -110,16 +163,27 @@ final class ScreenshotOverlayView: NSView {
     let p = ScreenshotGeometry.snapPointToBoundsEdges(
       convert(event.locationInWindow, from: nil), bounds: bounds)
     lastMouseLocal = p
+
+    // 选区成形且未开始标注:双击选区内部 = 完成并复制(与画布选择模式一致)。
+    if event.clickCount == 2, let s = selection, s.contains(p), canAdjustSelectionGeometry {
+      confirm(.copy)
+      return
+    }
+
     if let s = selection,
        let h = ScreenshotGeometry.handle(at: p, selection: s, handleSize: handleHitSize),
-       canEditSelectionGeometry {
+       canAdjustSelectionGeometry {
+      // 拖手柄缩放:先隐藏冻结快照画布,让覆盖层用实时快照重绘选区,保证跟手。
+      beginGeometryEdit()
       mode = .dragHandle(h)
+    } else if let s = selection, s.contains(p), canAdjustSelectionGeometry {
+      // 在选区内部按下并拖动 = 整体平移选区(尚未画标注时)。
+      beginGeometryEdit()
+      mode = .moving
+      dragOrigin = p
     } else if hasActivated {
       // 选区已锁定:画布外的点击(压暗区/手柄)不再新建或移动选区。
       return
-    } else if let s = selection, s.contains(p) {
-      mode = .moving
-      dragOrigin = p
     } else {
       dragOrigin = p
       selection = CGRect(origin: p, size: .zero)
@@ -159,6 +223,13 @@ final class ScreenshotOverlayView: NSView {
 
   override func mouseUp(with event: NSEvent) {
     guard selectionEnabled else { return }
+    var didAdjustGeometry = false
+    if hasActivated {
+      switch mode {
+      case .dragHandle, .moving: didAdjustGeometry = true
+      default: break
+      }
+    }
     // 单击未拖(尺寸≈0)且有悬停窗口 → 采纳整窗为选区。
     if case .dragging = mode, let s = selection, s.width < 3, s.height < 3, let w = hoverWindowRectLocal {
       selection = ScreenshotGeometry.clamp(w, to: bounds)
@@ -168,7 +239,14 @@ final class ScreenshotOverlayView: NSView {
     }
     mode = .idle
     needsDisplay = true
-    activateSelectionIfNeeded()
+    // 选区落定后刷新光标区,让手柄缩放光标随新选区位置生效。
+    window?.invalidateCursorRects(for: self)
+    if didAdjustGeometry {
+      // 缩放/平移结束:按新选区重建画布(重新裁切底图)并恢复工具栏。
+      remountAnnotationUIAfterGeometryChange()
+    } else {
+      activateSelectionIfNeeded()
+    }
   }
 
   override func rightMouseDown(with event: NSEvent) {
@@ -295,8 +373,8 @@ final class ScreenshotOverlayView: NSView {
 
   private func drawSelectionBorder(_ s: CGRect, ctx: CGContext) {
     ctx.setStrokeColor(NSColor.controlAccentColor.cgColor)
-    ctx.setLineWidth(2)
-    ctx.stroke(s.insetBy(dx: 1, dy: 1))
+    ctx.setLineWidth(3)
+    ctx.stroke(s.insetBy(dx: 1.5, dy: 1.5))
   }
 
   private func drawHoverBorder(_ r: CGRect, ctx: CGContext) {
@@ -471,6 +549,22 @@ final class ScreenshotOverlayView: NSView {
   }
 
   // MARK: - 标注 UI 挂载
+
+  /// 开始缩放/平移选区:隐藏会冻结快照的标注画布,改由覆盖层用实时快照重绘,保证跟手。
+  private func beginGeometryEdit() {
+    guard hasActivated else { return }
+    setAnnotationUIHidden(true)
+  }
+
+  /// 缩放/平移结束:还没画标注时按新选区重建画布(重新裁切底图);否则仅恢复显示。
+  private func remountAnnotationUIAfterGeometryChange() {
+    guard let s = selection, s.width > 2, s.height > 2 else { return }
+    if canvasView?.editor.document.elements.isEmpty != false {
+      mountAnnotationUI(selection: s)
+    } else {
+      setAnnotationUIHidden(false)
+    }
+  }
 
   /// 选区有效后激活标注:首次激活通知会话锁定本屏;尚无标注时允许重建画布以跟随缩放。
   private func activateSelectionIfNeeded() {
