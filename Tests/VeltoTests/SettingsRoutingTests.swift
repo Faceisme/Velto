@@ -10,6 +10,8 @@ import Testing
     let source = try String(contentsOf: sourceURL, encoding: .utf8)
 
     #expect(source.contains("SettingsPageHost(page: current)"))
+    #expect(source.contains("case .betterFinder"))
+    #expect(source.contains("AnyView(BetterFinderPage())"))
     #expect(!source.contains("pageContent(.gestures"))
     #expect(!source.contains("pageContent(.inputSourceSwitch"))
 }

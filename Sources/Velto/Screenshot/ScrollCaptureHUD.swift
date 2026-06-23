@@ -40,10 +40,7 @@ final class ScrollCaptureHUD: NSWindow {
   override var canBecomeKey: Bool { true }
 
   private func setupContent(size: NSSize) {
-    let container = NSView(frame: CGRect(origin: .zero, size: size))
-    container.wantsLayer = true
-    container.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.82).cgColor
-    container.layer?.cornerRadius = 12
+    let content = NSView(frame: CGRect(origin: .zero, size: size))
 
     imageView.frame = CGRect(
       x: 12,
@@ -53,18 +50,24 @@ final class ScrollCaptureHUD: NSWindow {
     )
     imageView.imageScaling = .scaleProportionallyUpOrDown
     imageView.wantsLayer = true
-    imageView.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.06).cgColor
-    container.addSubview(imageView)
+    imageView.layer?.cornerRadius = 8
+    imageView.layer?.masksToBounds = true
+    content.addSubview(imageView)
 
     hintLabel.frame = CGRect(x: 12, y: 8, width: size.width - 24, height: 44)
     hintLabel.font = .systemFont(ofSize: 11, weight: .medium)
-    hintLabel.textColor = .white
+    hintLabel.textColor = .labelColor   // 自适应明暗,保证液态玻璃上可读
     hintLabel.alignment = .center
     hintLabel.maximumNumberOfLines = 3
     hintLabel.lineBreakMode = .byWordWrapping
     hintLabel.stringValue = configuredHint
-    container.addSubview(hintLabel)
-    contentView = container
+    content.addSubview(hintLabel)
+
+    // 统一液态玻璃特效(与标注工具栏一致),取代原黑色背景。
+    let glass = NSGlassEffectView(frame: CGRect(origin: .zero, size: size))
+    glass.cornerRadius = 18
+    glass.contentView = content
+    contentView = glass
   }
 
   /// 复用本次截图会话的快捷键配置,并同步更新浮窗提示。

@@ -3,11 +3,14 @@ import Cocoa
 
 /// 滚动截图期间全局接管完成快捷键,目标 App 保持前台时仍可结束会话。
 final class ScrollCaptureKeyTap: @unchecked Sendable {
-  private enum Action: Sendable { case copy, save, cancel }
+  private enum Action: Sendable { case copy, save, cancel, exit, scroll }
 
   var onCopy: (() -> Void)?
   var onSave: (() -> Void)?
   var onCancel: (() -> Void)?
+  var onExit: (() -> Void)?
+  /// 与其它动作一样切回主线程,供 MainActor 滚动控制器安全处理。
+  var onScrollActivity: (() -> Void)?
 
   private let copyKeyCode: UInt16
   private let cancelKeyCode: UInt16
@@ -38,7 +41,12 @@ final class ScrollCaptureKeyTap: @unchecked Sendable {
     lifecycleLock.unlock()
     guard !alreadyStarted else { return true }
 
-    let mask = CGEventMask(1 << CGEventType.keyDown.rawValue)
+    // 监听完成快捷键、鼠标完成/退出,并观察滚轮活动以便只在滚动静止后接纳稳定帧。
+    let mask = CGEventMask(
+      (1 << CGEventType.keyDown.rawValue)
+        | (1 << CGEventType.leftMouseDown.rawValue)
+        | (1 << CGEventType.rightMouseDown.rawValue)
+        | (1 << CGEventType.scrollWheel.rawValue))
     let refcon = Unmanaged.passUnretained(self).toOpaque()
     guard let tap = CGEvent.tapCreate(
       tap: .cgSessionEventTap,
@@ -159,6 +167,23 @@ final class ScrollCaptureKeyTap: @unchecked Sendable {
       if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
       return Unmanaged.passUnretained(event)
     }
+    if type == .scrollWheel {
+      dispatchToMain(.scroll)
+      return Unmanaged.passUnretained(event)
+    }
+    if type == .rightMouseDown {
+      // 右键:退出整个截图会话;吞掉事件,避免目标 App 弹出上下文菜单。
+      dispatchToMain(.exit)
+      return nil
+    }
+    if type == .leftMouseDown {
+      // 双击:完成长截图;单击/拖拽放行(供拖目标窗口滚动条等)。
+      if event.getIntegerValueField(.mouseEventClickState) >= 2 {
+        dispatchToMain(.copy)
+        return nil
+      }
+      return Unmanaged.passUnretained(event)
+    }
     guard type == .keyDown else { return Unmanaged.passUnretained(event) }
 
     let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
@@ -186,6 +211,8 @@ final class ScrollCaptureKeyTap: @unchecked Sendable {
       case .copy: self?.onCopy?()
       case .save: self?.onSave?()
       case .cancel: self?.onCancel?()
+      case .exit: self?.onExit?()
+      case .scroll: self?.onScrollActivity?()
       }
     }
   }

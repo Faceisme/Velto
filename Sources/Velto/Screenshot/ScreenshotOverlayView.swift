@@ -30,6 +30,8 @@ final class ScreenshotOverlayView: NSView {
 
   /// 本屏是否允许框选;另一块屏激活选区后会被会话置为 false。
   var selectionEnabled: Bool = true { didSet { needsDisplay = true } }
+  /// 滚动捕获进行中:不压暗、不画冻结快照,只保留选区边框,露出底下真实 App 供滚动。
+  var scrollCaptureActive: Bool = false { didSet { needsDisplay = true } }
 
   // MARK: - 标注 UI(选区激活后挂载)
 
@@ -239,6 +241,13 @@ final class ScreenshotOverlayView: NSView {
 
   override func draw(_ dirtyRect: NSRect) {
     guard let ctx = NSGraphicsContext.current?.cgContext else { return }
+
+    // 滚动捕获中:整屏透明、只画选区边框。用户看到真实 App 并能滚动,边框标出捕获范围
+    // (覆盖层已被截图过滤排除,边框不会进入拼接结果)。
+    if scrollCaptureActive {
+      if let s = selection { drawSelectionBorder(s, ctx: ctx) }
+      return
+    }
 
     // 底图整幅只画一次(亮),再仅在“选区/悬停区以外”压暗罩。
     // 关键性能点:旧实现每帧把全屏快照画两遍(底图 + 选区重绘),拖拽时严重卡顿;
@@ -611,6 +620,18 @@ final class ScreenshotOverlayView: NSView {
   }
 
   /// 拆除标注 UI:先结束文字编辑,再移除画布/工具栏(连带其 history 与马赛克缓存)。
+  /// 滚动捕获期间隐藏标注画布/工具栏/属性栏:画布会盖在选区上显示冻结快照(看似"锁死"),
+  /// 工具栏在透传后又点不动。隐藏后露出底下真实滚动内容;取消滚动时再恢复。
+  func setAnnotationUIHidden(_ hidden: Bool) {
+    canvasView?.isHidden = hidden
+    toolbar?.isHidden = hidden
+    if hidden {
+      propertyBar?.isHidden = true
+    } else {
+      propertyBar?.isHidden = (canvasView?.editor.document.activeTool == nil)
+    }
+  }
+
   func tearDownAnnotationUI() {
     textEditor?.cancel()
     textEditor = nil
