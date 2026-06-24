@@ -20,6 +20,10 @@ final class AnnotationCanvasView: NSView {
   var onRequestComplete: (() -> Void)?
   /// 通知覆盖层开始原位文字编辑:frame 为标注坐标矩形,existing 为双击重开的对象。
   var onBeginTextEditing: ((CGRect, TextAnnotation?) -> Void)?
+  /// 请求覆盖层取消正在进行的文字编辑;返回 true 表示当时确有编辑器并已取消(此次点击被消费)。
+  var onRequestCancelTextEditing: (() -> Bool)?
+  /// 查询当前是否有进行中的文字编辑器(用于"编辑中单击空白=取消"判定,不产生副作用)。
+  var isTextEditing: (() -> Bool)?
 
   /// 正在被外部文字编辑器接管的对象;绘制时跳过它,避免与透明 NSTextView 重影。
   private var editingTextID: UUID?
@@ -83,8 +87,15 @@ final class AnnotationCanvasView: NSView {
   // MARK: - Pointer events
 
   override func mouseDown(with event: NSEvent) {
-    window?.makeFirstResponder(self)
+    // 正在编辑文字时:落在编辑框内的单击会被文字框自身吃掉、根本到不了这里;凡是到达画布的
+    // 单击都在框外 → 取消当前输入(不提交、不开新框、不退出截图)。
+    if isTextEditing?() == true {
+      _ = onRequestCancelTextEditing?()
+      return
+    }
+
     let point = annotationPoint(for: event)
+    window?.makeFirstResponder(self)
 
     if event.clickCount == 2 {
       let hitID = AnnotationGeometry.hitTest(point, elements: editor.document.elements)
@@ -108,8 +119,20 @@ final class AnnotationCanvasView: NSView {
         isTrackingPointer = true
         return
       }
-      let height = max(editor.style.fontSize * 1.6, 28)
-      let frame = CGRect(x: point.x, y: point.y, width: Self.defaultTextWidth, height: height)
+      // 指哪打哪:点击点落在首行的垂直中心、左边缘对齐点击 x,光标就出现在你点的位置,而不是
+      // 把整框甩到点击点的右下角。行高用与编辑器一致的字体 boundingRect;+4 对应编辑器
+      // textContainerInset 上下各 2。
+      let font = NSFont.systemFont(
+        ofSize: editor.style.fontSize,
+        weight: editor.style.isBold ? .bold : .regular
+      )
+      let height = ceil(font.boundingRectForFont.height) + 4
+      let frame = CGRect(
+        x: point.x,
+        y: point.y - height / 2,
+        width: Self.defaultTextWidth,
+        height: height
+      )
       startTextEditing(annotationFrame: frame, existing: nil)
       return
     }

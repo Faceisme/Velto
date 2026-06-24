@@ -3,3 +3,4 @@
 .swiftpm/
 build/
 DerivedData/
+scripts/.build-version

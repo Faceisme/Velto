@@ -167,6 +167,8 @@ final class ScreenshotOverlayView: NSView {
   override func mouseDown(with event: NSEvent) {
     // 多屏:点哪块屏就把那块屏的覆盖窗口提为 key,保证后续空格/⌘S 键盘确认落到本 View。
     window?.makeKey()
+    // 编辑文字时,输入框外单击(此处为选区外的压暗区)= 取消当前输入,而非新建/调整选区。
+    if cancelActiveTextEditing() { return }
     guard selectionEnabled else { return }
     let p = ScreenshotGeometry.snapPointToBoundsEdges(
       convert(event.locationInWindow, from: nil), bounds: bounds)
@@ -260,6 +262,15 @@ final class ScreenshotOverlayView: NSView {
   override func rightMouseDown(with event: NSEvent) {
     // 右键退出截图(与 Esc 等价)。
     delegate?.overlayDidCancel()
+  }
+
+  /// 若当前有进行中的文字编辑,取消它并返回 true;否则返回 false。
+  /// 供画布"编辑中单击空白=取消"复用(`onRequestCancelTextEditing`)。
+  @discardableResult
+  private func cancelActiveTextEditing() -> Bool {
+    guard textEditor != nil else { return false }
+    textEditor?.cancel()
+    return true
   }
 
   override func mouseMoved(with event: NSEvent) {
@@ -604,6 +615,8 @@ final class ScreenshotOverlayView: NSView {
     canvas.onBeginTextEditing = { [weak self] frame, existing in
       self?.beginTextEditing(annotationFrame: frame, existing: existing)
     }
+    canvas.onRequestCancelTextEditing = { [weak self] in self?.cancelActiveTextEditing() ?? false }
+    canvas.isTextEditing = { [weak self] in self?.textEditor != nil }
     addSubview(canvas)
     canvasView = canvas
 
@@ -668,6 +681,10 @@ final class ScreenshotOverlayView: NSView {
 
   private func handleToolbarAction(_ action: AnnotationToolbarAction) {
     guard let canvas = canvasView else { return }
+    // 正在原位编辑文字时点工具栏:玻璃工具栏虽在本窗口内,但其自绘按钮点击不夺第一响应者,
+    // NSTextView 不会失焦、textDidEndEditing 不触发,导致切走工具后仍能继续输入(且保存会丢
+    // 未提交文字)。任何工具栏交互前,先把在编辑的文字提交(置 nil 并把第一响应者还给画布)。
+    textEditor?.commit()
     switch action {
     case .selectTool(let tool):
       // 再次点击当前工具回到选择/移动模式。

@@ -43,6 +43,9 @@ BUILD_HOME="$ROOT_DIR/.build/home"
 APP_ENTITLEMENTS="$ROOT_DIR/Resources/Velto.entitlements"
 FINDER_EXT_ENTITLEMENTS="$ROOT_DIR/Resources/BetterFinderExtension/BetterFinderExtension.entitlements"
 FINDER_EXT_BUNDLE_ID="com.face.myapp.betterfinder.FinderExtension"
+# 版本号计数文件:存"年.月.当月第几次"。刻意不放 .build/ —— 冷打包会删 .build,
+# 放那里计数会丢;放 scripts/ 下并 gitignore,既不进版本库也能跨冷打包存活。
+VERSION_STATE_FILE="$ROOT_DIR/scripts/.build-version"
 
 # 简单的命令行参数支持 —— 现在只有 --run
 DO_RUN=0
@@ -125,11 +128,33 @@ swift build -c "$CONFIGURATION" --arch arm64 --scratch-path "$ROOT_DIR/.build" -
 swift build -c "$CONFIGURATION" --arch arm64 --scratch-path "$ROOT_DIR/.build" --product BetterFinderExtension
 BIN_DIR="$(swift build -c "$CONFIGURATION" --arch arm64 --scratch-path "$ROOT_DIR/.build" --show-bin-path)"
 
+# ============ 1.5 计算版本号(年.月.当月第几次打包)============
+# CFBundleShortVersionString = 年.月.第几次。同一自然月内每打包一次第三段 +1,跨月归 1。
+# 放在编译之后:编译失败会被上面的 set -e 拦下,不会白白消耗一个版本号。
+YEAR="$(date +%Y)"
+MONTH="$(( 10#$(date +%m) ))"   # 10# 强制十进制,免得 08/09 被当八进制
+CUR_YM="$YEAR.$MONTH"
+PREV_VERSION=""
+[ -f "$VERSION_STATE_FILE" ] && PREV_VERSION="$(cat "$VERSION_STATE_FILE")"
+PREV_YM="${PREV_VERSION%.*}"     # 年.月
+PREV_N="${PREV_VERSION##*.}"     # 第几次
+case "$PREV_N" in
+    ''|*[!0-9]*) BUILD_SEQ=1 ;;                                   # 空/损坏 → 从 1 起
+    *) if [ "$PREV_YM" = "$CUR_YM" ]; then BUILD_SEQ="$(( PREV_N + 1 ))"; else BUILD_SEQ=1; fi ;;
+esac
+APP_VERSION="$CUR_YM.$BUILD_SEQ"
+echo "$APP_VERSION" > "$VERSION_STATE_FILE"
+echo "版本号: $APP_VERSION"
+
 # ============ 2. 组装 .app bundle ============
 rm -rf "$APP_DIR"
 install -d "$MACOS_DIR" "$RESOURCES_DIR" "$FINDER_EXT_MACOS_DIR" "$FINDER_EXT_RESOURCES_DIR"
 cp "$BIN_DIR/Velto" "$MACOS_DIR/Velto"
 cp "$ROOT_DIR/Resources/Info.plist" "$CONTENTS_DIR/Info.plist"
+# 只把版本号盖进 bundle 内的副本,源 Resources/Info.plist 保持不变 —— 否则每次打包都把
+# 它改脏,污染 git 工作区。
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $APP_VERSION" "$CONTENTS_DIR/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $APP_VERSION" "$CONTENTS_DIR/Info.plist"
 if [ -f "$ROOT_DIR/Resources/Velto.icns" ]; then
     cp "$ROOT_DIR/Resources/Velto.icns" "$RESOURCES_DIR/Velto.icns"
 fi
@@ -178,7 +203,7 @@ if [ "${SKIP_FINDER_EXTENSION_REGISTER:-0}" != "1" ] && command -v pluginkit >/d
     echo "已注册并启用 Finder 扩展: $FINDER_EXT_BUNDLE_ID"
 fi
 
-echo "$INSTALLED_APP  (also at $APP_DIR)"
+echo "$INSTALLED_APP  (also at $APP_DIR)  [v$APP_VERSION]"
 
 # ============ 5. TCC 授权(辅助功能 / 录屏)============
 # 使用固定的 Apple Development 证书签名后,TCC 授权绑定到开发者身份而不是 cdhash,

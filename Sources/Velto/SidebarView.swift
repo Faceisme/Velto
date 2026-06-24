@@ -96,6 +96,12 @@ struct SidebarView: View {
                 }
 
                 Spacer()
+
+                Text(Self.appVersionLabel)
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.mgText3)
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 2)
             }
             .padding(.horizontal, 12)
             .padding(.bottom, 12)
@@ -104,6 +110,12 @@ struct SidebarView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .ignoresSafeArea(.container, edges: [.top, .bottom, .leading])
     }
+
+    /// 侧栏底部版本号:取自 bundle 的 CFBundleShortVersionString(打包脚本按"年.月.第几次"盖入)。
+    private static let appVersionLabel: String = {
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—"
+        return "Velto \(version)"
+    }()
 }
 
 private struct SettingsSidebarGlassView: NSViewRepresentable {
