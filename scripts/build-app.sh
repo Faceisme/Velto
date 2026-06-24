@@ -161,8 +161,24 @@ cp "$ROOT_DIR/Resources/Info.plist" "$CONTENTS_DIR/Info.plist"
 # 它改脏,污染 git 工作区。
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $APP_VERSION" "$CONTENTS_DIR/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $APP_VERSION" "$CONTENTS_DIR/Info.plist"
-if [ -f "$ROOT_DIR/Resources/Velto.icns" ]; then
-    cp "$ROOT_DIR/Resources/Velto.icns" "$RESOURCES_DIR/Velto.icns"
+# Liquid Glass 图标:把 Resources/Velto.icon(Icon Composer 文档)用 actool 编成
+# Assets.car(+ 兜底 Velto.icns)放进 bundle 的 Resources。Info.plist 里 CFBundleIconName=Velto
+# 让系统在 macOS 26 上据此渲染自适应玻璃图标;旧的静态 Velto.icns 已被这一步取代。
+if [ -d "$ROOT_DIR/Resources/Velto.icon" ]; then
+    # actool 怪癖:不给 --output-partial-info-plist 就空跑不产出。这个 plist 用完即删,不进
+    # bundle;放 RESOURCES_DIR(编译输出目录,确定可写)。错误信息走 stdout,失败时打印再中止。
+    if ! xcrun actool "$ROOT_DIR/Resources/Velto.icon" \
+        --compile "$RESOURCES_DIR" \
+        --app-icon "Velto" \
+        --output-partial-info-plist "$RESOURCES_DIR/.icon-partial.plist" \
+        --platform macosx \
+        --minimum-deployment-target 26.0 \
+        --errors --warnings >"$BUILD_ROOT/actool.log" 2>&1; then
+        echo "错误:actool 编译 Velto.icon 失败:" >&2
+        cat "$BUILD_ROOT/actool.log" >&2
+        exit 1
+    fi
+    rm -f "$RESOURCES_DIR/.icon-partial.plist"
 fi
 chmod +x "$MACOS_DIR/Velto"
 

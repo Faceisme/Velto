@@ -12,6 +12,8 @@
     <string>com.face.myapp</string>
     <key>CFBundleIconFile</key>
     <string>Velto</string>
+    <key>CFBundleIconName</key>
+    <string>Velto</string>
     <key>CFBundleURLTypes</key>
     <array>
         <dict>

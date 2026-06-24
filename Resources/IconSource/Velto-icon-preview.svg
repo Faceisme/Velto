@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- Velto 图标 · 合成预览(背景层 + 前景层 + 圆角方形遮罩 + 顶部高光)。 -->
+  <!-- 仅供快速查看最终大致效果;真正导入 Icon Composer 的是 background / foreground 两个分层文件。 -->
+  <defs>
+    <linearGradient id="veltoBgP" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#34D8C5"/>
+      <stop offset="1" stop-color="#0E78C0"/>
+    </linearGradient>
+    <linearGradient id="veltoGloss" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.30"/>
+      <stop offset="0.55" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <clipPath id="squircle">
+      <rect x="0" y="0" width="1024" height="1024" rx="229" ry="229"/>
+    </clipPath>
+  </defs>
+  <g clip-path="url(#squircle)">
+    <rect width="1024" height="1024" fill="url(#veltoBgP)"/>
+    <polygon points="512,512 230.6,349.5 512,187" fill="#ffffff" fill-opacity="0.92"/>
+    <polygon points="512,512 512,187 793.4,349.5" fill="#ffffff" fill-opacity="0.74"/>
+    <polygon points="512,512 793.4,349.5 793.4,674.5" fill="#ffffff" fill-opacity="0.60"/>
+    <polygon points="512,512 793.4,674.5 512,837" fill="#ffffff" fill-opacity="0.52"/>
+    <polygon points="512,512 512,837 230.6,674.5" fill="#ffffff" fill-opacity="0.64"/>
+    <polygon points="512,512 230.6,674.5 230.6,349.5" fill="#ffffff" fill-opacity="0.82"/>
+    <g stroke="#ffffff" stroke-opacity="0.35" stroke-width="5" stroke-linecap="round">
+      <line x1="512" y1="512" x2="512" y2="187"/>
+      <line x1="512" y1="512" x2="793.4" y2="349.5"/>
+      <line x1="512" y1="512" x2="793.4" y2="674.5"/>
+      <line x1="512" y1="512" x2="512" y2="837"/>
+      <line x1="512" y1="512" x2="230.6" y2="674.5"/>
+      <line x1="512" y1="512" x2="230.6" y2="349.5"/>
+    </g>
+    <polygon points="512,187 793.4,349.5 793.4,674.5 512,837 230.6,674.5 230.6,349.5"
+      fill="none" stroke="#ffffff" stroke-opacity="0.9" stroke-width="10" stroke-linejoin="round"/>
+    <rect width="1024" height="1024" fill="url(#veltoGloss)"/>
+  </g>
+</svg>
