@@ -1,0 +1,9 @@
+# 让 Dropbox 不同步构建产物 —— 与 .gitignore 同理,但 Dropbox 不看 .gitignore。
+# 这些目录在构建时频繁增删,Dropbox 会把每个中间版本都留在云端(本地几百 MB,
+# 云端能堆到十几 GB)。基于模式忽略,删了重建也照样不同步。
+# 另:对已存在的目录还额外打了 `xattr com.dropbox.ignored 1`(立即移除云端副本),
+# build-app.sh 顶部也会每次重新打标记,三重保险。
+.build
+build
+.swiftpm
+DerivedData

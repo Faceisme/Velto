@@ -237,10 +237,20 @@ final class EventTapManager: @unchecked Sendable {
             }
         }
 
+        // 调试开关先于首次 update 设好,启动期的查找表构建过程才会被记录。
+        KeyRemapDebugLog.setEnabled(KeyRemapStore.shared.debugLoggingEnabled)
         // 总开关关闭时喂空规则,等于整个按键映射特性暂停(查找表为空,所有事件透传)。
+        KeyRemapDebugLog.log("EventTapManager init: masterEnabled=\(KeyRemapStore.shared.masterEnabled), " +
+            "规则数=\(KeyRemapStore.shared.rules.count)")
         keyRemapController.update(
             rules: KeyRemapStore.shared.masterEnabled ? KeyRemapStore.shared.rules : []
         )
+        // Caps Lock 这类 toggle 源走 HID 层重映射(hidutil),从根上消除「闪灯」;
+        // 其余键仍由上面的 tap 查找表处理。
+        KeyRemapHIDRemap.setMappings(Self.capsHIDPairs(
+            masterEnabled: KeyRemapStore.shared.masterEnabled,
+            rules: KeyRemapStore.shared.rules
+        ))
         keyRemapObserver = NotificationCenter.default.addObserver(
             forName: .keyRemapStoreDidChange,
             object: nil,
@@ -250,9 +260,15 @@ final class EventTapManager: @unchecked Sendable {
             MainActor.assumeIsolated {
                 let store = KeyRemapStore.shared
                 let rules = store.masterEnabled ? store.rules : []
+                KeyRemapDebugLog.log("keyRemapStoreDidChange: masterEnabled=\(store.masterEnabled), " +
+                    "下发 \(rules.count) 条规则 → 重建查找表")
                 self?.performOnTapThread { [weak self] in
                     self?.keyRemapController.update(rules: rules)
                 }
+                // caps 等 toggle 源的 HID 层重映射随规则同步。
+                KeyRemapHIDRemap.setMappings(Self.capsHIDPairs(
+                    masterEnabled: store.masterEnabled, rules: store.rules
+                ))
             }
         }
     }
@@ -783,6 +799,29 @@ final class EventTapManager: @unchecked Sendable {
 
     private func eventMask(for type: CGEventType) -> CGEventMask {
         CGEventMask(1) << CGEventMask(type.rawValue)
+    }
+
+    /// 从规则里挑出能用 HID 层重映射(hidutil)处理的 Caps Lock 源:caps→单个普通键/
+    /// 单个修饰键,无 mandatory、无附加修饰、非禁用,且源/目标都有 HID usage。
+    /// 这些交给 hidutil 在驱动层直改,根除「闪灯」;其余 caps 情形(hyper/禁用/组合)
+    /// 仍留给 tap 的反应式回退。
+    private static func capsHIDPairs(
+        masterEnabled: Bool,
+        rules: [KeyRemapRule]
+    ) -> [KeyRemapHIDRemap.HIDPair] {
+        guard masterEnabled,
+              let src = KeyRemapHIDRemap.hidUsage(forKeyCode: 57) else { return [] }
+        var pairs: [KeyRemapHIDRemap.HIDPair] = []
+        for rule in rules where rule.enabled {
+            for m in rule.manipulators
+            where m.from.keyCode == 57 && m.from.mandatory.isEmpty && m.to.count == 1 {
+                let to = m.to[0]
+                guard to.keyCode != 0xFFFF, to.additionalModifierCodes.isEmpty,
+                      let dst = KeyRemapHIDRemap.hidUsage(forKeyCode: to.keyCode) else { continue }
+                pairs.append(.init(src: src, dst: dst))
+            }
+        }
+        return pairs
     }
 
     private func isInRightClickPassThrough(_ event: CGEvent) -> Bool {

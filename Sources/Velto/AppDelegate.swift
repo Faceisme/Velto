@@ -45,6 +45,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 开机系统切换器都是关的。
         SwitcherController.shared.stop()
         InputSourceSwitchController.shared.stop()
+        // ⚠️ 同理:Caps Lock 的 hidutil 重映射是会话级全局状态,退出必须同步清掉,
+        // 否则 Velto 关了 caps 还是改键的。
+        KeyRemapHIDRemap.resetSync()
     }
 
     /// `.accessory` 应用默认没有主菜单 → ⌘W / ⌘Q / 文本编辑快捷键全部失效。

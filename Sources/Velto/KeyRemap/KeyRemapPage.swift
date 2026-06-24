@@ -21,6 +21,7 @@ struct KeyRemapPage: View {
         masterToggleSection
         manualSection
         importedSection
+        debugSection
       }
       .padding(.horizontal, 32)
       .padding(.top, 28)
@@ -69,6 +70,69 @@ struct KeyRemapPage: View {
       }
       .padding(16)
     }
+  }
+
+  // MARK: - 调试日志
+
+  private var debugSection: some View {
+    VStack(alignment: .leading, spacing: 10) {
+      MGSectionLabel(text: "调试")
+      GroupCard(radius: MGRadius.cardLg) {
+        VStack(spacing: 0) {
+          HStack(spacing: 12) {
+            Image(systemName: "ladybug")
+              .font(.system(size: 15))
+              .foregroundStyle(Color.mgAccent)
+              .frame(width: 22)
+            VStack(alignment: .leading, spacing: 2) {
+              Text("调试日志")
+                .font(.mgBody)
+                .foregroundStyle(Color.mgText1)
+              Text("排查映射不生效时打开,详尽记录规则编译 / 按键事件 / 合成动作,只写 key-remap.log。")
+                .font(.mgMeta)
+                .foregroundStyle(Color.mgText3)
+            }
+            Spacer()
+            Toggle("", isOn: Binding(
+              get: { store.debugLoggingEnabled },
+              set: { store.setDebugLoggingEnabled($0) }
+            ))
+            .labelsHidden()
+            .toggleStyle(.switch)
+            .controlSize(.small)
+            .tint(.mgAccent)
+          }
+          .padding(16)
+
+          Divider().padding(.horizontal, 16)
+
+          HStack(spacing: 12) {
+            Image(systemName: "folder")
+              .font(.system(size: 15))
+              .foregroundStyle(Color.mgAccent)
+              .frame(width: 22)
+            VStack(alignment: .leading, spacing: 2) {
+              Text("打开日志文件夹")
+                .font(.mgBody)
+                .foregroundStyle(Color.mgText1)
+              Text("~/Library/Logs/Velto/key-remap.log")
+                .font(.mgMeta)
+                .foregroundStyle(Color.mgText3)
+            }
+            Spacer()
+            Button("打开") { openLogsFolder() }
+              .buttonStyle(MGSecondaryButtonStyle())
+          }
+          .padding(16)
+        }
+      }
+    }
+  }
+
+  private func openLogsFolder() {
+    let url = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first?
+      .appendingPathComponent("Logs/Velto", isDirectory: true)
+    if let url { NSWorkspace.shared.open(url) }
   }
 
   // MARK: - 简单映射区(单卡:添加行在顶,每条映射各自带删除)

@@ -63,6 +63,20 @@ for arg in "$@"; do
 done
 
 cd "$ROOT_DIR"
+
+# ============ Dropbox 忽略护栏 ============
+# 本脚本的缓存已全部重定向到 $BUILD_ROOT(Dropbox 外),正常不会在仓库里生成 .build。
+# 但裸 `swift build`(不带 --scratch-path)默认仍写仓库根的 .build,而仓库在 Dropbox 里,
+# Dropbox 会把这个频繁增删的缓存的每个中间版本都留在云端(本地几百 MB → 云端十几 GB)。
+# .gitignore 拦不住 Dropbox。这里:
+#   - 预建 .build / build 并打 `com.dropbox.ignored` 标记(标记是 inode 级,删了重建会丢,
+#     所以每次打包都重新打,堵住裸 swift build 重建 .build 的窗口);
+#   - 配合仓库根的 .dropboxignore(基于模式,更持久)。
+for _ignore_dir in .build build; do
+    mkdir -p "$ROOT_DIR/$_ignore_dir"
+    xattr -w com.dropbox.ignored 1 "$ROOT_DIR/$_ignore_dir" 2>/dev/null || true
+done
+
 install -d "$BUILD_HOME" "$BUILD_ROOT/clang-module-cache" "$BUILD_ROOT/swiftpm-cache"
 
 # 下面会把 HOME 改到 .build/home 做缓存隔离,但 codesign 要从这里取登录钥匙串

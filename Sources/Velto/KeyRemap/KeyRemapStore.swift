@@ -8,12 +8,16 @@ final class KeyRemapStore {
 
   private let storageKey = "Velto.keyRemaps"
   private let enabledKey = "Velto.keyRemapEnabled"
+  private let debugKey = "Velto.keyRemapDebugLogging"
   private let encoder = JSONEncoder()
   private let decoder = JSONDecoder()
 
   private(set) var rules: [KeyRemapRule]
   // 功能总开关:关闭后所有映射规则暂停生效。默认开启,保持既有行为。
   private(set) var masterEnabled: Bool
+  // 调试日志开关:开启后 KeyRemapController 把编译 / 事件 / 合成详尽写
+  // ~/Library/Logs/Velto/key-remap.log。默认关闭。
+  private(set) var debugLoggingEnabled: Bool
 
   private init() {
     if let data = UserDefaults.standard.data(forKey: storageKey),
@@ -28,6 +32,7 @@ final class KeyRemapStore {
     } else {
       masterEnabled = UserDefaults.standard.bool(forKey: enabledKey)
     }
+    debugLoggingEnabled = UserDefaults.standard.bool(forKey: debugKey)
   }
 
   // MARK: - 总开关
@@ -36,6 +41,16 @@ final class KeyRemapStore {
     guard masterEnabled != enabled else { return }
     masterEnabled = enabled
     UserDefaults.standard.set(enabled, forKey: enabledKey)
+    notify()
+  }
+
+  // MARK: - 调试日志开关
+
+  func setDebugLoggingEnabled(_ enabled: Bool) {
+    guard debugLoggingEnabled != enabled else { return }
+    debugLoggingEnabled = enabled
+    UserDefaults.standard.set(enabled, forKey: debugKey)
+    KeyRemapDebugLog.setEnabled(enabled)
     notify()
   }
 
