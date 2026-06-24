@@ -21,6 +21,12 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 CONFIGURATION="${CONFIGURATION:-debug}"
 
+# 构建缓存(.build:scratch / clang+swiftpm module cache / 隔离 HOME / codesign.err)
+# 全部放到 Dropbox 外面。否则 Dropbox 会同步这些在构建过程中频繁增删的临时缓存,
+# 把每个中途版本都留在云端 —— CompilationCache.noindex 单独就能在云端堆到 13G
+# (本地却只有几十 KB)。改到 ~/dev 后,Dropbox 里彻底不再生成 .build。
+BUILD_ROOT="${BUILD_ROOT:-$HOME/dev/build/Velto}"
+
 # 使用固定的 Apple Development 证书,而不是 ad-hoc 签名。
 # 这样 TCC 授权会绑定到开发者身份,重编后授权就不会被吊销。
 # ad-hoc 签名每次都产生不同的 cdhash,导致授权失效;
@@ -39,7 +45,7 @@ FINDER_EXT_RESOURCES_DIR="$FINDER_EXT_CONTENTS_DIR/Resources"
 INSTALLED_APP="/Applications/Velto.app"
 INSTALLED_FINDER_EXT="$INSTALLED_APP/Contents/PlugIns/BetterFinderExtension.appex"
 LEGACY_INSTALLED_APP="/Applications/VibeGestures.app"
-BUILD_HOME="$ROOT_DIR/.build/home"
+BUILD_HOME="$BUILD_ROOT/home"
 APP_ENTITLEMENTS="$ROOT_DIR/Resources/Velto.entitlements"
 FINDER_EXT_ENTITLEMENTS="$ROOT_DIR/Resources/BetterFinderExtension/BetterFinderExtension.entitlements"
 FINDER_EXT_BUNDLE_ID="com.face.myapp.betterfinder.FinderExtension"
@@ -57,7 +63,7 @@ for arg in "$@"; do
 done
 
 cd "$ROOT_DIR"
-install -d "$BUILD_HOME" "$ROOT_DIR/.build/clang-module-cache" "$ROOT_DIR/.build/swiftpm-cache"
+install -d "$BUILD_HOME" "$BUILD_ROOT/clang-module-cache" "$BUILD_ROOT/swiftpm-cache"
 
 # 下面会把 HOME 改到 .build/home 做缓存隔离,但 codesign 要从这里取登录钥匙串
 # 里的签名证书 —— HOME 一改,钥匙串搜索列表就没有 login.keychain,
@@ -67,8 +73,8 @@ install -d "$BUILD_HOME" "$ROOT_DIR/.build/clang-module-cache" "$ROOT_DIR/.build
 REAL_HOME="$HOME"
 
 export HOME="$BUILD_HOME"
-export XDG_CACHE_HOME="$ROOT_DIR/.build/swiftpm-cache"
-export CLANG_MODULE_CACHE_PATH="$ROOT_DIR/.build/clang-module-cache"
+export XDG_CACHE_HOME="$BUILD_ROOT/swiftpm-cache"
+export CLANG_MODULE_CACHE_PATH="$BUILD_ROOT/clang-module-cache"
 
 # 用固定证书签名:必须用真实 HOME 才能访问登录钥匙串里的私钥。
 # 签完顺手校验签名身份不是 ad-hoc,签错了立刻报错中止,绝不带病部署。
@@ -81,14 +87,14 @@ sign_with_cert() {
     for attempt in 1 2 3 4 5; do
         xattr -cr "$target" 2>/dev/null || true
         if HOME="$REAL_HOME" codesign --force --sign "$CODE_SIGN_IDENTITY" \
-            --entitlements "$entitlements" "$target" 2>"$ROOT_DIR/.build/codesign.err"; then
+            --entitlements "$entitlements" "$target" 2>"$BUILD_ROOT/codesign.err"; then
             break
         fi
-        if [ "$attempt" -lt 5 ] && grep -qiE "resource fork|detritus|not allowed" "$ROOT_DIR/.build/codesign.err"; then
+        if [ "$attempt" -lt 5 ] && grep -qiE "resource fork|detritus|not allowed" "$BUILD_ROOT/codesign.err"; then
             sleep 0.3
             continue
         fi
-        cat "$ROOT_DIR/.build/codesign.err" >&2
+        cat "$BUILD_ROOT/codesign.err" >&2
         exit 1
     done
     if codesign -dv --verbose=2 "$target" 2>&1 | grep -q "Signature=adhoc"; then
@@ -124,9 +130,9 @@ ensure_full_xcode_toolchain() {
 ensure_full_xcode_toolchain
 
 # ============ 1. 编译 ============
-swift build -c "$CONFIGURATION" --arch arm64 --scratch-path "$ROOT_DIR/.build" --product Velto
-swift build -c "$CONFIGURATION" --arch arm64 --scratch-path "$ROOT_DIR/.build" --product BetterFinderExtension
-BIN_DIR="$(swift build -c "$CONFIGURATION" --arch arm64 --scratch-path "$ROOT_DIR/.build" --show-bin-path)"
+swift build -c "$CONFIGURATION" --arch arm64 --scratch-path "$BUILD_ROOT" --product Velto
+swift build -c "$CONFIGURATION" --arch arm64 --scratch-path "$BUILD_ROOT" --product BetterFinderExtension
+BIN_DIR="$(swift build -c "$CONFIGURATION" --arch arm64 --scratch-path "$BUILD_ROOT" --show-bin-path)"
 
 # ============ 1.5 计算版本号(年.月.当月第几次打包)============
 # CFBundleShortVersionString = 年.月.第几次。同一自然月内每打包一次第三段 +1,跨月归 1。
