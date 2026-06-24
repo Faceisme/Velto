@@ -142,7 +142,7 @@ struct GeneralSettingsPage: View {
                     MGSectionLabel(text: "数据与权限")
                     GroupCard(padding: EdgeInsets(top: 16, leading: 20, bottom: 16, trailing: 20)) {
                         VStack(alignment: .leading, spacing: 14) {
-                            Text("配置文件会包含鼠标手势、窗口管理快捷键、按键映射、识别参数、菜单栏偏好和增强Finder设置;开机自动启动属于系统登录项,不随配置导入导出。")
+                            Text("配置文件几乎包含全部模块设置:鼠标手势、鼠标控制、窗口管理、触控板手势、切换器、输入法切换、按键映射、截图与增强Finder,以及识别参数和菜单栏等通用偏好;开机自动启动属于系统登录项,不随配置导入导出。")
                                 .font(.system(size: 12.5))
                                 .lineSpacing(3)
                                 .foregroundStyle(Color.mgText2)
@@ -224,7 +224,7 @@ struct GeneralSettingsPage: View {
             Button("导入", role: .destructive) { performImport() }
             Button("取消", role: .cancel) {}
         } message: {
-            Text("会覆盖鼠标手势、窗口管理、按键映射、通用偏好和增强Finder设置。建议先导出当前配置作为备份。")
+            Text("会覆盖鼠标手势、鼠标控制、窗口管理、触控板手势、切换器、输入法切换、按键映射、截图、增强Finder 及通用偏好等全部模块配置。建议先导出当前配置作为备份。")
         }
         .alert("操作失败", isPresented: $showingError) {
             Button("好") {}
