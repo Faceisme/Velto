@@ -45,8 +45,53 @@ enum InputSourceBrowserRuleType: String, Codable, CaseIterable, Hashable {
 
 // MARK: - 规则模型
 
-/// 应用规则:按 bundleIdentifier 绑定目标输入法。匹配键只用 bundleIdentifier,
-/// 其余字段供 UI 展示。
+/// 固定分组角色。当前写死两组:英文组 / 中文组。`role == nil` 的是旧版动态分组
+/// 残留,会被 ensureFixedGroups 归并掉。
+enum InputSourceGroupRole: String, Codable, CaseIterable {
+  case english
+  case chinese
+
+  var displayName: String {
+    switch self {
+    case .english: return "英文组"
+    case .chinese: return "中文组"
+    }
+  }
+}
+
+/// 应用分组:按分组级别绑定一个输入法,分组包含多个应用。改分组输入法时整组
+/// 应用同时生效,避免逐个修改。当前 UI 写死两组(英文组 / 中文组),靠 role 区分。
+struct InputSourceAppGroup: Codable, Identifiable, Equatable {
+  var id: UUID
+  var displayName: String
+  var inputSourceID: String?
+  var bundleIdentifiers: [String] = []
+  var isEnabled: Bool = true
+  /// 固定分组角色;nil = 旧动态分组(待归并)。Optional → 旧数据缺字段解码为 nil。
+  var role: InputSourceGroupRole?
+  var createdAt: Date
+
+  init(
+    id: UUID = UUID(),
+    displayName: String,
+    inputSourceID: String? = nil,
+    bundleIdentifiers: [String] = [],
+    isEnabled: Bool = true,
+    role: InputSourceGroupRole? = nil,
+    createdAt: Date = Date()
+  ) {
+    self.id = id
+    self.displayName = displayName
+    self.inputSourceID = inputSourceID
+    self.bundleIdentifiers = bundleIdentifiers
+    self.isEnabled = isEnabled
+    self.role = role
+    self.createdAt = createdAt
+  }
+}
+
+/// 应用规则(兼容旧架构):按 bundleIdentifier 绑定目标输入法。
+/// 新配置优先走 appGroups;升级时自动把 appRules 迁移成分组。
 struct InputSourceAppRule: Codable, Identifiable, Equatable {
   var id: UUID
   var bundleIdentifier: String
@@ -125,6 +170,9 @@ struct InputSourceSwitchPreferences: Codable, Equatable {
   var cjkFixStrategy: InputSourceCJKFixStrategy = .previousInputSourceShortcut
   /// 启用了 URL 检测的浏览器 bundle id 集合。
   var enabledBrowserBundleIDs: Set<String> = []
+  /// 应用分组(新架构):按分组管理应用,一个分组一个输入法。
+  var appGroups: [InputSourceAppGroup] = []
+  /// 应用规则(兼容旧架构):新配置优先走 appGroups,升级时自动迁移。
   var appRules: [InputSourceAppRule] = []
   var browserRules: [InputSourceBrowserRule] = []
 
@@ -143,7 +191,58 @@ struct InputSourceSwitchPreferences: Codable, Equatable {
     cjkFixEnabled = try c.decodeIfPresent(Bool.self, forKey: .cjkFixEnabled) ?? d.cjkFixEnabled
     cjkFixStrategy = try c.decodeIfPresent(InputSourceCJKFixStrategy.self, forKey: .cjkFixStrategy) ?? d.cjkFixStrategy
     enabledBrowserBundleIDs = try c.decodeIfPresent(Set<String>.self, forKey: .enabledBrowserBundleIDs) ?? d.enabledBrowserBundleIDs
+    appGroups = try c.decodeIfPresent([InputSourceAppGroup].self, forKey: .appGroups) ?? d.appGroups
     appRules = try c.decodeIfPresent([InputSourceAppRule].self, forKey: .appRules) ?? d.appRules
     browserRules = try c.decodeIfPresent([InputSourceBrowserRule].self, forKey: .browserRules) ?? d.browserRules
+  }
+}
+
+// MARK: - 固定两分组的归一化
+
+extension InputSourceSwitchPreferences {
+  /// 把分组规整成「写死的两组:英文组 + 中文组」。幂等,返回是否有改动(供调用方
+  /// 决定是否写回,避免无谓保存)。
+  ///
+  /// 归并来源(都默认并入中文组,英文组留空待用户分配 —— 老配置基本是中文输入法):
+  ///   - 旧「逐应用规则」appRules;
+  ///   - 旧版动态分组(role == nil)的成员。
+  /// 候选输入法取第一个非空的(旧规则/旧分组的 inputSourceID)填给中文组。
+  /// 已存在的英文组 / 中文组(role 命中)保留其 id / 成员 / 输入法,只统一显示名。
+  @discardableResult
+  mutating func ensureFixedGroups() -> Bool {
+    let before = appGroups
+    let beforeRules = appRules
+
+    var english = appGroups.first { $0.role == .english }
+      ?? InputSourceAppGroup(displayName: InputSourceGroupRole.english.displayName, role: .english)
+    var chinese = appGroups.first { $0.role == .chinese }
+      ?? InputSourceAppGroup(displayName: InputSourceGroupRole.chinese.displayName, role: .chinese)
+    english.displayName = InputSourceGroupRole.english.displayName
+    chinese.displayName = InputSourceGroupRole.chinese.displayName
+    english.isEnabled = true
+    chinese.isEnabled = true
+
+    // 收集待归并的旧成员 + 候选输入法。
+    var legacyBundleIDs: [String] = []
+    var legacySource: String? = nil
+    for rule in appRules where rule.isEnabled {
+      legacyBundleIDs.append(rule.bundleIdentifier)
+      if legacySource == nil { legacySource = rule.inputSourceID }
+    }
+    for g in appGroups where g.role == nil {
+      legacyBundleIDs.append(contentsOf: g.bundleIdentifiers)
+      if legacySource == nil { legacySource = g.inputSourceID }
+    }
+
+    // 旧成员并入中文组(去重,且不抢已在英文组里的)。
+    let inEnglish = Set(english.bundleIdentifiers)
+    for bid in legacyBundleIDs where !inEnglish.contains(bid) && !chinese.bundleIdentifiers.contains(bid) {
+      chinese.bundleIdentifiers.append(bid)
+    }
+    if chinese.inputSourceID == nil { chinese.inputSourceID = legacySource }
+
+    appGroups = [english, chinese]
+    appRules = []
+    return appGroups != before || beforeRules != appRules
   }
 }

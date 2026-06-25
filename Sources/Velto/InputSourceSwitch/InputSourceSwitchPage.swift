@@ -20,7 +20,11 @@ struct InputSourceSwitchPage: View {
 
   @State private var segment: Segment = .general
   @State private var editingBrowserRule: InputSourceBrowserRule?
-  @State private var showAppPicker = false
+  /// 「添加应用」选择器:用独立 Bool 控制展示 + 单独记目标分组角色。绝不用
+  /// `isPresented: Binding(get: target != nil)` 那种派生绑定 —— 它会在 fileImporter
+  /// 回调读取 target 之前就把 target 清空,导致选了 App 却加不进去。
+  @State private var appImporterPresented = false
+  @State private var importTargetRole: InputSourceGroupRole?
   @State private var sources = InputSourceCatalog.all()
   @State private var installedBrowsers = SupportedBrowserCatalog.installed()
 
@@ -100,40 +104,102 @@ struct InputSourceSwitchPage: View {
     }
   }
 
-  // MARK: - 应用规则
+  // MARK: - 应用规则（写死两组:英文组 / 中文组,并排两列)
 
   private var appRulesGroup: some View {
-    VStack(alignment: .leading, spacing: 10) {
-      HStack {
-        Spacer()
-        Button {
-          showAppPicker = true
-        } label: { Label("从应用选择", systemImage: "plus") }
-          .buttonStyle(MGSecondaryButtonStyle(foreground: .mgAccent))
-      }
-      GroupCard(radius: MGRadius.cardLg) {
-        VStack(spacing: 0) {
-          let rules = store.preferences.inputSourceSwitch.appRules
-          if rules.isEmpty {
-            emptyHint("还没有应用规则。点右上角「从应用选择」添加。")
-          }
-          ForEach(rules) { rule in
-            ruleRow(
-              title: rule.displayName, subtitle: rule.bundleIdentifier,
-              icon: { AnyView(AppRuleIcon(rule: rule)) },
-              isEnabled: rule.isEnabled,
-              sourceID: rule.inputSourceID,
-              showDivider: rule.id != rules.first?.id,
-              onToggle: { v in updateAppRule(rule.id) { $0.isEnabled = v } },
-              onPick: { id in updateAppRule(rule.id) { $0.inputSourceID = id } },
-              onDelete: { deleteAppRule(rule.id) }
-            )
-          }
-        }
+    VStack(alignment: .leading, spacing: 14) {
+      sectionLabel("把应用分到中文组 / 英文组,按组指定输入法 —— 改一次,整组生效。")
+      HStack(alignment: .top, spacing: 16) {
+        groupColumn(role: .chinese)
+        groupColumn(role: .english)
       }
     }
-    .fileImporter(isPresented: $showAppPicker, allowedContentTypes: [.application]) { result in
-      if case .success(let url) = result { addAppRule(fromAppAt: url) }
+    .fileImporter(
+      isPresented: $appImporterPresented,
+      allowedContentTypes: [.application],
+      allowsMultipleSelection: true
+    ) { result in
+      let role = importTargetRole
+      importTargetRole = nil
+      if case .success(let urls) = result, let role {
+        for url in urls { addAppToGroup(fromAppAt: url, role: role) }
+      }
+    }
+    .onAppear { ensureFixedGroups() }
+  }
+
+  /// 一列 = 一个固定分组(英文组 / 中文组)。
+  private func groupColumn(role: InputSourceGroupRole) -> some View {
+    let group = store.preferences.inputSourceSwitch.appGroups.first { $0.role == role }
+    let members = group?.bundleIdentifiers ?? []
+    return GroupCard(radius: MGRadius.cardLg) {
+      VStack(spacing: 0) {
+        // 组头:固定名 + 应用数 + 分组级输入法。
+        HStack(alignment: .center, spacing: 12) {
+          ActionIcon(systemName: role == .english ? "a.square" : "character.bubble")
+          VStack(alignment: .leading, spacing: 2) {
+            Text(role.displayName)
+              .font(.system(size: 14, weight: .semibold)).foregroundStyle(Color.mgText1)
+            Text("\(members.count) 个应用")
+              .font(.system(size: 12)).foregroundStyle(Color.mgText2)
+          }
+          Spacer(minLength: 8)
+          MGMenuPicker(
+            selection: Binding(
+              get: { group?.inputSourceID ?? "" },
+              set: { updateGroupSource(role: role, $0.isEmpty ? nil : $0) }
+            ),
+            options: [MGMenuOption("", "不指定")] + sources.map { MGMenuOption($0.id, $0.localizedName) },
+            minWidth: 120
+          )
+        }
+        .padding(.horizontal, 16).padding(.vertical, 14)
+
+        ForEach(members, id: \.self) { bid in
+          memberRow(role: role, bundleID: bid)
+        }
+        if members.isEmpty {
+          Rectangle().fill(Color.mgHair).frame(height: 0.5)
+          Text("还没有应用,点下方「添加应用」。")
+            .font(.system(size: 12)).foregroundStyle(Color.mgText3)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 16).padding(.vertical, 12)
+        }
+
+        Rectangle().fill(Color.mgHair).frame(height: 0.5)
+        HStack {
+          Button {
+            importTargetRole = role
+            appImporterPresented = true
+          } label: { Label("添加应用", systemImage: "plus") }
+            .buttonStyle(MGPlainButtonStyle(foreground: .mgAccent))
+          Spacer()
+        }
+        .padding(.horizontal, 16).padding(.vertical, 12)
+      }
+    }
+    .frame(maxWidth: .infinity, alignment: .top)
+  }
+
+  /// 成员应用行:图标 + 名称 + bundleId + 移出分组。
+  private func memberRow(role: InputSourceGroupRole, bundleID: String) -> some View {
+    VStack(spacing: 0) {
+      Rectangle().fill(Color.mgHair).frame(height: 0.5)
+      HStack(alignment: .center, spacing: 12) {
+        BundleAppIcon(bundleID: bundleID)
+        VStack(alignment: .leading, spacing: 2) {
+          Text(appDisplayName(forBundleID: bundleID))
+            .font(.system(size: 13, weight: .medium)).foregroundStyle(Color.mgText1)
+            .lineLimit(1)
+          Text(bundleID).font(.system(size: 11)).foregroundStyle(Color.mgText2).lineLimit(1)
+        }
+        Spacer(minLength: 8)
+        Button { removeAppFromGroup(bundleID, role: role) } label: {
+          Image(systemName: "minus.circle")
+        }
+        .buttonStyle(MGPlainButtonStyle(foreground: .mgText3))
+      }
+      .padding(.horizontal, 16).padding(.vertical, 10)
     }
   }
 
@@ -351,29 +417,57 @@ struct InputSourceSwitchPage: View {
     )
   }
 
-  // MARK: - 规则增删改
+  // MARK: - 固定分组操作
 
-  private func addAppRule(fromAppAt url: URL) {
-    guard let bundle = Bundle(url: url), let bid = bundle.bundleIdentifier else { return }
-    let name = (bundle.infoDictionary?["CFBundleName"] as? String) ?? url.deletingPathExtension().lastPathComponent
-    store.updatePreferences { p in
-      guard !p.inputSourceSwitch.appRules.contains(where: { $0.bundleIdentifier == bid }) else { return }
-      p.inputSourceSwitch.appRules.append(InputSourceAppRule(
-        bundleIdentifier: bid, displayName: name, bundlePath: url.path
-      ))
-    }
+  /// 进入页时把分组规整成固定两组(英文组 / 中文组),仅在尚未规整时写回。
+  private func ensureFixedGroups() {
+    let p = store.preferences.inputSourceSwitch
+    let alreadyFixed = p.appRules.isEmpty
+      && p.appGroups.count == 2
+      && p.appGroups.contains { $0.role == .english }
+      && p.appGroups.contains { $0.role == .chinese }
+      && !p.appGroups.contains { $0.role == nil }
+    guard !alreadyFixed else { return }
+    store.updatePreferences { $0.inputSourceSwitch.ensureFixedGroups() }
   }
 
-  private func updateAppRule(_ id: UUID, _ mutate: (inout InputSourceAppRule) -> Void) {
+  private func updateGroup(role: InputSourceGroupRole, _ mutate: (inout InputSourceAppGroup) -> Void) {
     store.updatePreferences { p in
-      if let idx = p.inputSourceSwitch.appRules.firstIndex(where: { $0.id == id }) {
-        mutate(&p.inputSourceSwitch.appRules[idx])
+      if let i = p.inputSourceSwitch.appGroups.firstIndex(where: { $0.role == role }) {
+        mutate(&p.inputSourceSwitch.appGroups[i])
       }
     }
   }
 
-  private func deleteAppRule(_ id: UUID) {
-    store.updatePreferences { $0.inputSourceSwitch.appRules.removeAll { $0.id == id } }
+  private func updateGroupSource(role: InputSourceGroupRole, _ src: String?) {
+    updateGroup(role: role) { $0.inputSourceID = src }
+  }
+
+  private func removeAppFromGroup(_ bundleID: String, role: InputSourceGroupRole) {
+    updateGroup(role: role) { $0.bundleIdentifiers.removeAll { $0 == bundleID } }
+  }
+
+  /// 加 App 到指定角色的分组。单一归属:先从两组都移除该 bundleId,再加入目标组,
+  /// 避免一个 App 同时落在两组导致匹配歧义。
+  private func addAppToGroup(fromAppAt url: URL, role: InputSourceGroupRole) {
+    guard let bundle = Bundle(url: url), let bid = bundle.bundleIdentifier else { return }
+    store.updatePreferences { p in
+      for i in p.inputSourceSwitch.appGroups.indices {
+        p.inputSourceSwitch.appGroups[i].bundleIdentifiers.removeAll { $0 == bid }
+      }
+      if let i = p.inputSourceSwitch.appGroups.firstIndex(where: { $0.role == role }) {
+        p.inputSourceSwitch.appGroups[i].bundleIdentifiers.append(bid)
+      }
+    }
+  }
+
+  /// 由 bundleId 解析友好显示名(取不到就回退 bundleId)。
+  private func appDisplayName(forBundleID bundleID: String) -> String {
+    guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID),
+          let b = Bundle(url: url) else { return bundleID }
+    return (b.infoDictionary?["CFBundleDisplayName"] as? String)
+      ?? (b.infoDictionary?["CFBundleName"] as? String)
+      ?? url.deletingPathExtension().lastPathComponent
   }
 
   private func updateBrowserRule(_ id: UUID, _ mutate: (inout InputSourceBrowserRule) -> Void) {
@@ -395,8 +489,9 @@ struct InputSourceSwitchPage: View {
   }
 }
 
-private struct AppRuleIcon: View {
-  let rule: InputSourceAppRule
+/// 分组内成员图标 —— 仅靠 bundleId 解析(分组只存 bundleId,不存路径)。
+private struct BundleAppIcon: View {
+  let bundleID: String
   @State private var icon: NSImage?
 
   var body: some View {
@@ -415,27 +510,18 @@ private struct AppRuleIcon: View {
         ActionIcon(systemName: "app")
       }
     }
-    .onAppear(perform: loadIconIfNeeded)
-    .onChange(of: rule.bundleIdentifier) { _, _ in icon = loadIcon() }
-    .onChange(of: rule.bundlePath) { _, _ in icon = loadIcon() }
-  }
-
-  private func loadIconIfNeeded() {
-    guard icon == nil else { return }
-    icon = loadIcon()
+    .onAppear { if icon == nil { icon = loadIcon() } }
+    .onChange(of: bundleID) { _, _ in icon = loadIcon() }
   }
 
   private func loadIcon() -> NSImage? {
-    if let bundlePath = rule.bundlePath,
-       FileManager.default.fileExists(atPath: bundlePath) {
-      return NSWorkspace.shared.icon(forFile: bundlePath)
+    guard let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else {
+      return nil
     }
-    if let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: rule.bundleIdentifier) {
-      return NSWorkspace.shared.icon(forFile: appURL.path)
-    }
-    return nil
+    return NSWorkspace.shared.icon(forFile: appURL.path)
   }
 }
+
 
 private struct BrowserIcon: View {
   let browser: SupportedBrowser

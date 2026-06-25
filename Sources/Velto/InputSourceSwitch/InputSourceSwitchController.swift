@@ -178,7 +178,14 @@ final class InputSourceSwitchController {
         if let id = rule.inputSourceID { return id }
       }
     }
-    // 应用规则。
+    // 应用分组(新架构,优先):App 属于哪个启用的分组,就用该组的输入法。
+    // 改一个分组的输入法,整组 App 同时生效,无需逐个改。
+    if let group = prefs.appGroups.first(where: {
+      $0.isEnabled && $0.bundleIdentifiers.contains(ctx.bundleID)
+    }), let id = group.inputSourceID {
+      return id
+    }
+    // 应用规则(旧架构兼容:未迁移或迁移残留时仍生效)。
     if let rule = prefs.appRules.first(where: { $0.isEnabled && $0.bundleIdentifier == ctx.bundleID }),
        let id = rule.inputSourceID {
       return id
