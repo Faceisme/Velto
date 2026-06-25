@@ -59,6 +59,9 @@ struct AppPreferences: Codable, Equatable {
     /// 窗口管理(拖窗 / 内容缩放 / 窗口快捷键)总开关。关掉只停这三项,不影响手势 /
     /// 鼠标控制。带默认值,旧配置(无此字段)解码时按 `decodeIfPresent` 回退到 true。
     var windowManagementEnabled: Bool = true
+    /// 窗口管理调试日志开关。默认关,关闭时日志路径零文件开销。开启后写
+    /// ~/Library/Logs/Velto/window-management.log,记录 move/resize 目标定位决策。
+    var windowManagementDebugLoggingEnabled: Bool = false
     /// 触控板双指手势总开关。默认关,避免升级后立即接管标题栏滚动。
     var trackpadGesturesEnabled: Bool = false
     /// 触控板手势调试日志开关。默认关,关闭时日志路径零文件开销。
@@ -127,6 +130,7 @@ struct AppPreferences: Codable, Equatable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         gesturesEnabled = try container.decodeIfPresent(Bool.self, forKey: .gesturesEnabled) ?? Self.defaults.gesturesEnabled
         windowManagementEnabled = try container.decodeIfPresent(Bool.self, forKey: .windowManagementEnabled) ?? Self.defaults.windowManagementEnabled
+        windowManagementDebugLoggingEnabled = try container.decodeIfPresent(Bool.self, forKey: .windowManagementDebugLoggingEnabled) ?? Self.defaults.windowManagementDebugLoggingEnabled
         trackpadGesturesEnabled = try container.decodeIfPresent(Bool.self, forKey: .trackpadGesturesEnabled) ?? Self.defaults.trackpadGesturesEnabled
         trackpadGestureDebugLoggingEnabled = try container.decodeIfPresent(Bool.self, forKey: .trackpadGestureDebugLoggingEnabled) ?? Self.defaults.trackpadGestureDebugLoggingEnabled
         showTrail = try container.decodeIfPresent(Bool.self, forKey: .showTrail) ?? Self.defaults.showTrail
@@ -364,6 +368,7 @@ final class GestureStore {
     private func syncDebugLog() {
         DebugLog.setEnabled(preferences.debugLoggingEnabled)
         TrackpadGestureDebugLog.setEnabled(preferences.trackpadGestureDebugLoggingEnabled)
+        WindowManagementDebugLog.setEnabled(preferences.windowManagementDebugLoggingEnabled)
     }
 
     private func notifyChanged(reason: GestureStoreChangeReason) {

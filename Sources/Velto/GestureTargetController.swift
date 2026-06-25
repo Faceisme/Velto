@@ -311,6 +311,14 @@ enum GestureTargetController {
     }
 
     private static func targetUnderPointer(at point: CGPoint) -> GestureExecutionTarget {
+        let result = computeTargetUnderPointer(at: point)
+        if WindowManagementDebugLog.isEnabled {
+            logChosenTarget(point: point, result: result)
+        }
+        return result
+    }
+
+    private static func computeTargetUnderPointer(at point: CGPoint) -> GestureExecutionTarget {
         let candidatePoints = targetLookupPoints(for: point)
 
         // CGWindowListCopyWindowInfo 是跨进程的全窗口枚举,本次手势内最多取一次,
@@ -319,6 +327,10 @@ enum GestureTargetController {
         let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
         let cachedWindowList = (CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]]) ?? []
 
+        if WindowManagementDebugLog.isEnabled {
+            logWindowStack(point: point, candidatePoints: candidatePoints, windowList: cachedWindowList)
+        }
+
         // 鼠标下最上层是 Velto 自己时,**绝对**不能再调
         // AXUIElementCopyElementAtPosition —— 详见 selfPid 注释。
         // 但仍要让 move/resize 对设置窗口本身生效,所以改走
@@ -326,6 +338,9 @@ enum GestureTargetController {
         // kAXWindowsAttribute 枚举的是 NSApp.windows 快照,AppKit 内部 sync 回主线程
         // 读 NSWindow.frame,不会跑 SwiftUI hit-test,在 background queue 上安全。
         if candidatePoints.contains(where: { topmostWindowIsSelf(in: cachedWindowList, at: $0) }) {
+            if WindowManagementDebugLog.isEnabled {
+                WindowManagementDebugLog.log("  最上层是 Velto 自己 → 只匹配自身窗口(self 守护路径)")
+            }
             for p in candidatePoints {
                 if let candidate = selfWindowCandidate(in: cachedWindowList, at: p) {
                     return target(from: candidate)
@@ -344,6 +359,9 @@ enum GestureTargetController {
         }
 
         guard let element = firstElementAtPosition(candidatePoints) else {
+            if WindowManagementDebugLog.isEnabled {
+                WindowManagementDebugLog.log("  AX 命中失败(AXUIElementCopyElementAtPosition 全部返回 nil)→ 回退 CGWindowList")
+            }
             if let candidate = candidateFromWindowList() {
                 return target(from: candidate)
             }
@@ -351,8 +369,16 @@ enum GestureTargetController {
             return fallbackTarget()
         }
 
+        if WindowManagementDebugLog.isEnabled {
+            let elemPid = processIdentifier(for: element)
+            WindowManagementDebugLog.log("  AX 命中: element pid=\(elemPid.map(String.init) ?? "?") app=\"\(elemPid.map { appName(forPid: $0, in: cachedWindowList) } ?? "?")\" role=\(role(of: element) ?? "?")")
+        }
+
         let window = windowElement(containing: element)
         if window == nil, let candidate = candidateFromWindowList() {
+            if WindowManagementDebugLog.isEnabled {
+                WindowManagementDebugLog.log("  AX 命中元素找不到所属窗口 → 回退 CGWindowList: app=\"\(candidate.ownerName)\" pid=\(candidate.pid) frame=\(fmt(candidate.bounds))")
+            }
             return target(from: candidate)
         }
 
@@ -370,6 +396,22 @@ enum GestureTargetController {
                 window: nil,
                 prefersDirectWindowClose: false
             )
+        }
+
+        // 【修复:AX 命中飘到 z 序更低的窗口】
+        // firstElementAtPosition 会依次试 [原始光标点, 转换坐标点]。当目标 app
+        // (如 Telegram)不支持 systemwide AX 命中、在原始点返回 nil 时,会退到
+        // eventLocationToAccessibilityPoint 的转换点 —— 该点经 y 翻转后可能落在屏幕
+        // 另一处、命中 z 序更低、铺满全屏的别家窗口(Claude/Chrome),AX 路径一旦命中
+        // 就短路返回,导致"光标在 Telegram 上却移动了底下的窗口"。
+        // CGWindowList 在**原始光标点**的栈顶才是光标下真正最上层的窗口(与 CGEvent
+        // 同坐标系,权威),据此校正:AX 命中 pid 与栈顶 CG pid 不一致时,以 CG 栈顶为准。
+        if let topCandidate = windowCandidate(in: cachedWindowList, at: point),
+           topCandidate.pid != pid {
+            if WindowManagementDebugLog.isEnabled {
+                WindowManagementDebugLog.log("  ⚠️ AX 命中 pid=\(pid) app=\"\(appName(forPid: pid, in: cachedWindowList))\" 与原始光标点 CG 栈顶 pid=\(topCandidate.pid) app=\"\(topCandidate.ownerName)\" 不一致 → 以 CG 栈顶为准")
+            }
+            return target(from: topCandidate)
         }
 
         let rawApp = NSRunningApplication(processIdentifier: pid)
@@ -754,6 +796,69 @@ enum GestureTargetController {
             window: nil,
             prefersDirectWindowClose: false
         )
+    }
+
+    // MARK: - 调试日志(仅 WindowManagementDebugLog 开启时调用)
+
+    private static func fmt(_ p: CGPoint) -> String { "(\(Int(p.x)),\(Int(p.y)))" }
+    private static func fmt(_ r: CGRect) -> String {
+        "[\(Int(r.minX)),\(Int(r.minY)) \(Int(r.width))×\(Int(r.height))]"
+    }
+
+    private static func appName(forPid pid: pid_t, in windowList: [[String: Any]]) -> String {
+        for info in windowList {
+            if let p = info[kCGWindowOwnerPID as String] as? NSNumber, pid_t(p.intValue) == pid,
+               let name = info[kCGWindowOwnerName as String] as? String, !name.isEmpty {
+                return name
+            }
+        }
+        return NSRunningApplication(processIdentifier: pid)?.localizedName ?? "pid \(pid)"
+    }
+
+    /// 转储光标各查询点下的 layer-0 窗口栈(上→下序),含被尺寸/可见性过滤的项,
+    /// 用来判断"光标下最上层到底是谁"——bug 的第一现场。
+    private static func logWindowStack(
+        point: CGPoint,
+        candidatePoints: [CGPoint],
+        windowList: [[String: Any]]
+    ) {
+        WindowManagementDebugLog.log(
+            "目标定位 @ \(fmt(point)) | 查询点=[\(candidatePoints.map(fmt).joined(separator: " , "))]")
+        for p in candidatePoints {
+            var lines: [String] = []
+            var idx = 0
+            for info in windowList {
+                guard let layer = (info[kCGWindowLayer as String] as? NSNumber)?.intValue, layer == 0,
+                      let bd = info[kCGWindowBounds as String] as? NSDictionary,
+                      let bounds = CGRect(dictionaryRepresentation: bd),
+                      bounds.contains(p) else { continue }
+                let onscreen = (info[kCGWindowIsOnscreen as String] as? Bool) ?? false
+                let alpha = (info[kCGWindowAlpha as String] as? NSNumber)?.doubleValue ?? 0
+                let pidN = (info[kCGWindowOwnerPID as String] as? NSNumber)?.intValue ?? -1
+                let owner = info[kCGWindowOwnerName as String] as? String ?? ""
+                let tooSmall = bounds.width < 40 || bounds.height < 40
+                var flags = ""
+                if pidN == Int(selfPid) { flags += " [self]" }
+                if !onscreen { flags += " [非onscreen]" }
+                if alpha <= 0.01 { flags += " [透明]" }
+                if tooSmall { flags += " [<40被滤]" }
+                lines.append("      #\(idx) app=\"\(owner)\" pid=\(pidN) frame=\(fmt(bounds)) alpha=\(String(format: "%.2f", alpha))\(flags)")
+                idx += 1
+            }
+            WindowManagementDebugLog.log(
+                "  查询点 \(fmt(p)) 命中的 layer0 窗口栈(上→下):\(lines.isEmpty ? " 无" : "\n" + lines.joined(separator: "\n"))")
+        }
+    }
+
+    private static func logChosenTarget(point: CGPoint, result: GestureExecutionTarget) {
+        guard let pid = result.pid else {
+            WindowManagementDebugLog.log("→ 最终目标 @ \(fmt(point)): 无(回退/未命中)")
+            return
+        }
+        let app = NSRunningApplication(processIdentifier: pid)?.localizedName ?? "pid \(pid)"
+        let frameText = result.window.flatMap { frame(of: $0) }.map(fmt) ?? "?"
+        WindowManagementDebugLog.log(
+            "→ 最终目标 @ \(fmt(point)): pid=\(pid) app=\"\(app)\" window=\(result.window == nil ? "nil" : "有") frame=\(frameText)")
     }
 
     private static func role(of element: AXUIElement) -> String? {

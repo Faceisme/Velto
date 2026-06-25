@@ -169,10 +169,16 @@ final class WindowDragController: @unchecked Sendable {
     }
 
     private func beginDrag(mode: DragMode, at location: CGPoint) -> DragSession? {
+        let modeText = mode == .move ? "move" : "resize"
         guard let window = GestureTargetController.windowUnderPointer(at: location),
               let frame = GestureTargetController.frame(ofWindow: window) else {
+            WindowManagementDebugLog.log(
+                "beginDrag(\(modeText)) @ (\(Int(location.x)),\(Int(location.y))): 未拿到窗口/frame → 放弃")
             return nil
         }
+
+        WindowManagementDebugLog.log(
+            "beginDrag(\(modeText)) @ (\(Int(location.x)),\(Int(location.y))): 进入拖动会话,目标窗口 frame=[\(Int(frame.minX)),\(Int(frame.minY)) \(Int(frame.width))×\(Int(frame.height))],光标在窗口内=\(frame.contains(location))")
 
         let dragPoint = initialDragPoint(for: location, in: frame)
         let screenFrame = DisplayCoordinateConverter.visibleAccessibilityFrame(containingEventLocation: location)

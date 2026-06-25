@@ -122,6 +122,35 @@ struct WindowManagementPage: View {
                             )
                         }
                     }
+
+                    // 调试日志开关:即时生效。开启后把 move/resize 的窗口识别决策写入
+                    // ~/Library/Logs/Velto/window-management.log,排查"移动了错误窗口"用。
+                    GroupCard(radius: MGRadius.cardLg) {
+                        HStack(spacing: 10) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("调试日志")
+                                    .font(.mgLabelStrong)
+                                    .foregroundStyle(Color.mgText1)
+                                Text("把移动/缩放时的窗口识别决策写入日志文件,排查「移动了错误窗口」这类问题时开启;反馈问题时附上日志更精准。")
+                                    .font(.mgMeta)
+                                    .foregroundStyle(Color.mgText2)
+                            }
+                            Spacer(minLength: 12)
+                            Toggle("", isOn: Binding(
+                                get: { store.preferences.windowManagementDebugLoggingEnabled },
+                                set: { v in
+                                    store.updatePreferences { $0.windowManagementDebugLoggingEnabled = v }
+                                    WindowManagementDebugLog.setEnabled(v)
+                                }
+                            ))
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .controlSize(.small)
+                            .tint(.mgAccent)
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 14)
+                    }
                 }
                 .padding(.horizontal, 32)
                 .padding(.top, 28)
