@@ -3,13 +3,18 @@ import SwiftUI
 
 // MARK: - GesturesPage (v2)
 //
-// 三段布局:
-//   [SidebarView 220]  |  [List column 360]  |  [Detail + bottom toolbar]
-// 这里只负责 List + Detail + BottomBar 三块,Sidebar 由 SettingsRootView 提供。
+// 顶部分页 [手势 | 设置],下面按分页切换:
+//   手势:[List column 360] | [Detail] + BottomToolbar
+//   设置:本模块自己的 行为 / 识别参数 / 调试(原先散落在「通用设置」里的手势项)
+// Sidebar 由 SettingsRootView 提供。
+
+/// 手势页顶部分页:手势列表编辑 vs. 本模块设置。
+enum GesturesTab: Hashable { case gestures, settings }
 
 struct GesturesPage: View {
     private let store = GestureStore.shared
 
+    @State private var tab: GesturesTab = .gestures
     @State private var draftGestures: [GestureCommand] = []
     @State private var didLoad = false
     @State private var selectedID: UUID?
@@ -77,31 +82,39 @@ struct GesturesPage: View {
     var body: some View {
         let validation = saveValidation
         return VStack(spacing: 0) {
-            HStack(spacing: 0) {
-                listColumn
-                    .frame(width: 360)
-                    .background(Color.clear)
-                    .overlay(
-                        Rectangle()
-                            .fill(Color.mgHair)
-                            .frame(width: 1),
-                        alignment: .trailing
-                    )
+            topTabBar
 
-                detailColumn
+            if tab == .gestures {
+                VStack(spacing: 0) {
+                    HStack(spacing: 0) {
+                        listColumn
+                            .frame(width: 360)
+                            .background(Color.clear)
+                            .overlay(
+                                Rectangle()
+                                    .fill(Color.mgHair)
+                                    .frame(width: 1),
+                                alignment: .trailing
+                            )
+
+                        detailColumn
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .background(Color.clear)
+                    }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(Color.clear)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            BottomToolbar(
-                hasUnsavedChanges: hasUnsavedChanges,
-                statusMessage: statusMessage,
-                saveBlockReason: validation.block,
-                saveWarning: validation.warning,
-                onDiscard: { reloadFromStore() },
-                onSave: saveChanges
-            )
+                    BottomToolbar(
+                        hasUnsavedChanges: hasUnsavedChanges,
+                        statusMessage: statusMessage,
+                        saveBlockReason: validation.block,
+                        saveWarning: validation.warning,
+                        onDiscard: { reloadFromStore() },
+                        onSave: saveChanges
+                    )
+                }
+            } else {
+                settingsTab
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear(perform: loadDraftIfNeeded)
@@ -112,6 +125,30 @@ struct GesturesPage: View {
                 reloadFromStore(silent: true)
             default: break
             }
+        }
+    }
+
+    // MARK: Top tab bar
+
+    /// 顶部 [手势 | 设置] 分页条:左对齐分段控件 + 0.5px 底分隔线。
+    private var topTabBar: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 0) {
+                MGSegmentedPicker(
+                    selection: $tab,
+                    options: [
+                        MGSegmentedOption(.gestures, "手势"),
+                        MGSegmentedOption(.settings, "设置")
+                    ]
+                )
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 11)
+
+            Rectangle()
+                .fill(Color.mgHair)
+                .frame(height: 0.5)
         }
     }
 
@@ -148,7 +185,7 @@ struct GesturesPage: View {
                 .buttonStyle(MGPrimaryButtonStyle(height: 30, hPad: 13, font: .mgButtonSm))
             }
             .padding(.horizontal, 20)
-            .padding(.top, 22)
+            .padding(.top, 18)
             .padding(.bottom, 14)
 
             // List
@@ -168,37 +205,138 @@ struct GesturesPage: View {
                 .padding(.horizontal, 12)
                 .padding(.bottom, 14)
             }
+        }
+    }
 
-            // 模块级调试开关:只点亮手势日志(velto-debug.jsonl),不影响其它模块。
-            HStack(spacing: 8) {
-                Image(systemName: "ladybug")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Color.mgText2)
-                    .frame(width: 30, height: 30)
-                    .background(Color.mgAccentSoft)
-                    .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("调试日志")
-                        .font(.mgLabelStrong)
-                        .foregroundStyle(Color.mgText1)
-                    Text("记录手势轨迹/匹配诊断,排查时打开")
-                        .font(.mgMeta)
-                        .foregroundStyle(Color.mgText2)
+    // MARK: Settings tab
+    //
+    // 本模块自己的偏好:从前散落在「通用设置」里的手势项(行为 + 识别参数)
+    // 以及原先挂在列表底部的调试开关,统一收到这里。直接写 store(无草稿/保存)。
+    private var settingsTab: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 22) {
+                PageHeader(
+                    tag: "Gesture",
+                    title: "手势设置",
+                    subtitle: "行为、识别参数与调试,仅作用于鼠标手势模块。"
+                )
+
+                // 行为
+                settingsSection("行为") {
+                    GroupCard {
+                        VStack(spacing: 0) {
+                            GroupRow(
+                                label: "启用手势监听",
+                                sub: "关闭后右键手势暂停,不影响其它模块"
+                            ) {
+                                Toggle("", isOn: Binding(
+                                    get: { store.preferences.gesturesEnabled },
+                                    set: { v in store.updatePreferences { $0.gesturesEnabled = v } }
+                                ))
+                                .labelsHidden()
+                                .toggleStyle(.switch)
+                                .controlSize(.small)
+                                .tint(.mgAccent)
+                            }
+                            GroupRow(label: "绘制时显示轨迹", showDivider: true) {
+                                Toggle("", isOn: Binding(
+                                    get: { store.preferences.showTrail },
+                                    set: { v in store.updatePreferences { $0.showTrail = v } }
+                                ))
+                                .labelsHidden()
+                                .toggleStyle(.switch)
+                                .controlSize(.small)
+                                .tint(.mgAccent)
+                            }
+                            GroupRow(
+                                label: "乱划取消手势",
+                                sub: "手势途中来回乱划几下即可取消,无需等待超时",
+                                showDivider: true
+                            ) {
+                                Toggle("", isOn: Binding(
+                                    get: { store.preferences.scribbleCancelEnabled },
+                                    set: { v in store.updatePreferences { $0.scribbleCancelEnabled = v } }
+                                ))
+                                .labelsHidden()
+                                .toggleStyle(.switch)
+                                .controlSize(.small)
+                                .tint(.mgAccent)
+                            }
+                        }
+                    }
                 }
-                Spacer(minLength: 8)
-                Toggle("", isOn: Binding(
-                    get: { store.preferences.debugLoggingEnabled },
-                    set: { v in store.updatePreferences { $0.debugLoggingEnabled = v } }
-                ))
-                .labelsHidden()
-                .toggleStyle(.switch)
-                .controlSize(.small)
-                .tint(.mgAccent)
+
+                // 识别参数
+                settingsSection("识别参数") {
+                    GroupCard {
+                        VStack(spacing: 0) {
+                            GroupRow(
+                                label: "手势超时时长",
+                                sub: "超时未完成的手势会被丢弃"
+                            ) {
+                                HStack(spacing: 6) {
+                                    MGStepperField(
+                                        value: Binding(
+                                            get: { store.preferences.gestureTimeoutSeconds },
+                                            set: { v in store.updatePreferences { $0.gestureTimeoutSeconds = min(max(v, 0.5), 10) } }
+                                        ),
+                                        range: 0.5...10.0,
+                                        step: 0.5
+                                    )
+                                    Text("秒")
+                                        .font(.mgBody)
+                                        .foregroundStyle(Color.mgText2)
+                                }
+                            }
+                            GroupRow(label: "手势作用目标", showDivider: true) {
+                                MGSegmentedPicker(
+                                    selection: Binding(
+                                        get: { store.preferences.gestureTargetPolicy },
+                                        set: { v in store.updatePreferences { $0.gestureTargetPolicy = v } }
+                                    ),
+                                    options: [
+                                        MGSegmentedOption(.windowUnderPointer, "鼠标指针下方"),
+                                        MGSegmentedOption(.activeWindow, "活动窗口")
+                                    ]
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // 调试
+                settingsSection("调试") {
+                    GroupCard {
+                        GroupRow(
+                            label: "调试日志",
+                            sub: "记录手势轨迹/匹配诊断,排查时打开"
+                        ) {
+                            Toggle("", isOn: Binding(
+                                get: { store.preferences.debugLoggingEnabled },
+                                set: { v in store.updatePreferences { $0.debugLoggingEnabled = v } }
+                            ))
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .controlSize(.small)
+                            .tint(.mgAccent)
+                        }
+                    }
+                }
             }
-            .padding(14)
-            .veltoGlassPanel(radius: MGRadius.cardSm)
-            .padding(.horizontal, 14)
-            .padding(.bottom, 14)
+            .padding(.horizontal, 32)
+            .padding(.top, 28)
+            .padding(.bottom, 28)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    /// section 小标题 + 内容的竖排容器(与「通用设置」一致的留白)。
+    @ViewBuilder
+    private func settingsSection<C: View>(_ title: String, @ViewBuilder content: () -> C) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            MGSectionLabel(text: title)
+            content()
         }
     }
 

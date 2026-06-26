@@ -25,7 +25,7 @@ struct GeneralSettingsPage: View {
                 PageHeader(
                     tag: "General",
                     title: "通用设置",
-                    subtitle: "调整应用行为、识别参数和数据备份。"
+                    subtitle: "调整应用行为与数据备份。"
                 )
 
                 // 行为
@@ -33,17 +33,7 @@ struct GeneralSettingsPage: View {
                     MGSectionLabel(text: "行为")
                     GroupCard {
                         VStack(spacing: 0) {
-                            GroupRow(label: "启用手势监听") {
-                                Toggle("", isOn: Binding(
-                                    get: { store.preferences.gesturesEnabled },
-                                    set: { v in store.updatePreferences { $0.gesturesEnabled = v } }
-                                ))
-                                .labelsHidden()
-                                .toggleStyle(.switch)
-                                .controlSize(.small)
-                                .tint(.mgAccent)
-                            }
-                            GroupRow(label: "开机自动启动", showDivider: true) {
+                            GroupRow(label: "开机自动启动") {
                                 Toggle("", isOn: Binding(
                                     get: { LoginItemManager.isEnabled },
                                     set: { enabled in
@@ -69,69 +59,6 @@ struct GeneralSettingsPage: View {
                                 .toggleStyle(.switch)
                                 .controlSize(.small)
                                 .tint(.mgAccent)
-                            }
-                            GroupRow(label: "绘制时显示轨迹", showDivider: true) {
-                                Toggle("", isOn: Binding(
-                                    get: { store.preferences.showTrail },
-                                    set: { v in store.updatePreferences { $0.showTrail = v } }
-                                ))
-                                .labelsHidden()
-                                .toggleStyle(.switch)
-                                .controlSize(.small)
-                                .tint(.mgAccent)
-                            }
-                            GroupRow(
-                                label: "乱划取消手势",
-                                sub: "手势途中来回乱划几下即可取消,无需等待超时",
-                                showDivider: true
-                            ) {
-                                Toggle("", isOn: Binding(
-                                    get: { store.preferences.scribbleCancelEnabled },
-                                    set: { v in store.updatePreferences { $0.scribbleCancelEnabled = v } }
-                                ))
-                                .labelsHidden()
-                                .toggleStyle(.switch)
-                                .controlSize(.small)
-                                .tint(.mgAccent)
-                            }
-                        }
-                    }
-                }
-
-                // 识别参数
-                VStack(alignment: .leading, spacing: 0) {
-                    MGSectionLabel(text: "识别参数")
-                    GroupCard {
-                        VStack(spacing: 0) {
-                            GroupRow(
-                                label: "手势超时时长",
-                                sub: "超时未完成的手势会被丢弃"
-                            ) {
-                                HStack(spacing: 6) {
-                                    MGStepperField(
-                                        value: Binding(
-                                            get: { store.preferences.gestureTimeoutSeconds },
-                                            set: { v in store.updatePreferences { $0.gestureTimeoutSeconds = min(max(v, 0.5), 10) } }
-                                        ),
-                                        range: 0.5...10.0,
-                                        step: 0.5
-                                    )
-                                    Text("秒")
-                                        .font(.mgBody)
-                                        .foregroundStyle(Color.mgText2)
-                                }
-                            }
-                            GroupRow(label: "手势作用目标", showDivider: true) {
-                                MGSegmentedPicker(
-                                    selection: Binding(
-                                        get: { store.preferences.gestureTargetPolicy },
-                                        set: { v in store.updatePreferences { $0.gestureTargetPolicy = v } }
-                                    ),
-                                    options: [
-                                        MGSegmentedOption(.windowUnderPointer, "鼠标指针下方"),
-                                        MGSegmentedOption(.activeWindow, "活动窗口")
-                                    ]
-                                )
                             }
                         }
                     }
