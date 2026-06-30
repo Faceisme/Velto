@@ -108,28 +108,22 @@ final class InputSourceSwitchController {
     }
     forceReapply = false
 
-    // 一进入新上下文就作废上一上下文排定的延时 select(无论本次走切换、跳过还是无目标)。
-    // 否则会出现:刚切到 WeChat 排了豆包(延 0.15s),19ms 后又切回 Claude 走「非 CJKV 跳过」
-    // 分支直接 return,没取消那笔豆包 → 0.15s 后豆包在 Claude 里触发(豆包→US 失败的真凶)。
-    // 切换分支稍后的 select() 自身也会 cancel,但跳过 / 无目标分支不会,故在此统一兜底。
+    // 一进入新上下文就作废上一上下文 CJKV 修复排定的延时步骤(bounce / 热键 / Command / 兜底
+    // 重选)。否则刚切到 WeChat 排了豆包修复序列,立刻又切回 Claude,那串延时步骤会在 Claude
+    // 里继续跑、把输入法切成豆包。切换分支稍后的 select() 自身也会 cancel,但「无目标」分支会
+    // 直接 return 不经过 select(),故在此统一兜底。(对齐 ISP:switchToInputSource 开头也先 cancel。)
     InputSourceSwitchSelector.cancelPending()
 
     guard let targetID = decideTarget(for: ctx, prefs: prefs) else {
       InputSourceSwitchDebugLog.log("context=\(ctx.contextID) → 无目标,保持当前")
       return
     }
-    // 进入上下文时无条件重新应用(对齐 IPS:App 激活总是 re-select)。
-    // 关键:CJKV 输入法即便"当前已是它",菜单栏虽显示该 IME,内部仍可能停在英文子模式
-    // (半切换),而 TIS API 读不到中/英子模式。是否额外修复由 cjkFixEnabled/strategy 决定。
-    // 非 CJKV(US 等无子模式的拉丁键盘)若已是当前,重选无意义,跳过以免刷屏 / 多余抑制。
-    let targetIsCJKV = InputSourceCatalog.all().first { $0.id == targetID }?.isCJKV ?? false
-    let alreadyCurrent = targetID == InputSourceCatalog.current()?.id
-    if alreadyCurrent, !targetIsCJKV {
-      InputSourceSwitchDebugLog.log("context=\(ctx.contextID) → 目标=当前(\(targetID)),非 CJKV 跳过")
-      return
-    }
-    // CJKV 已是当前仍重选:对齐 ISP「进入上下文必 re-select」,扶正可能停在英文子模式的半切换。
-    InputSourceSwitchDebugLog.log("context=\(ctx.contextID) → 应用 \(targetID)\(alreadyCurrent && targetIsCJKV ? "(CJKV 重应用)" : "")")
+    // 对齐 ISP(IndicatorVM.watchState 的 .appChanged):进入新上下文、算出目标键盘后,
+    // **无条件切一次**,绝不判断"当前已是它就跳过"。这是 ISP 从不出问题的关键 —— 哪怕 TIS
+    // 报当前已是 US,豆包等 CJKV IME 仍可能在英文子模式下"伪装"成底层 US、或激活后才把这个
+    // App 顶回中文;唯有硬切一次 TISSelectInputSource 才能把它真正顶掉。同一上下文的重复评估
+    // 早已被上面的 isSameContext 拦掉,这里不会对同一个 App 反复切。
+    InputSourceSwitchDebugLog.log("context=\(ctx.contextID) → 应用 \(targetID)")
     isApplyingProgrammaticSwitch = true
     programmaticSwitchGeneration += 1
     let generation = programmaticSwitchGeneration

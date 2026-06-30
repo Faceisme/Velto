@@ -27,13 +27,6 @@ enum InputSourceSwitchSelector {
   private static let temporaryWindowDuration: TimeInterval = 0.08
   private static let temporaryWindowActivationSuppressionDuration: TimeInterval = 0.5
 
-  /// 进入新上下文后,延这一拍再切。didActivate 触发的当下,前一个重型 IME(豆包等)往往
-  /// 还没释放、新 App 的 TSM 输入上下文也没就绪,此刻同步调 TISSelectInputSource 会"假成功"
-  /// (返回 noErr 但实际没切过去,停在旧输入法)。等激活 settle 后只切一次即可,既不需要二次
-  /// 重选(二次 select 会把 CJKV 顶进英文子模式 → 半切换),也避免了原来的假成功。
-  /// 0.15s 取自日志经验:旧版"切完 0.15s 重选一次必成功",说明这个时点系统已就绪。
-  private static let settleDelay: TimeInterval = 0.15
-
   @MainActor private static var pendingWorkItems: [DispatchWorkItem] = []
   @MainActor private static var temporaryWindow: NSWindow?
   @MainActor private static var temporaryWindowPreviousApp: NSRunningApplication?
@@ -81,11 +74,12 @@ enum InputSourceSwitchSelector {
     }
 
     let isCJKV = InputSourceCatalog.all().first { $0.id == persistentID }?.isCJKV ?? false
-    // 非 CJKV,或用户关闭了修复:延一拍后单次 TISSelectInputSource(理由见 settleDelay)。
-    // 单次切换对齐 InputSourcePro 的无修复路径:绝不二次重选 —— 二次 select 会把豆包等 CJKV
-    // 顶进英文子模式(菜单栏显示豆包、实际打英文的半切换),且 TIS 读不到中/英子模式无从校验。
+    // 非 CJKV,或用户关闭了修复:当场单次 TISSelectInputSource(对齐 ISP switchToTarget 的无修复
+    // 路径,无延时、不二次重选)。单次切换对齐 InputSourcePro:绝不二次重选 —— 二次 select 会把
+    // 豆包等 CJKV 顶进英文子模式(菜单栏显示豆包、实际打英文的半切换),且 TIS 读不到中/英子模式
+    // 无从校验。豆包等重型 IME 激活早期的"假成功"由 CJKV 修复里的 0.2s 校验兜底处理,不靠延时。
     guard cjkFixEnabled, isCJKV else {
-      return plainSelectDeferred(id: persistentID)
+      return plainSelect(target, id: persistentID)
     }
 
     switch cjkFixStrategy {
@@ -105,23 +99,6 @@ enum InputSourceSwitchSelector {
       return false
     }
     InputSourceSwitchDebugLog.log("select OK id=\(id)")
-    return true
-  }
-
-  /// 延时单次切换。等待 settleDelay 让前一个 IME 释放、新 App 上下文就绪后再切一次。
-  /// 走 scheduleWorkItem 排队 —— 下一次 select() 开头的 cancelPendingWorkItems() 会取消这笔
-  /// 尚未触发的延时切,快速切换时只有最后一次真正落地,期间不产生任何多余的 select。
-  /// 句柄按 ID 在闭包内重新解析,避免把非 Sendable 的 TISInputSource 跨异步边界捕获(Swift 6)。
-  @MainActor
-  @discardableResult
-  private static func plainSelectDeferred(id: String) -> Bool {
-    scheduleWorkItem(after: settleDelay) {
-      guard let source = InputSourceCatalog.tisInputSource(forID: id) else {
-        InputSourceSwitchDebugLog.log("select FAILED(延时): 找不到输入源 id=\(id)")
-        return
-      }
-      _ = plainSelect(source, id: id)
-    }
     return true
   }
 
