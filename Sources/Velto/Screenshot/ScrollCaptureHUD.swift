@@ -104,7 +104,7 @@ final class ScrollCaptureHUD: NSWindow {
   private var configuredHint: String {
     let copyName = Self.keyName(for: copyKeyCode)
     let finishKeys = copyKeyCode == 36 ? "Enter" : "Enter/\(copyName)"
-    return "向下滚动目标窗口(滚慢一点)\n"
+    return "匀速向下滚动目标窗口\n"
       + "\(finishKeys) 完成 · \(saveShortcut.displayName) 保存 · "
       + "\(Self.keyName(for: cancelKeyCode)) 取消"
   }
