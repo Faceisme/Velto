@@ -750,6 +750,8 @@ final class ScreenshotOverlayView: NSView {
       delegate?.overlayDidCancel()
     case .save:
       confirm(.save)
+    case .scroll:
+      confirm(.scroll)
     case .copy, .complete:
       confirm(.copy)
     }

@@ -14,6 +14,7 @@ final class ScreenshotSession: ScreenshotOverlayDelegate {
   /// 触发截图前的前台 app;结束时恢复,避免 NSApp.activate 抢占后系统乱提其它窗口。
   private var previousApp: NSRunningApplication?
   private var scrollHUD: ScrollCaptureHUD?
+  private var scrollActionBar: ScrollCaptureActionBar?
   private var scrollController: ScrollCaptureController?
   private var scrollStartTask: Task<Void, Never>?
   /// 输出失败后保留已定稿长图,让用户可直接重试复制/保存。
@@ -147,6 +148,14 @@ final class ScreenshotSession: ScreenshotOverlayDelegate {
     hud.update(thumbnail: nil, heightPx: 0, hint: "请手动向下滚动  Enter 完成 · 保存 · Esc 取消")
     scrollHUD = hud
 
+    let actionBar = ScrollCaptureActionBar(selectionRect: globalRect, screenFrame: snapshot.frame)
+    actionBar.onFinish = { [weak self] in self?.finishScrollCapture(.copy) }
+    actionBar.onCopy = { [weak self] in self?.finishScrollCapture(.copy) }
+    actionBar.onSave = { [weak self] in self?.finishScrollCapture(.save) }
+    actionBar.onCancel = { [weak self] in self?.cancelScrollCapture() }
+    actionBar.orderFrontRegardless()
+    scrollActionBar = actionBar
+
     let controller = ScrollCaptureController(snapshot: snapshot, captureRect: globalRect)
     scrollController = controller
     controller.onProgress = { [weak self, weak controller] thumbnail, height in
@@ -277,6 +286,12 @@ final class ScreenshotSession: ScreenshotOverlayDelegate {
     scrollHUD?.onSave = nil
     scrollHUD?.onCancel = nil
     scrollHUD = nil
+    scrollActionBar?.orderOut(nil)
+    scrollActionBar?.onFinish = nil
+    scrollActionBar?.onCopy = nil
+    scrollActionBar?.onSave = nil
+    scrollActionBar?.onCancel = nil
+    scrollActionBar = nil
     scrollSnapshot = nil
     scrollRegion = nil
     activeOverlay?.window?.ignoresMouseEvents = false

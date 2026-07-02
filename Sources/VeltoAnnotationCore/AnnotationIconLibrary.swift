@@ -16,6 +16,7 @@ public enum AnnotationIcon: CaseIterable, Sendable {
   case cancel
   case save
   case copy
+  case scrollCapture
   case complete
 }
 
@@ -166,6 +167,22 @@ public enum AnnotationIconLibrary {
         radius: 2
       )
       path.addLine(to: CGPoint(x: 5, y: 15.5))
+
+    case .scrollCapture:
+      // 滚动长截图:页面视窗 + 内容线 + 向下滚动箭头。
+      path.addRoundedRect(
+        in: CGRect(x: 6, y: 4, width: 12, height: 16),
+        cornerWidth: 2, cornerHeight: 2
+      )
+      path.move(to: CGPoint(x: 9, y: 8))
+      path.addLine(to: CGPoint(x: 15, y: 8))
+      path.move(to: CGPoint(x: 9, y: 11))
+      path.addLine(to: CGPoint(x: 15, y: 11))
+      path.move(to: CGPoint(x: 12, y: 13))
+      path.addLine(to: CGPoint(x: 12, y: 19))
+      path.move(to: CGPoint(x: 9, y: 16))
+      path.addLine(to: CGPoint(x: 12, y: 19))
+      path.addLine(to: CGPoint(x: 15, y: 16))
 
     case .complete:
       path.move(to: CGPoint(x: 6, y: 12))

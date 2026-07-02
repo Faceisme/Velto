@@ -6,6 +6,7 @@ enum AnnotationToolbarAction {
   case selectTool(AnnotationTool?)
   case undo
   case redo
+  case scroll
   case cancel
   case save
   case copy
@@ -22,21 +23,30 @@ final class AnnotationToolbarView: NSGlassEffectView {
   var onAction: ((AnnotationToolbarAction) -> Void)?
 
   private let contentStack = NSStackView()
+  private let hoverLabel = AnnotationToolbarHoverLabel()
   private var toolButtons: [AnnotationTool: AnnotationToolbarButton] = [:]
   private var undoButton: AnnotationToolbarButton!
   private var redoButton: AnnotationToolbarButton!
+  private weak var hoveredButton: AnnotationToolbarButton?
 
-  private static let toolOrder: [(AnnotationTool, AnnotationIcon, String)] = [
-    (.rectangle, .rectangle, "矩形"),
-    (.ellipse, .ellipse, "椭圆"),
-    (.line, .line, "直线"),
-    (.arrow, .arrow, "箭头"),
-    (.pen, .pen, "画笔"),
-    (.mosaic, .mosaic, "马赛克"),
-    (.text, .text, "文字"),
-    (.highlight, .highlight, "荧光笔"),
-    (.sequence, .sequence, "序号"),
-    (.crop, .crop, "裁剪(拖拽框选保留区域,导出时生效)"),
+  private struct ToolItem {
+    let tool: AnnotationTool
+    let icon: AnnotationIcon
+    let hoverTitle: String
+    let toolTip: String
+  }
+
+  private static let toolOrder: [ToolItem] = [
+    .init(tool: .rectangle, icon: .rectangle, hoverTitle: "矩形", toolTip: "矩形"),
+    .init(tool: .ellipse, icon: .ellipse, hoverTitle: "椭圆", toolTip: "椭圆"),
+    .init(tool: .line, icon: .line, hoverTitle: "直线", toolTip: "直线"),
+    .init(tool: .arrow, icon: .arrow, hoverTitle: "箭头", toolTip: "箭头"),
+    .init(tool: .pen, icon: .pen, hoverTitle: "画笔", toolTip: "画笔"),
+    .init(tool: .mosaic, icon: .mosaic, hoverTitle: "马赛克", toolTip: "马赛克"),
+    .init(tool: .text, icon: .text, hoverTitle: "文字", toolTip: "文字"),
+    .init(tool: .highlight, icon: .highlight, hoverTitle: "荧光笔", toolTip: "荧光笔"),
+    .init(tool: .sequence, icon: .sequence, hoverTitle: "序号", toolTip: "序号"),
+    .init(tool: .crop, icon: .crop, hoverTitle: "裁剪", toolTip: "裁剪(拖拽框选保留区域,导出时生效)"),
   ]
 
   override init(frame frameRect: NSRect) {
@@ -52,9 +62,32 @@ final class AnnotationToolbarView: NSGlassEffectView {
     fatalError("not implemented")
   }
 
+  override var isHidden: Bool {
+    didSet {
+      if isHidden {
+        dismissHoverTitle()
+      }
+    }
+  }
+
   /// 覆盖父覆盖层的全屏十字光标:工具栏上恢复普通箭头。
   override func resetCursorRects() {
     addCursorRect(bounds, cursor: .arrow)
+  }
+
+  override func viewWillMove(toSuperview newSuperview: NSView?) {
+    if newSuperview == nil {
+      dismissHoverTitle()
+      hoverLabel.removeFromSuperview()
+    }
+    super.viewWillMove(toSuperview: newSuperview)
+  }
+
+  override func layout() {
+    super.layout()
+    if let hoveredButton {
+      positionHoverLabel(for: hoveredButton)
+    }
   }
 
   /// 自然尺寸:外层布局据此放置玻璃面板,内容随玻璃 bounds 自动铺满。
@@ -79,50 +112,99 @@ final class AnnotationToolbarView: NSGlassEffectView {
     contentStack.spacing = 2
     contentStack.edgeInsets = NSEdgeInsets(top: 9, left: 10, bottom: 9, right: 10)
 
-    for (tool, icon, name) in Self.toolOrder {
-      let button = makeButton(icon: icon, toolTip: name)
-      button.onClick = { [weak self] in self?.onAction?(.selectTool(tool)) }
-      toolButtons[tool] = button
+    for item in Self.toolOrder {
+      let button = makeButton(icon: item.icon, toolTip: item.toolTip, hoverTitle: item.hoverTitle)
+      button.onClick = { [weak self] in self?.onAction?(.selectTool(item.tool)) }
+      toolButtons[item.tool] = button
       contentStack.addArrangedSubview(button)
     }
 
     addGroupSeparator()
 
-    undoButton = makeButton(icon: .undo, toolTip: "撤销 (⌘Z)")
+    undoButton = makeButton(icon: .undo, toolTip: "撤销 (⌘Z)", hoverTitle: "撤销")
     undoButton.onClick = { [weak self] in self?.onAction?(.undo) }
-    redoButton = makeButton(icon: .redo, toolTip: "重做 (⇧⌘Z)")
+    redoButton = makeButton(icon: .redo, toolTip: "重做 (⇧⌘Z)", hoverTitle: "重做")
     redoButton.onClick = { [weak self] in self?.onAction?(.redo) }
     contentStack.addArrangedSubview(undoButton)
     contentStack.addArrangedSubview(redoButton)
 
     addGroupSeparator()
 
-    let saveButton = makeButton(icon: .save, toolTip: "保存 (⌘S)")
+    let saveButton = makeButton(icon: .save, toolTip: "保存 (⌘S)", hoverTitle: "保存")
     saveButton.onClick = { [weak self] in self?.onAction?(.save) }
-    let copyButton = makeButton(icon: .copy, toolTip: "复制 (空格)")
+    let copyButton = makeButton(icon: .copy, toolTip: "复制 (空格)", hoverTitle: "复制")
     copyButton.onClick = { [weak self] in self?.onAction?(.copy) }
-    let cancelButton = makeButton(icon: .cancel, toolTip: "取消 (Esc)")
+    let scrollButton = makeButton(icon: .scrollCapture, toolTip: "滚动长截图 (S)", hoverTitle: "滚动截图")
+    scrollButton.onClick = { [weak self] in self?.onAction?(.scroll) }
+    let cancelButton = makeButton(icon: .cancel, toolTip: "取消 (Esc)", hoverTitle: "取消")
     cancelButton.tone = .destructive
     cancelButton.onClick = { [weak self] in self?.onAction?(.cancel) }
-    let completeButton = makeButton(icon: .complete, toolTip: "完成并复制 (Enter)")
+    let completeButton = makeButton(icon: .complete, toolTip: "完成并复制 (Enter)", hoverTitle: "完成")
     completeButton.tone = .confirm
     completeButton.onClick = { [weak self] in self?.onAction?(.complete) }
     contentStack.addArrangedSubview(saveButton)
     contentStack.addArrangedSubview(copyButton)
+    contentStack.addArrangedSubview(scrollButton)
     contentStack.addArrangedSubview(cancelButton)
     contentStack.addArrangedSubview(completeButton)
 
     contentView = contentStack
   }
 
-  private func makeButton(icon: AnnotationIcon, toolTip: String) -> AnnotationToolbarButton {
+  private func makeButton(icon: AnnotationIcon, toolTip: String, hoverTitle: String) -> AnnotationToolbarButton {
     let button = AnnotationToolbarButton(icon: icon)
     button.toolTip = toolTip
+    button.onHoverChange = { [weak self, weak button] isHovering in
+      guard let self, let button else { return }
+      if isHovering {
+        self.showHoverTitle(hoverTitle, from: button)
+      } else {
+        self.hideHoverTitle(from: button)
+      }
+    }
     NSLayoutConstraint.activate([
       button.widthAnchor.constraint(equalToConstant: Self.buttonSize),
       button.heightAnchor.constraint(equalToConstant: Self.buttonSize),
     ])
     return button
+  }
+
+  private func showHoverTitle(_ title: String, from button: AnnotationToolbarButton) {
+    guard let host = superview else { return }
+    hoveredButton = button
+    hoverLabel.title = title
+    if hoverLabel.superview !== host {
+      hoverLabel.removeFromSuperview()
+      host.addSubview(hoverLabel, positioned: .above, relativeTo: self)
+    }
+    hoverLabel.isHidden = false
+    positionHoverLabel(for: button)
+  }
+
+  private func hideHoverTitle(from button: AnnotationToolbarButton) {
+    guard hoveredButton === button else { return }
+    dismissHoverTitle()
+  }
+
+  private func dismissHoverTitle() {
+    hoveredButton = nil
+    hoverLabel.isHidden = true
+  }
+
+  private func positionHoverLabel(for button: AnnotationToolbarButton) {
+    guard let host = superview, hoverLabel.superview === host else { return }
+    let anchor = button.convert(button.bounds, to: host)
+    let size = hoverLabel.intrinsicContentSize
+    let padding: CGFloat = 8
+    var origin = CGPoint(
+      x: anchor.midX - size.width / 2,
+      y: frame.maxY + 8
+    )
+    origin.x = min(max(origin.x, host.bounds.minX + padding), host.bounds.maxX - size.width - padding)
+    if origin.y + size.height > host.bounds.maxY - padding {
+      origin.y = frame.minY - size.height - 8
+    }
+    hoverLabel.frame = CGRect(origin: origin, size: size)
   }
 
   /// 组间细分隔线(工具|历史|动作),带 5pt 两侧留白。
@@ -152,6 +234,7 @@ final class AnnotationToolbarButton: NSView {
   }
 
   var onClick: (() -> Void)?
+  var onHoverChange: ((Bool) -> Void)?
   var tone: Tone = .standard { didSet { refreshTint() } }
   var isSelected = false {
     didSet {
@@ -161,6 +244,10 @@ final class AnnotationToolbarButton: NSView {
   }
   var isEnabled = true {
     didSet {
+      if !isEnabled, isHovering {
+        isHovering = false
+        onHoverChange?(false)
+      }
       needsDisplay = true
       refreshTint()
     }
@@ -244,11 +331,13 @@ final class AnnotationToolbarButton: NSView {
     guard isEnabled else { return }
     isHovering = true
     needsDisplay = true
+    onHoverChange?(true)
   }
 
   override func mouseExited(with event: NSEvent) {
     isHovering = false
     needsDisplay = true
+    onHoverChange?(false)
   }
 
   override func mouseDown(with event: NSEvent) {
@@ -267,6 +356,54 @@ final class AnnotationToolbarButton: NSView {
       onClick?()
     }
   }
+}
+
+/// 工具栏 hover 中文提示。作为工具栏的兄弟视图挂到覆盖层上,避免被玻璃背景裁剪;
+/// `hitTest` 返回 nil,不拦截下面按钮的点击或拖拽。
+private final class AnnotationToolbarHoverLabel: NSView {
+  var title = "" {
+    didSet {
+      invalidateIntrinsicContentSize()
+      needsDisplay = true
+    }
+  }
+
+  override init(frame frameRect: NSRect) {
+    super.init(frame: frameRect)
+    isHidden = true
+    wantsLayer = true
+  }
+
+  required init?(coder: NSCoder) {
+    fatalError("not implemented")
+  }
+
+  override var intrinsicContentSize: NSSize {
+    let size = (title as NSString).size(withAttributes: Self.textAttributes)
+    return NSSize(width: ceil(size.width) + 20, height: 24)
+  }
+
+  override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+  override func draw(_ dirtyRect: NSRect) {
+    let path = NSBezierPath(roundedRect: bounds, xRadius: 8, yRadius: 8)
+    NSColor.black.withAlphaComponent(0.78).setFill()
+    path.fill()
+
+    let textSize = (title as NSString).size(withAttributes: Self.textAttributes)
+    let textRect = NSRect(
+      x: (bounds.width - textSize.width) / 2,
+      y: (bounds.height - textSize.height) / 2,
+      width: textSize.width,
+      height: textSize.height
+    )
+    (title as NSString).draw(in: textRect, withAttributes: Self.textAttributes)
+  }
+
+  private static let textAttributes: [NSAttributedString.Key: Any] = [
+    .font: NSFont.systemFont(ofSize: 12, weight: .medium),
+    .foregroundColor: NSColor.white
+  ]
 }
 
 /// 固定 24×24 的图标视图:翻转坐标系以匹配 `AnnotationIconLibrary` 的 y-down 设计空间,
