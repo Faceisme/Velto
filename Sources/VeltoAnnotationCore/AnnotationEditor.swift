@@ -184,8 +184,14 @@ public struct AnnotationEditor: Sendable {
       resizeElement(id: id, handle: handle, to: point)
       recordGestureHistory()
     case .crop:
-      updateCropPreview(to: point, modifiers: modifiers)
-      document.cropRect = clampedCrop(document.cropRect)
+      // 单击/误触不算裁剪:恢复原 cropRect,避免零尺寸被钳成 16×16 的最小裁剪。
+      let dragDistance = hypot(point.x - gestureAnchor.x, point.y - gestureAnchor.y)
+      if dragDistance < Self.minimumObjectSize * 2 {
+        if let before = gestureBefore { document.cropRect = before.cropRect }
+      } else {
+        updateCropPreview(to: point, modifiers: modifiers)
+        document.cropRect = clampedCrop(document.cropRect)
+      }
       recordGestureHistory()
     }
   }

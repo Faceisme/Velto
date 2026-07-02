@@ -265,6 +265,12 @@ final class AnnotationCanvasView: NSView {
 
   /// 仅把发生变化的对象(旧值 ∪ 新值)外扩控制点 padding 标脏,不触碰父覆盖层。
   private func invalidate(before: AnnotationDocument, after: AnnotationDocument) {
+    // 裁剪框变化会改变整个画布的压暗罩,直接整画布重绘(仅裁剪拖拽期间发生)。
+    if before.cropRect != after.cropRect {
+      needsDisplay = true
+      return
+    }
+
     var dirty = CGRect.null
     let beforeByID = Dictionary(before.elements.map { ($0.id, $0) }, uniquingKeysWith: { lhs, _ in lhs })
     let afterByID = Dictionary(after.elements.map { ($0.id, $0) }, uniquingKeysWith: { lhs, _ in lhs })
@@ -273,16 +279,16 @@ final class AnnotationCanvasView: NSView {
       let old = beforeByID[id]
       let new = afterByID[id]
       guard old != new else { continue }
-      if let old { dirty = dirty.union(AnnotationGeometry.bounds(of: old)) }
-      if let new { dirty = dirty.union(AnnotationGeometry.bounds(of: new)) }
+      if let old { dirty = dirty.union(renderBounds(of: old)) }
+      if let new { dirty = dirty.union(renderBounds(of: new)) }
     }
 
     if before.selectedElementID != after.selectedElementID {
       if let id = before.selectedElementID, let element = beforeByID[id] {
-        dirty = dirty.union(AnnotationGeometry.bounds(of: element))
+        dirty = dirty.union(renderBounds(of: element))
       }
       if let id = after.selectedElementID, let element = afterByID[id] {
-        dirty = dirty.union(AnnotationGeometry.bounds(of: element))
+        dirty = dirty.union(renderBounds(of: element))
       }
     }
 
@@ -290,6 +296,26 @@ final class AnnotationCanvasView: NSView {
     let viewDirty = viewRect(forAnnotation: dirty)
       .insetBy(dx: -Self.handlePadding, dy: -Self.handlePadding)
     setNeedsDisplay(viewDirty)
+  }
+
+  /// 元素的**渲染**包围盒:几何 bounds 只含锚点/点集,不含描边宽度。荧光笔描边宽达
+  /// lineWidth×3、箭头有外扩箭翼,只按几何 bounds 标脏会在两侧留下未重绘的残迹(拖动重影)。
+  private func renderBounds(of element: AnnotationElement) -> CGRect {
+    let bounds = AnnotationGeometry.bounds(of: element)
+    let inflation: CGFloat
+    switch element {
+    case .highlight(let value):
+      inflation = max(value.style.lineWidth * 3, 8) / 2 + 4
+    case .freehand(let value):
+      inflation = value.style.lineWidth / 2 + 4
+    case .line(let value), .arrow(let value):
+      inflation = max(10, value.style.lineWidth * 3.5)
+    case .rectangle(let value), .ellipse(let value):
+      inflation = value.style.lineWidth / 2 + 1
+    default:
+      inflation = 1
+    }
+    return bounds.insetBy(dx: -inflation, dy: -inflation)
   }
 
   // MARK: - Drawing
@@ -316,6 +342,29 @@ final class AnnotationCanvasView: NSView {
     }
     AnnotationRenderer.drawAnnotations(in: context, document: document, scale: scale)
     drawSelectionChrome(in: context)
+    drawCropChrome(in: context)
+    context.restoreGState()
+  }
+
+  /// 裁剪预览:裁剪框外压暗 + accent 边框。导出时 AnnotationRenderer 会按 cropRect 真裁,
+  /// 这里让"拖出裁剪框"当场可见(此前拖完全无反馈,工具形同虚设)。
+  private func drawCropChrome(in context: CGContext) {
+    let canvasRect = CGRect(origin: .zero, size: editor.document.canvasSize)
+    let crop = editor.document.cropRect.standardized.intersection(canvasRect)
+    guard !crop.isNull, crop != canvasRect else { return }
+
+    context.saveGState()
+    context.addRect(canvasRect)
+    context.addRect(crop)
+    context.clip(using: .evenOdd)
+    context.setFillColor(CGColor(gray: 0, alpha: 0.45))
+    context.fill(canvasRect)
+    context.restoreGState()
+
+    context.saveGState()
+    context.setStrokeColor(NSColor.controlAccentColor.cgColor)
+    context.setLineWidth(2)
+    context.stroke(crop.insetBy(dx: 1, dy: 1))
     context.restoreGState()
   }
 
