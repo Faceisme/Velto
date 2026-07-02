@@ -5,7 +5,9 @@ import Vision
 /// macshot 滚动截图核心在 Velto 中的兼容实现。
 ///
 /// macshot 的按需完整帧捕获由 SCScreenshotManager 替代;稳定帧判断、Vision 位移、
-/// 固定头部检测、滚动条排除和增量拼接保持相同流程。
+/// 固定头部检测、滚动条排除和增量拼接保持相同流程。在其基础上增加接缝像素校验:
+/// Vision 的位移只当估计值,±4px 内逐候选比对重叠区像素得到精确整数位移,
+/// 校验不过的帧整帧丢弃,避免动画中间帧/配准误差把错位内容永久拼进结果。
 @MainActor
 final class ScrollCaptureController {
   private(set) var stripCount = 0
@@ -31,16 +33,18 @@ final class ScrollCaptureController {
 
   private var rightMarginPx = 0
   private var rightMarginDetected = false
-  private var hasScrolledOnce = false
-  private var consecutiveZeroShifts = 0
-  private let maxZeroShiftsBeforeStop = 6
 
-  private let manualCaptureInterval: TimeInterval = 0.15
+  /// 最近一次滚轮事件距今超过该值即认为滚动停止,连续抓帧循环退出。
+  private let scrollIdleInterval: TimeInterval = 0.4
   private let settlementInterval: TimeInterval = 0.25
-  private var lastCaptureTime: TimeInterval = 0
-  private var pendingCaptureTask: Task<Void, Never>?
+  /// 接缝校验阈值:重叠区采样平均 SAD(BGR 三通道求和)。对齐正确的静止内容接近 0,
+  /// 亚像素动画中间帧/错位帧会显著超过该值。
+  private let seamAcceptThreshold: UInt64 = 10
+  private var lastScrollActivity: TimeInterval = 0
+  private var captureLoopTask: Task<Void, Never>?
   private var settlementTask: Task<Void, Never>?
   private var isCapturing = false
+  private var consecutiveSettledFailures = 0
 
   init(snapshot: DisplaySnapshot, captureRect: CGRect) {
     self.snapshot = snapshot
@@ -61,8 +65,8 @@ final class ScrollCaptureController {
     headerDetectionSamples = 0
     rightMarginPx = 0
     rightMarginDetected = false
-    hasScrolledOnce = false
-    consecutiveZeroShifts = 0
+    consecutiveSettledFailures = 0
+    lastScrollActivity = 0
     frozenTopHeight = 0
     stripCount = 1
     stitchedImage = firstFrame
@@ -84,16 +88,18 @@ final class ScrollCaptureController {
 
   private func stopWork() {
     isActive = false
-    pendingCaptureTask?.cancel()
-    pendingCaptureTask = nil
+    captureLoopTask?.cancel()
+    captureLoopTask = nil
     settlementTask?.cancel()
     settlementTask = nil
     isCapturing = false
   }
 
-  /// 由全局 event tap 在主线程上报。滚动中每 150ms 抓一帧,停止 250ms 后再抓稳定帧。
+  /// 由全局 event tap 在主线程上报。滚动活跃期间由连续抓帧循环持续采帧,
+  /// 停止 250ms 后再补一帧稳定帧收尾。
   func noteManualScroll() {
     guard isActive else { return }
+    lastScrollActivity = ProcessInfo.processInfo.systemUptime
 
     settlementTask?.cancel()
     settlementTask = Task { [weak self] in
@@ -103,14 +109,22 @@ final class ScrollCaptureController {
       await self.settledCapture()
     }
 
-    let now = ProcessInfo.processInfo.systemUptime
-    guard now - lastCaptureTime >= manualCaptureInterval else { return }
-    lastCaptureTime = now
-    guard pendingCaptureTask == nil else { return }
-    pendingCaptureTask = Task { [weak self] in
-      guard let self else { return }
-      await self.grabAndProcess()
-      self.pendingCaptureTask = nil
+    ensureCaptureLoop()
+  }
+
+  /// 滚动活跃期间尽可能快地连续抓帧(抓帧+配准耗时构成天然节流)。
+  /// 相邻帧间隔越短重叠区越大,配准越稳,快速滚动也不易丢内容——
+  /// 旧的「滚轮事件驱动 + 150ms 节流 + 抓帧中丢触发」在快滚时会拉大帧距导致配准失败。
+  private func ensureCaptureLoop() {
+    guard captureLoopTask == nil else { return }
+    captureLoopTask = Task { [weak self] in
+      defer { self?.captureLoopTask = nil }
+      while let self, self.isActive, !Task.isCancelled {
+        guard ProcessInfo.processInfo.systemUptime - self.lastScrollActivity
+          < self.scrollIdleInterval else { return }
+        await self.grabAndProcess()
+        try? await Task.sleep(for: .milliseconds(30))
+      }
     }
   }
 
@@ -177,18 +191,6 @@ final class ScrollCaptureController {
     return memcmp(aPtr, bPtr, length) == 0
   }
 
-  private func captureAndCompare() async -> Bool {
-    try? await Task.sleep(for: .milliseconds(50))
-    guard isActive, let currentFrame = await captureSettledFrame(), isActive else { return false }
-    guard let previousFrame = shotA ?? mergedImage?.cropping(to: CGRect(
-      x: 0, y: 0, width: currentFrame.width, height: currentFrame.height
-    )) else {
-      shotA = currentFrame
-      return false
-    }
-    return process(currentFrame: currentFrame, previousFrame: previousFrame)
-  }
-
   private func grabAndProcess() async {
     guard isActive, !isCapturing else { return }
     isCapturing = true
@@ -199,7 +201,7 @@ final class ScrollCaptureController {
       shotA = currentFrame
       return
     }
-    _ = process(currentFrame: currentFrame, previousFrame: previousFrame)
+    _ = process(currentFrame: currentFrame, previousFrame: previousFrame, isSettled: false)
   }
 
   private func settledCapture() async {
@@ -210,54 +212,73 @@ final class ScrollCaptureController {
     }
     isCapturing = true
     defer { isCapturing = false }
-    _ = await captureAndCompare()
+
+    guard let currentFrame = await captureSettledFrame(), isActive else { return }
+    guard let previousFrame = shotA else {
+      shotA = currentFrame
+      return
+    }
+    _ = process(currentFrame: currentFrame, previousFrame: previousFrame, isSettled: true)
   }
 
-  private func process(currentFrame: CGImage, previousFrame: CGImage) -> Bool {
+  private func process(currentFrame: CGImage, previousFrame: CGImage, isSettled: Bool) -> Bool {
+    guard let offset = visionShift(current: currentFrame, previous: previousFrame) else {
+      noteProcessFailure(currentFrame: currentFrame, isSettled: isSettled, reason: "Vision配准失败")
+      return false
+    }
+
+    let estimate = Int(offset.rounded())
+    // 无位移/向上回滚:画面没有新内容,基准帧保持不变继续等待。
+    guard estimate > 0 else {
+      if isSettled { consecutiveSettledFailures = 0 }
+      return false
+    }
+
+    // 小位移不动基准帧,继续累计到 macshot 的可信阈值。
+    let minShift = currentFrame.height / 10
+    guard estimate >= minShift else { return false }
+
+    // Vision 位移只是浮点估计;像素级精修出准确整数位移,错位帧整帧拒绝。
+    guard let offsetPx = refineOffset(
+      current: currentFrame, previous: previousFrame, estimate: estimate
+    ) else {
+      noteProcessFailure(currentFrame: currentFrame, isSettled: isSettled,
+                         reason: "接缝校验未过 estimate=\(estimate)")
+      return false
+    }
+
     if !rightMarginDetected {
+      // 确认发生真实滚动后再测滚动条;静止帧对全图无差异,会把检测一次定死为「无滚动条」。
       detectRightMargin(current: currentFrame, previous: previousFrame)
     }
-
-    guard let offset = visionShift(current: currentFrame, previous: previousFrame) else {
-      shotA = currentFrame
-      consecutiveZeroShifts += 1
-      return false
-    }
-
-    let offsetPx = Int(round(offset))
-    guard offsetPx > 0 else {
-      shotA = currentFrame
-      if hasScrolledOnce {
-        consecutiveZeroShifts += 1
-        if consecutiveZeroShifts >= maxZeroShiftsBeforeStop {
-          ScreenshotDebugLog.log("macshot核心:连续无位移,保留当前结果等待用户完成")
-        }
-      }
-      return false
-    }
-
-    let minShift = currentFrame.height / 10
-    guard offsetPx >= minShift else {
-      // 不更新基准帧,让小位移继续累计到 macshot 的可信阈值。
-      return false
-    }
-
-    consecutiveZeroShifts = 0
-    hasScrolledOnce = true
     if frozenDetectionEnabled && !headerDetectionDone {
       detectHeader(current: currentFrame, previous: previousFrame, shiftPx: offsetPx)
     }
 
-    let safeOffset = max(1, offsetPx - 1)
-    guard mergeNewContent(currentFrame: currentFrame, offsetPx: safeOffset) else { return false }
+    guard mergeNewContent(currentFrame: currentFrame, offsetPx: offsetPx) else { return false }
 
     shotA = currentFrame
+    consecutiveSettledFailures = 0
     stripCount += 1
     emitProgress()
-    ScreenshotDebugLog.log("macshot核心:拼接成功 offset=\(offsetPx) safe=\(safeOffset) "
-      + "header=\(headerHeight) margin=\(rightMarginPx) result="
+    ScreenshotDebugLog.log("macshot核心:拼接成功 vision=\(estimate) exact=\(offsetPx) "
+      + "header=\(headerHeight) margin=\(rightMarginPx) settled=\(isSettled) result="
       + "\(Int(stitchedPixelSize.width))x\(Int(stitchedPixelSize.height))")
     return true
+  }
+
+  /// 配准/校验失败不再退化成「用当前帧顶替基准帧」——那会把两帧之间已滚过的内容静默丢掉。
+  /// 滚动中的失败帧直接丢弃等下一帧;稳定帧连续失败说明基准已失联(滚太远),
+  /// 此时才重置基准并明确记录缺口风险。
+  private func noteProcessFailure(currentFrame: CGImage, isSettled: Bool, reason: String) {
+    ScreenshotDebugLog.log("macshot核心:丢弃帧(\(reason)) settled=\(isSettled)")
+    guard isSettled else { return }
+    consecutiveSettledFailures += 1
+    if consecutiveSettledFailures >= 2 {
+      shotA = currentFrame
+      consecutiveSettledFailures = 0
+      ScreenshotDebugLog.log("macshot核心:稳定帧连续失败,重置基准帧,此处可能存在内容缺口")
+    }
   }
 
   // MARK: - Incremental stitching
@@ -327,6 +348,65 @@ final class ScrollCaptureController {
       return nil
     }
     return observation.alignmentTransform.ty
+  }
+
+  // MARK: - Seam verification
+
+  /// 在 Vision 估计值 ±4px 内逐候选比对重叠区像素,返回 SAD 最小且低于阈值的精确位移;
+  /// 全部候选都超阈值(动画中间帧、配准错位)则返回 nil,由调用方丢弃该帧。
+  /// 采样只取重叠区下半段:未检测出的固定头部/工具栏都贴顶,下半段不受污染。
+  private func refineOffset(current: CGImage, previous: CGImage, estimate: Int) -> Int? {
+    guard current.width == previous.width, current.height == previous.height,
+          let currentCFData = pixelData(for: current),
+          let previousCFData = pixelData(for: previous),
+          let currentData = CFDataGetBytePtr(currentCFData),
+          let previousData = CFDataGetBytePtr(previousCFData) else { return nil }
+
+    let width = current.width
+    let height = current.height
+    let bytesPerRow = width * 4
+    let usableWidth = max(4, width - rightMarginPx)
+    let headerRows = headerDetectionDone ? headerHeight : 0
+    let searchRadius = 4
+
+    var bestOffset = 0
+    var bestScore = UInt64.max
+    for candidate in (estimate - searchRadius)...(estimate + searchRadius) {
+      guard candidate >= 1, candidate < height else { continue }
+      // 当前帧第 r 行的内容在上一帧位于第 r+candidate 行(内容整体上移)。
+      let overlapEnd = height - candidate
+      let overlapStart = max(headerRows, overlapEnd / 2)
+      guard overlapEnd - overlapStart >= 24 else { continue }
+
+      var sad: UInt64 = 0
+      var samples = 0
+      let rowStep = max(1, (overlapEnd - overlapStart) / 120)
+      for row in stride(from: overlapStart, to: overlapEnd, by: rowStep) {
+        let currentBase = row * bytesPerRow
+        let previousBase = (row + candidate) * bytesPerRow
+        for column in stride(from: 0, to: usableWidth, by: 8) {
+          let c = currentBase + column * 4
+          let p = previousBase + column * 4
+          sad += UInt64(abs(Int(currentData[c]) - Int(previousData[p]))
+            + abs(Int(currentData[c + 1]) - Int(previousData[p + 1]))
+            + abs(Int(currentData[c + 2]) - Int(previousData[p + 2])))
+          samples += 1
+        }
+      }
+      guard samples > 0 else { continue }
+      let score = sad / UInt64(samples)
+      if score < bestScore {
+        bestScore = score
+        bestOffset = candidate
+      }
+    }
+
+    guard bestOffset > 0, bestScore <= seamAcceptThreshold else {
+      ScreenshotDebugLog.log("macshot核心:接缝校验拒绝 estimate=\(estimate) "
+        + "best=\(bestOffset) score=\(bestScore) 阈值=\(seamAcceptThreshold)")
+      return nil
+    }
+    return bestOffset
   }
 
   /// 返回 CGImage 底层像素 buffer 的 CFData。**必须由调用方持有返回值至指针用完**——
