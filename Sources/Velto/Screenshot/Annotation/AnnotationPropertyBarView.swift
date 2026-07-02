@@ -14,6 +14,7 @@ final class AnnotationPropertyBarView: NSGlassEffectView {
   private var currentCropRect: CGRect = .zero
 
   private var colorWell: NSColorWell?
+  private var swatchButtons: [AnnotationSwatchButton] = []
   private var lineWidthControl: NSSegmentedControl?
   private var fillOpacitySlider: NSSlider?
   private var highlightWidthControl: NSSegmentedControl?
@@ -31,6 +32,18 @@ final class AnnotationPropertyBarView: NSGlassEffectView {
   private static let fontSizes: [CGFloat] = [14, 18, 24, 32]
   private static let sequenceDiameters: [CGFloat] = [24, 28, 32]
   private static let alignments: [AnnotationTextAlignment] = [.left, .center, .right]
+
+  /// 常用色快捷色板;自定义颜色仍走右侧取色器。
+  private static let presetColors: [(color: AnnotationColor, name: String)] = [
+    (AnnotationColor(red: 1.00, green: 0.23, blue: 0.19), "红"),
+    (AnnotationColor(red: 1.00, green: 0.58, blue: 0.00), "橙"),
+    (AnnotationColor(red: 1.00, green: 0.80, blue: 0.00), "黄"),
+    (AnnotationColor(red: 0.20, green: 0.78, blue: 0.35), "绿"),
+    (AnnotationColor(red: 0.00, green: 0.48, blue: 1.00), "蓝"),
+    (AnnotationColor(red: 0.69, green: 0.32, blue: 0.87), "紫"),
+    (AnnotationColor(red: 0.00, green: 0.00, blue: 0.00), "黑"),
+    (AnnotationColor(red: 1.00, green: 1.00, blue: 1.00), "白"),
+  ]
 
   override init(frame frameRect: NSRect) {
     super.init(frame: frameRect)
@@ -68,6 +81,9 @@ final class AnnotationPropertyBarView: NSGlassEffectView {
       rebuild(for: tool)
     } else {
       refreshCropLabel()
+      // 外部样式变化(如选中了别的颜色的对象)时同步色板与取色器。
+      colorWell?.color = style.strokeColor.nsColor
+      refreshSwatchSelection()
     }
   }
 
@@ -109,6 +125,7 @@ final class AnnotationPropertyBarView: NSGlassEffectView {
 
   private func clearControls() {
     colorWell = nil
+    swatchButtons = []
     lineWidthControl = nil
     fillOpacitySlider = nil
     highlightWidthControl = nil
@@ -122,8 +139,19 @@ final class AnnotationPropertyBarView: NSGlassEffectView {
   }
 
   private func addColorWell() {
+    // 快捷色板:一键换常用色,免开调色板。
+    for preset in Self.presetColors {
+      let swatch = AnnotationSwatchButton(color: preset.color)
+      swatch.toolTip = preset.name
+      swatch.onClick = { [weak self] in self?.swatchPicked(preset.color) }
+      swatchButtons.append(swatch)
+      contentStack.addArrangedSubview(swatch)
+      contentStack.setCustomSpacing(4, after: swatch)
+    }
+
     let well = NSColorWell(style: .minimal)
     well.color = currentStyle.strokeColor.nsColor
+    well.toolTip = "自定义颜色"
     well.target = self
     well.action = #selector(controlsChanged)
     NSLayoutConstraint.activate([
@@ -132,13 +160,29 @@ final class AnnotationPropertyBarView: NSGlassEffectView {
     ])
     colorWell = well
     contentStack.addArrangedSubview(well)
+    refreshSwatchSelection()
+  }
+
+  private func swatchPicked(_ color: AnnotationColor) {
+    currentStyle.strokeColor = color
+    currentStyle.fillColor = color
+    colorWell?.color = color.nsColor
+    refreshSwatchSelection()
+    onStyleChange?(currentStyle)
+  }
+
+  private func refreshSwatchSelection() {
+    for swatch in swatchButtons {
+      swatch.isSelected = swatch.matches(currentStyle.strokeColor)
+    }
   }
 
   private func addLineWidth() {
     let control = makeSegmented(
-      labels: Self.lineWidths.map { "\(Int($0))" },
+      images: Self.lineWidths.map { Self.dotImage(diameter: 3 + $0 * 1.6) },
       selected: nearestIndex(of: currentStyle.lineWidth, in: Self.lineWidths)
     )
+    control.toolTip = "线宽"
     lineWidthControl = control
     contentStack.addArrangedSubview(control)
   }
@@ -182,19 +226,25 @@ final class AnnotationPropertyBarView: NSGlassEffectView {
   }
 
   private func addAlignment() {
+    let symbols = ["text.alignleft", "text.aligncenter", "text.alignright"]
+    let images = symbols.map {
+      NSImage(systemSymbolName: $0, accessibilityDescription: nil) ?? NSImage()
+    }
     let control = makeSegmented(
-      labels: ["左", "中", "右"],
+      images: images,
       selected: Self.alignments.firstIndex(of: currentStyle.textAlignment) ?? 0
     )
+    control.toolTip = "对齐"
     alignmentControl = control
     contentStack.addArrangedSubview(control)
   }
 
   private func addHighlightWidth() {
     let control = makeSegmented(
-      labels: ["细", "中", "粗"],
+      images: Self.highlightWidths.map { Self.dotImage(diameter: 2 + $0 * 0.75) },
       selected: nearestIndex(of: currentStyle.lineWidth, in: Self.highlightWidths)
     )
+    control.toolTip = "笔宽"
     highlightWidthControl = control
     contentStack.addArrangedSubview(control)
   }
@@ -243,6 +293,34 @@ final class AnnotationPropertyBarView: NSGlassEffectView {
     control.segmentStyle = .rounded
     control.selectedSegment = max(0, min(selected, labels.count - 1))
     return control
+  }
+
+  private func makeSegmented(images: [NSImage], selected: Int) -> NSSegmentedControl {
+    let control = NSSegmentedControl(
+      images: images,
+      trackingMode: .selectOne,
+      target: self,
+      action: #selector(controlsChanged)
+    )
+    control.segmentStyle = .rounded
+    control.selectedSegment = max(0, min(selected, images.count - 1))
+    return control
+  }
+
+  /// 线宽档位示意:模板圆点,随控件明暗自动着色。
+  private static func dotImage(diameter: CGFloat) -> NSImage {
+    let side: CGFloat = 14
+    let image = NSImage(size: NSSize(width: side, height: side), flipped: false) { _ in
+      let rect = CGRect(
+        x: (side - diameter) / 2, y: (side - diameter) / 2,
+        width: diameter, height: diameter
+      )
+      NSColor.black.setFill()
+      NSBezierPath(ovalIn: rect).fill()
+      return true
+    }
+    image.isTemplate = true
+    return image
   }
 
   private func makeSlider(value: Double) -> NSSlider {
@@ -316,5 +394,83 @@ final class AnnotationPropertyBarView: NSGlassEffectView {
 
   private func clampIndex(_ index: Int, _ count: Int) -> Int {
     max(0, min(index, count - 1))
+  }
+}
+
+/// 18×18 圆形快捷色板按钮:常显 1px 描边保证浅色可见,选中加 accent 外环。
+final class AnnotationSwatchButton: NSView {
+  var onClick: (() -> Void)?
+  var isSelected = false { didSet { needsDisplay = true } }
+
+  private let color: AnnotationColor
+  private var isHovering = false
+  private var trackingArea: NSTrackingArea?
+
+  init(color: AnnotationColor) {
+    self.color = color
+    super.init(frame: NSRect(x: 0, y: 0, width: 18, height: 18))
+    translatesAutoresizingMaskIntoConstraints = false
+    NSLayoutConstraint.activate([
+      widthAnchor.constraint(equalToConstant: 18),
+      heightAnchor.constraint(equalToConstant: 18),
+    ])
+  }
+
+  required init?(coder: NSCoder) {
+    fatalError("not implemented")
+  }
+
+  func matches(_ other: AnnotationColor) -> Bool {
+    abs(color.red - other.red) < 0.02
+      && abs(color.green - other.green) < 0.02
+      && abs(color.blue - other.blue) < 0.02
+  }
+
+  override var intrinsicContentSize: NSSize { NSSize(width: 18, height: 18) }
+  override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+  override func draw(_ dirtyRect: NSRect) {
+    let dot = bounds.insetBy(dx: isHovering ? 2 : 3, dy: isHovering ? 2 : 3)
+    color.nsColor.setFill()
+    NSBezierPath(ovalIn: dot).fill()
+    NSColor.labelColor.withAlphaComponent(0.25).setStroke()
+    let border = NSBezierPath(ovalIn: dot.insetBy(dx: 0.5, dy: 0.5))
+    border.lineWidth = 1
+    border.stroke()
+    if isSelected {
+      NSColor.controlAccentColor.setStroke()
+      let ring = NSBezierPath(ovalIn: bounds.insetBy(dx: 0.75, dy: 0.75))
+      ring.lineWidth = 1.5
+      ring.stroke()
+    }
+  }
+
+  override func updateTrackingAreas() {
+    super.updateTrackingAreas()
+    if let trackingArea { removeTrackingArea(trackingArea) }
+    let area = NSTrackingArea(
+      rect: bounds,
+      options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+      owner: self,
+      userInfo: nil
+    )
+    addTrackingArea(area)
+    trackingArea = area
+  }
+
+  override func mouseEntered(with event: NSEvent) {
+    isHovering = true
+    needsDisplay = true
+  }
+
+  override func mouseExited(with event: NSEvent) {
+    isHovering = false
+    needsDisplay = true
+  }
+
+  override func mouseUp(with event: NSEvent) {
+    if bounds.contains(convert(event.locationInWindow, from: nil)) {
+      onClick?()
+    }
   }
 }

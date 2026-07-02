@@ -26,17 +26,17 @@ final class AnnotationToolbarView: NSGlassEffectView {
   private var undoButton: AnnotationToolbarButton!
   private var redoButton: AnnotationToolbarButton!
 
-  private static let toolOrder: [(AnnotationTool, AnnotationIcon)] = [
-    (.rectangle, .rectangle),
-    (.ellipse, .ellipse),
-    (.line, .line),
-    (.arrow, .arrow),
-    (.pen, .pen),
-    (.mosaic, .mosaic),
-    (.text, .text),
-    (.highlight, .highlight),
-    (.sequence, .sequence),
-    (.crop, .crop),
+  private static let toolOrder: [(AnnotationTool, AnnotationIcon, String)] = [
+    (.rectangle, .rectangle, "矩形"),
+    (.ellipse, .ellipse, "椭圆"),
+    (.line, .line, "直线"),
+    (.arrow, .arrow, "箭头"),
+    (.pen, .pen, "画笔"),
+    (.mosaic, .mosaic, "马赛克"),
+    (.text, .text, "文字"),
+    (.highlight, .highlight, "荧光笔"),
+    (.sequence, .sequence, "序号"),
+    (.crop, .crop, "裁剪(拖拽框选保留区域,导出时生效)"),
   ]
 
   override init(frame frameRect: NSRect) {
@@ -79,30 +79,32 @@ final class AnnotationToolbarView: NSGlassEffectView {
     contentStack.spacing = 2
     contentStack.edgeInsets = NSEdgeInsets(top: 9, left: 10, bottom: 9, right: 10)
 
-    var lastTool: AnnotationToolbarButton?
-    for (tool, icon) in Self.toolOrder {
-      let button = makeButton(icon: icon)
+    for (tool, icon, name) in Self.toolOrder {
+      let button = makeButton(icon: icon, toolTip: name)
       button.onClick = { [weak self] in self?.onAction?(.selectTool(tool)) }
       toolButtons[tool] = button
       contentStack.addArrangedSubview(button)
-      lastTool = button
     }
 
-    undoButton = makeButton(icon: .undo)
+    addGroupSeparator()
+
+    undoButton = makeButton(icon: .undo, toolTip: "撤销 (⌘Z)")
     undoButton.onClick = { [weak self] in self?.onAction?(.undo) }
-    redoButton = makeButton(icon: .redo)
+    redoButton = makeButton(icon: .redo, toolTip: "重做 (⇧⌘Z)")
     redoButton.onClick = { [weak self] in self?.onAction?(.redo) }
     contentStack.addArrangedSubview(undoButton)
     contentStack.addArrangedSubview(redoButton)
 
-    let saveButton = makeButton(icon: .save)
+    addGroupSeparator()
+
+    let saveButton = makeButton(icon: .save, toolTip: "保存 (⌘S)")
     saveButton.onClick = { [weak self] in self?.onAction?(.save) }
-    let copyButton = makeButton(icon: .copy)
+    let copyButton = makeButton(icon: .copy, toolTip: "复制 (空格)")
     copyButton.onClick = { [weak self] in self?.onAction?(.copy) }
-    let cancelButton = makeButton(icon: .cancel)
+    let cancelButton = makeButton(icon: .cancel, toolTip: "取消 (Esc)")
     cancelButton.tone = .destructive
     cancelButton.onClick = { [weak self] in self?.onAction?(.cancel) }
-    let completeButton = makeButton(icon: .complete)
+    let completeButton = makeButton(icon: .complete, toolTip: "完成并复制 (Enter)")
     completeButton.tone = .confirm
     completeButton.onClick = { [weak self] in self?.onAction?(.complete) }
     contentStack.addArrangedSubview(saveButton)
@@ -110,22 +112,33 @@ final class AnnotationToolbarView: NSGlassEffectView {
     contentStack.addArrangedSubview(cancelButton)
     contentStack.addArrangedSubview(completeButton)
 
-    // 组间留 4pt:工具|历史、历史|动作。
-    if let lastTool {
-      contentStack.setCustomSpacing(4, after: lastTool)
-    }
-    contentStack.setCustomSpacing(4, after: redoButton)
-
     contentView = contentStack
   }
 
-  private func makeButton(icon: AnnotationIcon) -> AnnotationToolbarButton {
+  private func makeButton(icon: AnnotationIcon, toolTip: String) -> AnnotationToolbarButton {
     let button = AnnotationToolbarButton(icon: icon)
+    button.toolTip = toolTip
     NSLayoutConstraint.activate([
       button.widthAnchor.constraint(equalToConstant: Self.buttonSize),
       button.heightAnchor.constraint(equalToConstant: Self.buttonSize),
     ])
     return button
+  }
+
+  /// 组间细分隔线(工具|历史|动作),带 5pt 两侧留白。
+  private func addGroupSeparator() {
+    guard let previous = contentStack.arrangedSubviews.last else { return }
+    let separator = NSView()
+    separator.translatesAutoresizingMaskIntoConstraints = false
+    separator.wantsLayer = true
+    separator.layer?.backgroundColor = NSColor.separatorColor.cgColor
+    NSLayoutConstraint.activate([
+      separator.widthAnchor.constraint(equalToConstant: 1),
+      separator.heightAnchor.constraint(equalToConstant: 20),
+    ])
+    contentStack.setCustomSpacing(6, after: previous)
+    contentStack.addArrangedSubview(separator)
+    contentStack.setCustomSpacing(6, after: separator)
   }
 }
 

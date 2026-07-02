@@ -41,7 +41,7 @@ public enum AnnotationIconLibrary {
       path.addRect(CGRect(x: 5, y: 6, width: 14, height: 12))
 
     case .ellipse:
-      path.addEllipse(in: CGRect(x: 5, y: 6, width: 14, height: 12))
+      path.addEllipse(in: CGRect(x: 5, y: 5, width: 14, height: 14))
 
     case .line:
       path.move(to: CGPoint(x: 6, y: 18))
@@ -66,15 +66,12 @@ public enum AnnotationIconLibrary {
       path.addLine(to: CGPoint(x: 9, y: 18))
 
     case .mosaic:
+      // 2×2 网格:24px 下 3×3 太密糊成一团,四宫格更清晰。
       path.addRect(CGRect(x: 5, y: 5, width: 14, height: 14))
-      path.move(to: CGPoint(x: 9.66, y: 5))
-      path.addLine(to: CGPoint(x: 9.66, y: 19))
-      path.move(to: CGPoint(x: 14.33, y: 5))
-      path.addLine(to: CGPoint(x: 14.33, y: 19))
-      path.move(to: CGPoint(x: 5, y: 9.66))
-      path.addLine(to: CGPoint(x: 19, y: 9.66))
-      path.move(to: CGPoint(x: 5, y: 14.33))
-      path.addLine(to: CGPoint(x: 19, y: 14.33))
+      path.move(to: CGPoint(x: 12, y: 5))
+      path.addLine(to: CGPoint(x: 12, y: 19))
+      path.move(to: CGPoint(x: 5, y: 12))
+      path.addLine(to: CGPoint(x: 19, y: 12))
 
     case .text:
       path.move(to: CGPoint(x: 6, y: 6))
@@ -83,14 +80,18 @@ public enum AnnotationIconLibrary {
       path.addLine(to: CGPoint(x: 12, y: 18))
 
     case .highlight:
-      // Marker nib sweeping diagonally.
-      path.move(to: CGPoint(x: 7, y: 17))
-      path.addLine(to: CGPoint(x: 15, y: 7))
-      path.addLine(to: CGPoint(x: 18, y: 10))
-      path.addLine(to: CGPoint(x: 10, y: 20))
+      // 荧光笔:斜置笔身 + 扁凿笔尖 + 全宽划线,与铅笔(pen)明确区分。
+      path.move(to: CGPoint(x: 15, y: 4))
+      path.addLine(to: CGPoint(x: 19, y: 8))
+      path.addLine(to: CGPoint(x: 11, y: 16))
+      path.addLine(to: CGPoint(x: 7, y: 12))
       path.closeSubpath()
-      path.move(to: CGPoint(x: 6, y: 20))
-      path.addLine(to: CGPoint(x: 10, y: 20))
+      path.move(to: CGPoint(x: 7, y: 12))
+      path.addLine(to: CGPoint(x: 4.5, y: 16.5))
+      path.addLine(to: CGPoint(x: 11, y: 16))
+      path.closeSubpath()
+      path.move(to: CGPoint(x: 5, y: 20))
+      path.addLine(to: CGPoint(x: 19, y: 20))
 
     case .sequence:
       path.addEllipse(in: CGRect(x: 5, y: 5, width: 14, height: 14))
@@ -107,28 +108,35 @@ public enum AnnotationIconLibrary {
       path.addLine(to: CGPoint(x: 16, y: 19))
 
     case .undo:
+      // 左向燕尾箭头 + 向右回卷的半圆尾巴(lucide undo-2 几何)。
+      path.move(to: CGPoint(x: 9, y: 14))
+      path.addLine(to: CGPoint(x: 4, y: 9))
+      path.addLine(to: CGPoint(x: 9, y: 4))
+      path.move(to: CGPoint(x: 4, y: 9))
+      path.addLine(to: CGPoint(x: 14.5, y: 9))
       path.addArc(
-        center: CGPoint(x: 12, y: 12),
+        center: CGPoint(x: 14.5, y: 14.5),
         radius: 5.5,
-        startAngle: -0.35,
-        endAngle: 4.2,
+        startAngle: -.pi / 2,
+        endAngle: .pi / 2,
         clockwise: false
       )
-      path.move(to: CGPoint(x: 6.2, y: 9))
-      path.addLine(to: CGPoint(x: 6.6, y: 13.4))
-      path.addLine(to: CGPoint(x: 10.6, y: 11.6))
+      path.addLine(to: CGPoint(x: 11, y: 20))
 
     case .redo:
+      path.move(to: CGPoint(x: 15, y: 14))
+      path.addLine(to: CGPoint(x: 20, y: 9))
+      path.addLine(to: CGPoint(x: 15, y: 4))
+      path.move(to: CGPoint(x: 20, y: 9))
+      path.addLine(to: CGPoint(x: 9.5, y: 9))
       path.addArc(
-        center: CGPoint(x: 12, y: 12),
+        center: CGPoint(x: 9.5, y: 14.5),
         radius: 5.5,
-        startAngle: .pi + 0.35,
-        endAngle: .pi - 1.05,
+        startAngle: -.pi / 2,
+        endAngle: .pi / 2,
         clockwise: true
       )
-      path.move(to: CGPoint(x: 17.8, y: 9))
-      path.addLine(to: CGPoint(x: 17.4, y: 13.4))
-      path.addLine(to: CGPoint(x: 13.4, y: 11.6))
+      path.addLine(to: CGPoint(x: 13, y: 20))
 
     case .cancel:
       path.move(to: CGPoint(x: 7, y: 7))
@@ -146,8 +154,18 @@ public enum AnnotationIconLibrary {
       path.addLine(to: CGPoint(x: 18, y: 18))
 
     case .copy:
-      path.addRect(CGRect(x: 5, y: 7, width: 10, height: 12))
-      path.addRect(CGRect(x: 9, y: 5, width: 10, height: 12))
+      // 前层圆角矩形 + 背层只露上/左两边(lucide copy 几何),不再整框互相穿插。
+      path.addRoundedRect(
+        in: CGRect(x: 9, y: 9, width: 12, height: 12),
+        cornerWidth: 2, cornerHeight: 2
+      )
+      path.move(to: CGPoint(x: 15.5, y: 5))
+      path.addArc(
+        tangent1End: CGPoint(x: 5, y: 5),
+        tangent2End: CGPoint(x: 5, y: 15.5),
+        radius: 2
+      )
+      path.addLine(to: CGPoint(x: 5, y: 15.5))
 
     case .complete:
       path.move(to: CGPoint(x: 6, y: 12))

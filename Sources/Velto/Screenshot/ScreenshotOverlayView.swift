@@ -206,7 +206,9 @@ final class ScreenshotOverlayView: NSView {
     guard selectionEnabled else { return }
     let p = ScreenshotGeometry.snapPointToBoundsEdges(
       convert(event.locationInWindow, from: nil), bounds: bounds)
+    let previousMouse = lastMouseLocal
     lastMouseLocal = p
+    let previousSelection = selection
     switch mode {
     case .dragging:
       selection = ScreenshotGeometry.clamp(
@@ -226,9 +228,15 @@ final class ScreenshotOverlayView: NSView {
         dragOrigin = p
       }
     case .idle:
-      break
+      return
     }
-    needsDisplay = true
+    // 只失效实际变化的区域(旧/新选区 chrome + 放大镜),不再整屏重绘 Retina 底图。
+    if let previousSelection { setNeedsDisplay(selectionInvalidRect(previousSelection)) }
+    if let s = selection { setNeedsDisplay(selectionInvalidRect(s)) }
+    if showMagnifier, !hasActivated {
+      if let previousMouse { setNeedsDisplay(magnifierInvalidRect(around: previousMouse)) }
+      setNeedsDisplay(magnifierInvalidRect(around: p))
+    }
   }
 
   override func mouseUp(with event: NSEvent) {
@@ -275,11 +283,21 @@ final class ScreenshotOverlayView: NSView {
 
   override func mouseMoved(with event: NSEvent) {
     let local = convert(event.locationInWindow, from: nil)
+    let previousMouse = lastMouseLocal
     lastMouseLocal = local
-    // 已有选区时不再做选窗高亮;但放大镜仍随光标刷新。
+
+    // 放大镜只在选区激活前显示;此前无条件整屏重绘,激活后移动鼠标也在空烧 CPU。
+    if showMagnifier, !hasActivated {
+      if let previousMouse { setNeedsDisplay(magnifierInvalidRect(around: previousMouse)) }
+      setNeedsDisplay(magnifierInvalidRect(around: local))
+    }
+
+    // 已有选区时不再做选窗高亮,只需清掉残留的悬停边框。
     guard selection == nil else {
-      hoverWindowRectLocal = nil
-      needsDisplay = true
+      if let hover = hoverWindowRectLocal {
+        hoverWindowRectLocal = nil
+        setNeedsDisplay(hover.insetBy(dx: -4, dy: -4))
+      }
       return
     }
     // 窗口列表查询较重,限频 ~20Hz;两次查询之间沿用上次高亮结果。
@@ -297,6 +315,7 @@ final class ScreenshotOverlayView: NSView {
           + WindowFrameDetector.diagnostics(
             atGlobalPoint: topLeft, excludingWindowNumbers: excluded, activeAppPID: activeAppPID))
       }
+      let previousHover = hoverWindowRectLocal
       if let g = WindowFrameDetector.windowFrame(
         atGlobalPoint: topLeft,
         excludingWindowNumbers: excluded,
@@ -306,8 +325,23 @@ final class ScreenshotOverlayView: NSView {
       } else {
         hoverWindowRectLocal = nil
       }
+      if previousHover != hoverWindowRectLocal {
+        if let previousHover { setNeedsDisplay(previousHover.insetBy(dx: -4, dy: -4)) }
+        if let hover = hoverWindowRectLocal { setNeedsDisplay(hover.insetBy(dx: -4, dy: -4)) }
+      }
     }
-    needsDisplay = true
+  }
+
+  // MARK: - 脏矩形
+
+  /// 放大镜(方框 + 下方信息标签)以光标为中心的保守外包区域。
+  private func magnifierInvalidRect(around p: CGPoint) -> CGRect {
+    CGRect(x: p.x - 160, y: p.y - 168, width: 320, height: 336)
+  }
+
+  /// 选区 chrome(3pt 边框、手柄、上/下方的尺寸标签)的保守外包区域。
+  private func selectionInvalidRect(_ s: CGRect) -> CGRect {
+    s.insetBy(dx: -110, dy: -42)
   }
 
   // MARK: - 键盘
@@ -466,11 +500,15 @@ final class ScreenshotOverlayView: NSView {
     let pxX = local.x * scale
     let pxYFromTop = CGFloat(img.height) - local.y * scale
     let half = CGFloat(sampleCount) / 2
-    let cropTopLeft = CGRect(
+    // 采样窗保持完整(可越界),裁剪时与图像求交;绘制按采样窗映射,越界部分留背板,
+    // 避免屏幕边缘把不足 NxN 的裁剪图拉伸铺满、中心像素偏离十字。
+    let sampleWindow = CGRect(
       x: pxX - half, y: pxYFromTop - half,
       width: CGFloat(sampleCount), height: CGFloat(sampleCount)
-    )
-    let cropped = img.cropping(to: cropTopLeft.integral)
+    ).integral
+    let imageBounds = CGRect(x: 0, y: 0, width: img.width, height: img.height)
+    let clampedWindow = sampleWindow.intersection(imageBounds)
+    let cropped = clampedWindow.isNull ? nil : img.cropping(to: clampedWindow)
 
     // 放大镜方框位置:光标右上偏移;越界则翻到对侧。
     let offset: CGFloat = 16
@@ -492,7 +530,15 @@ final class ScreenshotOverlayView: NSView {
       ctx.saveGState()
       ctx.translateBy(x: box.minX, y: box.maxY)
       ctx.scaleBy(x: 1, y: -1)
-      ctx.draw(cropped, in: CGRect(x: 0, y: 0, width: boxSize, height: boxSize))
+      // 翻转子上下文里 y 向下:目标子矩形按「裁剪窗相对采样窗的偏移」对位。
+      let unitX = boxSize / sampleWindow.width
+      let unitY = boxSize / sampleWindow.height
+      ctx.draw(cropped, in: CGRect(
+        x: (clampedWindow.minX - sampleWindow.minX) * unitX,
+        y: (clampedWindow.minY - sampleWindow.minY) * unitY,
+        width: clampedWindow.width * unitX,
+        height: clampedWindow.height * unitY
+      ))
       ctx.restoreGState()
     }
     ctx.restoreGState()
