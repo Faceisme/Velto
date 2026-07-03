@@ -373,6 +373,15 @@ final class SwitcherWindowList {
                 var missState = SwitcherWindowMissState(count: existing.missCount)
                 missState.markSeen()
                 existing.missCount = missState.count   // 本轮扫描到了 → 清零移除计数
+                // app 重建 AX 树后(微信 4.x 周期性干这事),同一个 wid 会带着
+                // 全新的 element 回来 —— 旧句柄已死,raise / 通知订阅都会失效,
+                // 必须换新并重挂窗口级通知。
+                if !CFEqual(existing.axUiElement, probe.axUiElement) {
+                    unsubscribeWindowNotifications(existing)
+                    existing.axUiElement = probe.axUiElement
+                    subscribeWindowNotifications(existing)
+                    SwitcherDebugLog.log("refresh AX element wid=\(probe.wid) app=\(app.localizedName ?? "?")")
+                }
                 if existing.title != resolvedTitle { existing.title = resolvedTitle }
                 if existing.isMinimized != probe.isMinimized { existing.isMinimized = probe.isMinimized }
                 if existing.isFullscreen != probe.isFullscreen { existing.isFullscreen = probe.isFullscreen }
@@ -392,8 +401,9 @@ final class SwitcherWindowList {
                     position: probe.position,
                     size: probe.size
                 )
-                // 新窗口排在末尾,等真实 focus 通知再上调
-                win.lastFocusOrder = windows.count
+                // 新窗口排在末尾,等真实 focus 通知再上调;短期内删又加的
+                // (AX 抖动误删)恢复被删前的 MRU 位
+                win.lastFocusOrder = initialFocusOrder(forNew: probe.wid)
                 windows[probe.wid] = win
                 // 订阅窗口级 AX 通知(destroy / minimize / title)
                 subscribeWindowNotifications(win)
@@ -406,10 +416,18 @@ final class SwitcherWindowList {
         // 移除策略:
         // - 例行扫描:连续两次 miss 才删,防 AX 瞬时漏报。
         // - 明确窗口状态变化:一次 miss 就删,防关闭/最小化后 Cmd+Tab 列表残留。
+        // - 整个 app 一个窗口都没扫到、但清单里明明有它的窗口:可疑扫描
+        //   (微信 4.x 每隔几秒就抖一次 actualCount=0,一两百毫秒后恢复),
+        //   强制降级到例行阈值,不允许一次 miss 就删。
         let missed = windows.values.filter { $0.application.pid == pid && !seenWids.contains($0.cgWindowId) }
+        var effectivePolicy = missingWindowPolicy
+        if seenWids.isEmpty && !missed.isEmpty && effectivePolicy == .explicitWindowStateChange {
+            SwitcherDebugLog.log("  applyProbes pid=\(pid) 空扫描但仍跟踪 \(missed.count) 个窗口 — miss 阈值降级为例行扫描")
+            effectivePolicy = .routineScan
+        }
         for w in missed {
             var missState = SwitcherWindowMissState(count: w.missCount)
-            if missState.recordMiss(using: missingWindowPolicy) {
+            if missState.recordMiss(using: effectivePolicy) {
                 removeWindow(w, compact: false)
                 setChanged = true
             } else {
@@ -450,12 +468,45 @@ final class SwitcherWindowList {
     @discardableResult
     private func removeWindow(_ window: SwitcherWindow, compact: Bool = true) -> Bool {
         guard windows[window.cgWindowId] === window else { return false }
+        SwitcherDebugLog.log("removeWindow wid=\(window.cgWindowId) app=\(window.application.localizedName ?? "?") title=\"\(window.title)\" mru=\(window.lastFocusOrder)")
+        rememberRemovedOrder(of: window)
         unsubscribeWindowNotifications(window)
         windows.removeValue(forKey: window.cgWindowId)
         if compact {
             compactMRUOrdering()
         }
         return true
+    }
+
+    // MARK: - 误删窗口的 MRU 位记忆
+
+    /// 最近被移除窗口的 MRU 位。AX 抖动(扫描瞬时漏窗 / element 重建)导致的
+    /// 误删,窗口几百毫秒内就会被扫回来 —— 如果按新窗口排到 MRU 末尾,
+    /// "刚聚焦过"的位置就丢了,之后几轮 ⌘Tab 顺序全乱。加回来时命中这份
+    /// 记忆就恢复原位。TTL 之外的记录当真关闭处理,不恢复。
+    private var recentlyRemovedOrders: [CGWindowID: (order: Int, removedAt: TimeInterval)] = [:]
+    private static let removedOrderTTL: TimeInterval = 10
+
+    private func rememberRemovedOrder(of window: SwitcherWindow) {
+        let now = CFAbsoluteTimeGetCurrent()
+        // 顺手清掉过期记录,字典不会无界增长
+        recentlyRemovedOrders = recentlyRemovedOrders.filter { now - $0.value.removedAt <= Self.removedOrderTTL }
+        recentlyRemovedOrders[window.cgWindowId] = (window.lastFocusOrder, now)
+    }
+
+    /// 新窗口入列时的初始 MRU 位:短期内删又加的恢复原位,否则排末尾。
+    private func initialFocusOrder(forNew wid: CGWindowID) -> Int {
+        guard let memory = recentlyRemovedOrders.removeValue(forKey: wid),
+              CFAbsoluteTimeGetCurrent() - memory.removedAt <= Self.removedOrderTTL
+        else {
+            return windows.count
+        }
+        SwitcherDebugLog.log("re-add wid=\(wid) 恢复原 MRU 位 \(memory.order)(短期删又加,判为 AX 抖动误删)")
+        // 给它腾出原来的位置,后面的整体后移一格;compact 随后会压实
+        for (_, w) in windows where w.lastFocusOrder >= memory.order {
+            w.lastFocusOrder += 1
+        }
+        return memory.order
     }
 
     @discardableResult
@@ -516,7 +567,7 @@ final class SwitcherWindowList {
         case kAXUIElementDestroyedNotification:
             // 销毁的 element 可能拿不到 wid(它已经从 CGS 里消失),退化到全量 sync
             if let window = window(matching: element) {
-                removeWindow(window)
+                handleWindowElementDestroyed(window)
             } else if let pid = pidOfElement(element) ?? frontmostPid {
                 syncWindowsForApp(pid: pid, missingWindowPolicy: .explicitWindowStateChange)
             }
@@ -548,6 +599,31 @@ final class SwitcherWindowList {
         default:
             break
         }
+    }
+
+    /// AX element 销毁 ≠ 窗口关闭。微信 4.x 会周期性重建整棵 AX 树:主窗口的
+    /// element 被销毁时 CG 窗口(wid)还活得好好的。直接删会把**当前前台窗口**
+    /// 踢出清单 —— compact 后别的 app 顶到 index 0,下一次 ⌘Tab 的 index 1 落在
+    /// 第三个 app 上,表现为"A↔B 交替切换偶发切到 C"。
+    /// 所以先问 WindowServer 这个 wid 是否还在:还在 → 保留条目、触发重扫换上
+    /// 新的 AX element(applyProbes 会做 element 替换);真没了 → 照删。
+    private func handleWindowElementDestroyed(_ window: SwitcherWindow) {
+        guard Self.windowServerKnowsWindow(window.cgWindowId) else {
+            removeWindow(window)
+            return
+        }
+        SwitcherDebugLog.log("destroyed AX element wid=\(window.cgWindowId) app=\(window.application.localizedName ?? "?") 仍被 WindowServer 认可 — 保留条目并重扫")
+        syncWindowsForApp(pid: window.application.pid, includeBruteForce: true)
+    }
+
+    /// WindowServer 是否还认识这个 wid。不限 on-screen —— 最小化 / 其他 Space
+    /// 的窗口也查得到,只有真正关闭的窗口才会消失。单 wid 查询,主线程廉价。
+    private static func windowServerKnowsWindow(_ wid: CGWindowID) -> Bool {
+        let ids = [NSNumber(value: wid)] as CFArray
+        guard let info = CGWindowListCreateDescriptionFromArray(ids) as? [[String: Any]] else {
+            return false
+        }
+        return !info.isEmpty
     }
 
     /// kAXTitleChangedNotification 专用的轻量更新路径。

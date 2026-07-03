@@ -19,7 +19,9 @@ final class SwitcherWindow: @unchecked Sendable {
     let cgWindowId: CGWindowID
 
     /// AX 视角的窗口句柄。focus / minimize / 读 title 都用它。
-    let axUiElement: AXUIElement
+    /// 可变:app 重建 AX 树时(微信 4.x)同一个 wid 会换新 element,
+    /// SwitcherWindowList.applyProbes 负责替换并重挂窗口级通知。主线程改。
+    var axUiElement: AXUIElement
 
     // MARK: 主线程可变状态
 
