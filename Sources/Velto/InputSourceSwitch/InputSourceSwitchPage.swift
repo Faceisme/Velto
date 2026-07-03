@@ -1,4 +1,5 @@
 import AppKit
+import Carbon
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -55,6 +56,17 @@ struct InputSourceSwitchPage: View {
       }
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
+    // 输入法候选跟着系统走:进页刷新一次,系统「启用的输入法」变化(用户在系统
+    // 设置里增删)时也实时刷新。@State 缓存只是避免每帧重查 TIS,不是写死列表。
+    .onAppear {
+      sources = InputSourceCatalog.all()
+      installedBrowsers = SupportedBrowserCatalog.installed()
+    }
+    .onReceive(DistributedNotificationCenter.default().publisher(
+      for: Notification.Name(kTISNotifyEnabledKeyboardInputSourcesChanged as String)
+    )) { _ in
+      sources = InputSourceCatalog.all()
+    }
     .sheet(item: $editingBrowserRule) { rule in
       BrowserRuleEditor(sources: sources, initial: rule) { saved in
         store.updatePreferences { p in
@@ -89,6 +101,10 @@ struct InputSourceSwitchPage: View {
             desc: "地址栏聚焦时切到它(常用于切英文)。", showDivider: true) {
           AnyView(sourcePicker(\.browserAddressDefaultInputSourceID))
         }
+        row(icon: "textformat.abc", title: "强制英文标点",
+            desc: "中文输入法打字时标点直接输出英文;在「应用规则」里按应用勾选生效。", showDivider: true) {
+          AnyView(toggle(\.forceEnglishPunctuationEnabled))
+        }
         row(icon: "ladybug", title: "调试日志",
             desc: "排查时打开,只写 input-source-switch.log。", showDivider: true) {
           AnyView(toggle(\.debugLoggingEnabled))
@@ -108,7 +124,7 @@ struct InputSourceSwitchPage: View {
 
   private var appRulesGroup: some View {
     VStack(alignment: .leading, spacing: 14) {
-      sectionLabel("把应用分到中文组 / 英文组,按组指定输入法 —— 改一次,整组生效。")
+      sectionLabel("把应用分到中文组 / 英文组,按组指定输入法 —— 改一次,整组生效。「英文标点」开关:该应用里中文输入法打字时,标点直接输出英文字符。")
       HStack(alignment: .top, spacing: 16) {
         groupColumn(role: .chinese)
         groupColumn(role: .english)
@@ -181,7 +197,7 @@ struct InputSourceSwitchPage: View {
     .frame(maxWidth: .infinity, alignment: .top)
   }
 
-  /// 成员应用行:图标 + 名称 + bundleId + 移出分组。
+  /// 成员应用行:图标 + 名称 + bundleId + 英文标点迷你开关 + 移出分组。
   private func memberRow(role: InputSourceGroupRole, bundleID: String) -> some View {
     VStack(spacing: 0) {
       Rectangle().fill(Color.mgHair).frame(height: 0.5)
@@ -194,6 +210,13 @@ struct InputSourceSwitchPage: View {
           Text(bundleID).font(.system(size: 11)).foregroundStyle(Color.mgText2).lineLimit(1)
         }
         Spacer(minLength: 8)
+        // 强制英文标点(移植自 ISP):按应用一个迷你开关,开了即生效。
+        HStack(spacing: 5) {
+          Text("英文标点").font(.system(size: 11)).foregroundStyle(Color.mgText3)
+          Toggle("", isOn: punctuationBinding(bundleID))
+            .labelsHidden().toggleStyle(.switch).controlSize(.mini).tint(.mgAccent)
+        }
+        .help("该应用里用中文输入法打字时,, . ; ' [ ] 等标点键直接输出英文字符;带 ⌘⌃⌥ 的快捷键不受影响。")
         Button { removeAppFromGroup(bundleID, role: role) } label: {
           Image(systemName: "minus.circle")
         }
@@ -201,6 +224,21 @@ struct InputSourceSwitchPage: View {
       }
       .padding(.horizontal, 16).padding(.vertical, 10)
     }
+  }
+
+  private func punctuationBinding(_ bundleID: String) -> Binding<Bool> {
+    Binding(
+      get: { store.preferences.inputSourceSwitch.forceEnglishPunctuationBundleIDs.contains(bundleID) },
+      set: { v in
+        store.updatePreferences { p in
+          if v {
+            p.inputSourceSwitch.forceEnglishPunctuationBundleIDs.insert(bundleID)
+          } else {
+            p.inputSourceSwitch.forceEnglishPunctuationBundleIDs.remove(bundleID)
+          }
+        }
+      }
+    )
   }
 
   // MARK: - 浏览器规则

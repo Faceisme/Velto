@@ -46,7 +46,9 @@ let package = Package(
         ),
         .testTarget(
             name: "VeltoTests",
-            dependencies: ["betterfinder", "VeltoAnnotationCore"],
+            // 依赖 Velto 可执行目标,测试才能 @testable import 并链接到其符号;
+            // 只声明 betterfinder/VeltoAnnotationCore 时 import 能编译但链接必失败。
+            dependencies: ["Velto", "betterfinder", "VeltoAnnotationCore"],
             path: "Tests/VeltoTests"
         )
     ],
