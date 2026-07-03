@@ -7,12 +7,18 @@ import Cocoa
 /// 保留一个最短可见时长,保证被我们接管的快捷键一定有可见反馈。
 struct SwitcherPanelVisibilityState {
     let minimumVisibleDuration: TimeInterval
+    /// "release 先于 trigger 到达"的合法乱序窗口只有几毫秒;超过这个年龄的
+    /// 挂起确认视为脏残留(比如 ⌘⇧+Tab 松开时两次 flagsChanged 连发两个
+    /// release,第二个撞上 session==nil),消费时直接丢弃 —— 否则下一次
+    /// 按住触发键想浏览时,面板会一闪立刻自动确认。
+    let pendingConfirmMaxAge: TimeInterval
 
     private var shownAt: TimeInterval?
-    private var hasPendingConfirmForNextSession = false
+    private var pendingConfirmNotedAt: TimeInterval?
 
-    init(minimumVisibleDuration: TimeInterval = 0.12) {
+    init(minimumVisibleDuration: TimeInterval = 0.12, pendingConfirmMaxAge: TimeInterval = 0.3) {
         self.minimumVisibleDuration = minimumVisibleDuration
+        self.pendingConfirmMaxAge = pendingConfirmMaxAge
     }
 
     mutating func markShown(at timestamp: TimeInterval) {
@@ -21,7 +27,7 @@ struct SwitcherPanelVisibilityState {
 
     mutating func clear() {
         shownAt = nil
-        hasPendingConfirmForNextSession = false
+        pendingConfirmNotedAt = nil
     }
 
     func confirmDelay(at timestamp: TimeInterval) -> TimeInterval {
@@ -29,14 +35,14 @@ struct SwitcherPanelVisibilityState {
         return max(0, minimumVisibleDuration - (timestamp - shownAt))
     }
 
-    mutating func noteConfirmBeforeSession() {
-        hasPendingConfirmForNextSession = true
+    mutating func noteConfirmBeforeSession(at timestamp: TimeInterval) {
+        pendingConfirmNotedAt = timestamp
     }
 
-    mutating func consumePendingConfirmForShownSession() -> Bool {
-        guard hasPendingConfirmForNextSession else { return false }
-        hasPendingConfirmForNextSession = false
-        return true
+    mutating func consumePendingConfirmForShownSession(at timestamp: TimeInterval) -> Bool {
+        guard let notedAt = pendingConfirmNotedAt else { return false }
+        pendingConfirmNotedAt = nil
+        return timestamp - notedAt <= pendingConfirmMaxAge
     }
 }
 
@@ -176,6 +182,12 @@ final class SwitcherController {
         SwitcherDebugLog.log("trigger reverse=\(reverse) sessionActive=\(SwitcherSession.isActive)")
 
         if SwitcherSession.isActive {
+            // 用户在延迟确认生效前又按下了触发键 —— 重新进入浏览。旧的挂起
+            // 确认作废,等这一次的松手重新确认;否则它会在用户按着触发键看
+            // 面板时到点开火,把 session 收掉。此刻触发键的 modifier 必然是
+            // 按下的,后续一定会有 release 来重新走确认,不会挂起。
+            pendingConfirmTask?.cancel()
+            pendingConfirmTask = nil
             stepSelection(reverse: reverse)
             return
         }
@@ -185,6 +197,10 @@ final class SwitcherController {
         // 首次召唤:取快照、起 session、显示 panel。
         // snapshot(applying:) 把过滤 + 排序全部按 prefs 跑完。
         let panelScreen = Self.resolvePanelScreen(for: prefs.showOnScreen)
+        // 取快照前以系统前台 app 为权威同步校正 MRU —— 鼠标/Dock 切换焦点后的
+        // MRU 提升走异步 AX 链,快速触发时往往还没落地,index 1 会仍是当前
+        // 窗口,确认后表现为"切了等于没切"。
+        windowList.reconcileFrontmostWithSystem()
         let snapshot = windowList.snapshot(applying: prefs, panelScreen: panelScreen)
         guard !snapshot.isEmpty else {
             SwitcherDebugLog.log("summon aborted: 没有可切换的窗口")
@@ -222,7 +238,7 @@ final class SwitcherController {
         // 没有 Screen Recording 权限就直接什么也不做,UI 保持纯图标态。
         startThumbnailCapture(for: session)
 
-        if panelVisibility.consumePendingConfirmForShownSession() {
+        if panelVisibility.consumePendingConfirmForShownSession(at: ProcessInfo.processInfo.systemUptime) {
             confirmAndDismiss()
         }
     }
@@ -280,7 +296,7 @@ final class SwitcherController {
 
     private func confirmAndDismiss(delayingFastRelease: Bool = true) {
         guard let session = SwitcherSession.current else {
-            panelVisibility.noteConfirmBeforeSession()
+            panelVisibility.noteConfirmBeforeSession(at: ProcessInfo.processInfo.systemUptime)
             return
         }
         guard delayingFastRelease else {

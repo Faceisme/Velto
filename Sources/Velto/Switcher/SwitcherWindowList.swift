@@ -528,8 +528,11 @@ final class SwitcherWindowList {
 
         // ---- 应用级别通知 ----
         case kAXFocusedWindowChangedNotification, kAXApplicationActivatedNotification:
-            updateFocusedWindowMRU()
+            // MRU 更新也用事件来源的 pid —— frontmostPid 靠 NSWorkspace 通知更新,
+            // AX 激活通知先到时它还是旧 app,拿它去读焦点窗口会把旧窗口再提升
+            // 一次,新前台窗口反而漏掉提升(workspaceDidActivateApp 不做提升)。
             if let pid = pidOfElement(element) ?? frontmostPid {
+                updateFocusedWindowMRU(pid: pid)
                 syncWindowsForApp(pid: pid)
             }
         case kAXApplicationHiddenNotification, kAXApplicationShownNotification:
@@ -574,8 +577,8 @@ final class SwitcherWindowList {
         }
     }
 
-    private func updateFocusedWindowMRU() {
-        guard let pid = frontmostPid, let app = apps[pid] else { return }
+    private func updateFocusedWindowMRU(pid: pid_t) {
+        guard let app = apps[pid] else { return }
         let axBox = SwitcherAxRefBox(element: app.axUiElement)
         AXCallQueue.shared.schedule("focus-\(pid)") { [weak self] in
             var value: CFTypeRef?
@@ -615,6 +618,29 @@ final class SwitcherWindowList {
     func promoteForConfirmedSwitch(window: SwitcherWindow) {
         frontmostPid = window.application.pid
         promoteToMostRecent(wid: window.cgWindowId)
+    }
+
+    /// 召唤切换器前的同步校正 —— 以 NSWorkspace 的前台 app 为权威。
+    ///
+    /// 鼠标点击 / Dock 切换焦点后,MRU 提升要走"AX 通知 → AXCallQueue 后台读
+    /// 焦点窗口 → 回主线程"的异步链,共享队列被无响应 app 的扫描头阻塞时能拖
+    /// 到秒级。这个窗口内快速触发切换器,快照 index 0 还是上一个前台窗口、
+    /// index 1 是当前窗口,initialSelection=1 选中的就是"你正在用的窗口",
+    /// 确认后表现为"切了等于没切"。这里同步把真实前台 app 最靠前的窗口顶到
+    /// MRU 首位;app 内部哪个窗口才是焦点,随后由异步链自愈(同 app 内的
+    /// 相对序不影响 initialSelection 落在下一个 app 上)。
+    func reconcileFrontmostWithSystem() {
+        guard let front = NSWorkspace.shared.frontmostApplication else { return }
+        let pid = front.processIdentifier
+        frontmostPid = pid
+        guard let top = windows.values.min(by: { $0.lastFocusOrder < $1.lastFocusOrder }),
+              top.application.pid != pid,
+              let candidate = windows.values
+                  .filter({ $0.application.pid == pid })
+                  .min(by: { $0.lastFocusOrder < $1.lastFocusOrder })
+        else { return }
+        SwitcherDebugLog.log("reconcile front pid=\(pid) app=\(front.localizedName ?? "?") promote wid=\(candidate.cgWindowId) (MRU top was \(top.application.localizedName ?? "?"))")
+        promoteToMostRecent(wid: candidate.cgWindowId)
     }
 
     private func refreshAppHiddenStates() {

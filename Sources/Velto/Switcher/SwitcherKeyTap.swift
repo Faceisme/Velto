@@ -29,7 +29,14 @@ struct SwitcherKeyTapState {
 
     mutating func setActive(_ active: Bool) {
         isActive = active
-        hasQueuedTrigger = false
+        // 只有激活(trigger 被 session 吸收)才消费 hasQueuedTrigger。
+        // 反激活来自主线程收面板 —— 快速连按时它可能落在"第二次 keyDown 已在
+        // tap 线程置上 hasQueuedTrigger、但 trigger 还没在主线程跑"之间;
+        // 这里若一并清掉,第二次的 Cmd 松开就再也发不出 release,新 session
+        // 会永远等不到确认(面板挂住不切)。
+        if active {
+            hasQueuedTrigger = false
+        }
     }
 
     mutating func cancel() {
