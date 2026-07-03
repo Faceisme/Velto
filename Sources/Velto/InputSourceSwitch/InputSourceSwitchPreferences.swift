@@ -170,12 +170,10 @@ struct InputSourceSwitchPreferences: Codable, Equatable {
   var cjkFixStrategy: InputSourceCJKFixStrategy = .previousInputSourceShortcut
   /// 启用了 URL 检测的浏览器 bundle id 集合。
   var enabledBrowserBundleIDs: Set<String> = []
-  /// 强制英文标点总开关(通用页条目)。默认开 —— 不勾选任何应用时本来就无效果,
-  /// 真正的粒度在 forceEnglishPunctuationBundleIDs;这里是一键全停的开关。
-  var forceEnglishPunctuationEnabled: Bool = true
-  /// 强制英文标点(移植自 ISP):集合里的 App 前台时即便是 CJKV 输入法,标点键也
-  /// 直接输出英文字符。按应用勾选生效,独立于 enabled 总开关。
-  var forceEnglishPunctuationBundleIDs: Set<String> = []
+  /// 强制英文标点(移植自 ISP,但简化为全局开关):开启后所有 App 里 CJKV 输入法
+  /// 打字时,标点键直接输出英文字符。默认关(改输出行为属于侵入式,必须显式开);
+  /// 独立于 enabled 总开关。曾做过按应用勾选的粒度,用户明确不要 —— 别加回来。
+  var forceEnglishPunctuationEnabled: Bool = false
   /// 应用分组(新架构):按分组管理应用,一个分组一个输入法。
   var appGroups: [InputSourceAppGroup] = []
   /// 应用规则(兼容旧架构):新配置优先走 appGroups,升级时自动迁移。
@@ -198,7 +196,6 @@ struct InputSourceSwitchPreferences: Codable, Equatable {
     cjkFixStrategy = try c.decodeIfPresent(InputSourceCJKFixStrategy.self, forKey: .cjkFixStrategy) ?? d.cjkFixStrategy
     enabledBrowserBundleIDs = try c.decodeIfPresent(Set<String>.self, forKey: .enabledBrowserBundleIDs) ?? d.enabledBrowserBundleIDs
     forceEnglishPunctuationEnabled = try c.decodeIfPresent(Bool.self, forKey: .forceEnglishPunctuationEnabled) ?? d.forceEnglishPunctuationEnabled
-    forceEnglishPunctuationBundleIDs = try c.decodeIfPresent(Set<String>.self, forKey: .forceEnglishPunctuationBundleIDs) ?? d.forceEnglishPunctuationBundleIDs
     appGroups = try c.decodeIfPresent([InputSourceAppGroup].self, forKey: .appGroups) ?? d.appGroups
     appRules = try c.decodeIfPresent([InputSourceAppRule].self, forKey: .appRules) ?? d.appRules
     browserRules = try c.decodeIfPresent([InputSourceBrowserRule].self, forKey: .browserRules) ?? d.browserRules

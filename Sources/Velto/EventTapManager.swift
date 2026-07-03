@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import Carbon
 @preconcurrency import CoreFoundation
 import CoreGraphics
 import Foundation
@@ -178,6 +179,7 @@ final class EventTapManager: @unchecked Sendable {
     private var storeObserver: NSObjectProtocol?
     private var betterFinderObserver: NSObjectProtocol?
     private var keyRemapObserver: NSObjectProtocol?
+    private var inputSourceObserver: NSObjectProtocol?
 
     @MainActor
     init(store: GestureStore = .shared) {
@@ -190,11 +192,22 @@ final class EventTapManager: @unchecked Sendable {
         applyPreferenceSnapshots(store.preferences)
         gesturesEnabledForTap = store.preferences.gesturesEnabled
         windowManagementEnabledForTap = store.preferences.windowManagementEnabled
-        // start() 之前于主线程设初值,此时无并发(同上两个快照)。
-        inputSourcePunctuationController.setActive(Self.punctuationActive(
-            preferences: store.preferences,
-            bundleID: NSWorkspace.shared.frontmostApplication?.bundleIdentifier
-        ))
+        // start() 之前于主线程设初值,此时无并发(同上两个快照)。调试日志开关先于
+        // setActive 同步,否则 InputSourceSwitchController.start() 还没跑,首条
+        // "active=true" 日志会被吞掉,排查时误以为功能没启用。
+        InputSourceSwitchDebugLog.setEnabled(store.preferences.inputSourceSwitch.debugLoggingEnabled)
+        inputSourcePunctuationController.setActive(
+            store.preferences.inputSourceSwitch.forceEnglishPunctuationEnabled
+        )
+        inputSourcePunctuationController.setCurrentInputSourceIsCJKV(Self.currentInputSourceIsCJKV())
+
+        inputSourceObserver = DistributedNotificationCenter.default().addObserver(
+            forName: Notification.Name(kTISNotifySelectedKeyboardInputSourceChanged as String),
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.syncPunctuationInputSourceSnapshot()
+        }
 
         activationObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification,
@@ -205,13 +218,8 @@ final class EventTapManager: @unchecked Sendable {
                   let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else {
                 return
             }
-            // queue: .main 保证回调在主线程,store 是 @MainActor。
-            let punctuationActive = MainActor.assumeIsolated {
-                Self.punctuationActive(preferences: store.preferences, bundleID: app.bundleIdentifier)
-            }
             self.performOnTapThread { [weak self] in
                 self?.gestureEngine.updateLastFrontmostApplication(app)
-                self?.inputSourcePunctuationController.setActive(punctuationActive)
             }
         }
 
@@ -227,18 +235,16 @@ final class EventTapManager: @unchecked Sendable {
                 let gestures = store.gestures
                 let version = store.gesturesVersion
                 self.applyPreferenceSnapshots(preferences)
-                // 偏好变了(开关翻转 / 应用列表增删)也要重算强制英文标点快照,
-                // 否则要等下一次 App 激活才生效。
-                let punctuationActive = Self.punctuationActive(
-                    preferences: preferences,
-                    bundleID: NSWorkspace.shared.frontmostApplication?.bundleIdentifier
-                )
+                // 强制英文标点是全局开关,偏好一变立刻同步快照。
+                let punctuationActive = preferences.inputSourceSwitch.forceEnglishPunctuationEnabled
+                let punctuationInputSourceIsCJKV = Self.currentInputSourceIsCJKV()
                 self.performOnTapThread { [weak self] in
                     self?.gesturesEnabledForTap = preferences.gesturesEnabled
                     self?.windowManagementEnabledForTap = preferences.windowManagementEnabled
                     self?.gestureEngine.updatePreferences(preferences)
                     self?.gestureEngine.updateGestures(gestures, version: version)
                     self?.inputSourcePunctuationController.setActive(punctuationActive)
+                    self?.inputSourcePunctuationController.setCurrentInputSourceIsCJKV(punctuationInputSourceIsCJKV)
                 }
             }
         }
@@ -303,6 +309,9 @@ final class EventTapManager: @unchecked Sendable {
         }
         if let keyRemapObserver {
             NotificationCenter.default.removeObserver(keyRemapObserver)
+        }
+        if let inputSourceObserver {
+            DistributedNotificationCenter.default().removeObserver(inputSourceObserver)
         }
         stop()
     }
@@ -599,6 +608,7 @@ final class EventTapManager: @unchecked Sendable {
             // 合成的「上一个输入法」快捷键 / 按键映射修饰键不能污染鼠标控制/缩放/拖窗的修饰键状态机。
             let fcUserData = event.getIntegerValueField(.eventSourceUserData)
             if fcUserData == ShortcutSynthesizer.syntheticEventMarker
+                || fcUserData == InputSourcePunctuationController.syntheticEventMarker
                 || InputSourceSwitchSelector.isSyntheticEvent(event) {
                 return Unmanaged.passUnretained(event)
             }
@@ -620,6 +630,7 @@ final class EventTapManager: @unchecked Sendable {
         case .keyDown:
             let kdUserData = event.getIntegerValueField(.eventSourceUserData)
             if kdUserData == ShortcutSynthesizer.syntheticEventMarker
+                || kdUserData == InputSourcePunctuationController.syntheticEventMarker
                 || InputSourceSwitchSelector.isSyntheticEvent(event) {
                 return Unmanaged.passUnretained(event)
             }
@@ -641,8 +652,8 @@ final class EventTapManager: @unchecked Sendable {
             }
             // 强制英文标点(输入法切换模块):启用的 App 里 CJKV 输入法下,标点键
             // 替换成携带英文字符的新事件。无 ⌘⌃⌥ 修饰才会命中,不影响任何快捷键。
-            if let replaced = inputSourcePunctuationController.replacementEvent(for: event) {
-                return Unmanaged.passRetained(replaced)
+            if inputSourcePunctuationController.handleKeyDown(event: event) {
+                return nil
             }
             // 窗口快捷键(如最大化)归窗口管理,受总开关门控。
             guard windowManagementEnabledForTap else {
@@ -655,8 +666,12 @@ final class EventTapManager: @unchecked Sendable {
         case .keyUp:
             let kuUserData = event.getIntegerValueField(.eventSourceUserData)
             if kuUserData == ShortcutSynthesizer.syntheticEventMarker
+                || kuUserData == InputSourcePunctuationController.syntheticEventMarker
                 || InputSourceSwitchSelector.isSyntheticEvent(event) {
                 return Unmanaged.passUnretained(event)
+            }
+            if inputSourcePunctuationController.shouldConsumeKeyUp(event: event) {
+                return nil
             }
             if keyRemapController.handleKeyUp(event: event) {
                 return nil
@@ -802,6 +817,17 @@ final class EventTapManager: @unchecked Sendable {
         CFRunLoopWakeUp(runLoop)
     }
 
+    private static func currentInputSourceIsCJKV() -> Bool {
+        InputSourceCatalog.current()?.isCJKV ?? false
+    }
+
+    private func syncPunctuationInputSourceSnapshot() {
+        let isCJKV = Self.currentInputSourceIsCJKV()
+        performOnTapThread { [weak self] in
+            self?.inputSourcePunctuationController.setCurrentInputSourceIsCJKV(isCJKV)
+        }
+    }
+
     private func applyPreferenceSnapshots(_ preferences: AppPreferences) {
         mouseControlController.updatePreferences(preferences.mouseControl)
         windowDragController.updateModifierFlags(
@@ -845,14 +871,6 @@ final class EventTapManager: @unchecked Sendable {
             }
         }
         return pairs
-    }
-
-    /// 当前前台 App 是否应启用强制英文标点(输入法切换模块的功能开关 + 应用列表)。
-    /// 主线程算好快照,经 performOnTapThread 推给 tap 线程的控制器。
-    private static func punctuationActive(preferences: AppPreferences, bundleID: String?) -> Bool {
-        let p = preferences.inputSourceSwitch
-        guard p.forceEnglishPunctuationEnabled, let bundleID else { return false }
-        return p.forceEnglishPunctuationBundleIDs.contains(bundleID)
     }
 
     private func isInRightClickPassThrough(_ event: CGEvent) -> Bool {
