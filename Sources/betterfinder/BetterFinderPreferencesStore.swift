@@ -53,6 +53,11 @@ public final class BetterFinderPreferencesStore: @unchecked Sendable {
     public static let didChangeNotification = Notification.Name("Velto.betterfinder.preferencesDidChange")
     public static let preferencesKey = "BetterFinder.preferences"
 
+    private struct FileStamp: Equatable {
+        let size: Int64
+        let mtime: TimeInterval
+    }
+
     private let defaults: UserDefaults
     private let legacyDefaults: UserDefaults?
     private let fileURL: URL?
@@ -60,15 +65,34 @@ public final class BetterFinderPreferencesStore: @unchecked Sendable {
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
     private var cachedPreferences: BetterFinderPreferences
+    private var cachedFileStamp: FileStamp?
 
+    /// menu(for:) 每次开菜单(工具栏/右键)都同步读它。此前每次访问都"读文件+JSON 解码+
+    /// 逐个查 UserDefaults",是 Finder 菜单显示"正在等待…"的元凶之一;现在先 stat 共享
+    /// 文件,内容没变直接回内存缓存(微秒级),变了才重新读盘解码。
     public var preferences: BetterFinderPreferences {
         lock.lock()
         defer { lock.unlock() }
-        if let persisted = loadPersistedPreferences() {
-            cachedPreferences = persisted
-            BetterFinderDebugLog.setEnabled(persisted.debugLoggingEnabled)
+        let stamp = Self.fileStamp(at: fileURL)
+        if stamp == nil || stamp != cachedFileStamp {
+            if let persisted = loadPersistedPreferences() {
+                cachedPreferences = persisted
+                BetterFinderDebugLog.setEnabled(persisted.debugLoggingEnabled)
+            }
+            cachedFileStamp = stamp
         }
         return cachedPreferences
+    }
+
+    private static func fileStamp(at url: URL?) -> FileStamp? {
+        guard let url else { return nil }
+        var status = stat()
+        guard stat(url.path, &status) == 0 else { return nil }
+        return FileStamp(
+            size: Int64(status.st_size),
+            mtime: TimeInterval(status.st_mtimespec.tv_sec)
+                + TimeInterval(status.st_mtimespec.tv_nsec) / 1_000_000_000
+        )
     }
 
     public init(
@@ -134,7 +158,6 @@ public final class BetterFinderPreferencesStore: @unchecked Sendable {
     private func persist(_ preferences: BetterFinderPreferences) {
         if let data = try? encoder.encode(preferences) {
             defaults.set(data, forKey: Self.preferencesKey)
-            defaults.synchronize()
             persistToFile(data)
         }
     }
@@ -147,6 +170,10 @@ public final class BetterFinderPreferencesStore: @unchecked Sendable {
                 withIntermediateDirectories: true
             )
             try data.write(to: fileURL, options: .atomic)
+            // 自己写入的内容无需下次重读:同步刷新 stamp,保持 preferences 走内存缓存。
+            lock.lock()
+            cachedFileStamp = Self.fileStamp(at: fileURL)
+            lock.unlock()
         } catch {
             NSLog("BetterFinder preferences file write failed: %@", error.localizedDescription)
         }
@@ -167,15 +194,17 @@ public final class BetterFinderPreferencesStore: @unchecked Sendable {
         fileURL: URL?,
         decoder: JSONDecoder
     ) -> BetterFinderPreferences? {
-        let sources = [
-            fileURL.flatMap { try? Data(contentsOf: $0) },
-            defaults.data(forKey: preferencesKey),
-            legacyDefaults?.data(forKey: preferencesKey),
-            legacyGroupContainerPreferencesData()
+        // 惰性求值:数组字面量会把四个来源全部执行(cfprefsd IPC + 两次遗留文件读取),
+        // 即便首个来源已命中。共享文件命中(常态)时后面三个不再执行。
+        let sources: [() -> Data?] = [
+            { fileURL.flatMap { try? Data(contentsOf: $0) } },
+            { defaults.data(forKey: preferencesKey) },
+            { legacyDefaults?.data(forKey: preferencesKey) },
+            { legacyGroupContainerPreferencesData() }
         ]
 
-        for data in sources {
-            guard let data,
+        for source in sources {
+            guard let data = source(),
                   let preferences = try? decoder.decode(BetterFinderPreferences.self, from: data)
             else {
                 continue

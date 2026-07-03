@@ -27,6 +27,18 @@ final class FinderSync: FIFinderSync {
                 BetterFinderDebugLog.log("volume mounted url=\(volumeURL.path)")
             }
         }
+
+        // 扩展进程会被系统频繁回收再拉起,内存图标缓存随之丢失;启动即后台预热
+        // 两种菜单的全部图标,首次开菜单不再现场查 LaunchServices。
+        let store = self.store
+        DispatchQueue.global(qos: .utility).async {
+            let preferences = store.preferences
+            let actions = (
+                BetterFinderMenuBuilder.entries(for: .toolbar, preferences: preferences)
+                    + BetterFinderMenuBuilder.entries(for: .contextMenu, preferences: preferences)
+            ).map(\.action)
+            BetterFinderIconProvider.warmUp(actions: actions, style: preferences.iconStyle)
+        }
     }
 
     override var toolbarItemName: String {
@@ -69,7 +81,7 @@ final class FinderSync: FIFinderSync {
             item.target = self
             item.identifier = NSUserInterfaceItemIdentifier(entry.identifier)
             item.representedObject = BetterFinderMenuPayload(entry: entry)
-            item.image = BetterFinderIconProvider.icon(for: entry.action, style: preferences.iconStyle)
+            item.image = BetterFinderIconProvider.menuIcon(for: entry.action, style: preferences.iconStyle)
             menu.addItem(item)
         }
         let elapsedMs = (CFAbsoluteTimeGetCurrent() - startedAt) * 1000
