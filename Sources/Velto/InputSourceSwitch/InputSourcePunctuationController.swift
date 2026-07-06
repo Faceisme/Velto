@@ -33,17 +33,24 @@ final class InputSourcePunctuationController: @unchecked Sendable {
   /// 合成事件源建一次复用(每次重建要走 IOKit,是热路径里最重的一步)。tap 线程独占。
   private let eventSource = CGEventSource(stateID: .privateState)
 
-  /// keycode → (无 Shift, 有 Shift) 的英文字符;nil = 该组合不替换。对齐 ISP 的映射表。
-  /// 数字/字母键不在表里 —— 它们参与拼音输入,替换会毁掉打字。
+  /// keycode → (无 Shift, 有 Shift) 的英文字符;nil = 该组合不替换。
+  /// 底表对齐 ISP 的映射表,另补上 ISP 原表漏掉、但中文输入法确实会转全角的四个:
+  /// ?(Shift+/ → ？)、!(Shift+1 → ！)、((Shift+9 → （)、)(Shift+0 → ））。
+  /// 数字/字母键的无 Shift 位必须是 nil —— 它们参与拼音输入/候选选词,替换会毁掉打字;
+  /// @#%&*=+ 中文输入法本就出半角,无需入表。
   static let englishMap: [Int64: (normal: String?, shifted: String?)] = [
     Int64(kVK_ANSI_Grave): ("`", "~"),
+    Int64(kVK_ANSI_1): (nil, "!"),
     Int64(kVK_ANSI_4): (nil, "$"),
     Int64(kVK_ANSI_6): (nil, "^"),
+    Int64(kVK_ANSI_9): (nil, "("),
+    Int64(kVK_ANSI_0): (nil, ")"),
     Int64(kVK_ANSI_Minus): ("-", "_"),
     Int64(kVK_ANSI_Comma): (",", "<"),
     Int64(kVK_ANSI_Period): (".", ">"),
     Int64(kVK_ANSI_Semicolon): (";", ":"),
     Int64(kVK_ANSI_Quote): ("'", "\""),
+    Int64(kVK_ANSI_Slash): ("/", "?"),
     Int64(kVK_ANSI_Backslash): ("\\", "|"),
     Int64(kVK_ANSI_LeftBracket): ("[", "{"),
     Int64(kVK_ANSI_RightBracket): ("]", "}"),
