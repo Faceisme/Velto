@@ -205,9 +205,35 @@ private struct SidebarItem: View {
             )
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(MouseDownButtonStyle())
         .onHover { isHovered = $0 }
         .transaction { $0.animation = nil }
+    }
+
+    /// 侧栏导航在鼠标"按下"即触发(与 AppKit 源列表选中行为一致);
+    /// 默认 Button 要等抬起才触发,是"不跟手"感的主要来源。
+    private struct MouseDownButtonStyle: PrimitiveButtonStyle {
+        func makeBody(configuration: Configuration) -> some View {
+            MouseDownButton(configuration: configuration)
+        }
+
+        private struct MouseDownButton: View {
+            let configuration: Configuration
+            @State private var fired = false
+
+            var body: some View {
+                configuration.label
+                    .gesture(
+                        DragGesture(minimumDistance: 0)
+                            .onChanged { _ in
+                                guard !fired else { return }
+                                fired = true
+                                configuration.trigger()
+                            }
+                            .onEnded { _ in fired = false }
+                    )
+            }
+        }
     }
 
     @ViewBuilder

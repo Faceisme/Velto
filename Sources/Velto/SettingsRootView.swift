@@ -80,6 +80,7 @@ private struct SettingsPageHost: NSViewControllerRepresentable {
 private final class SettingsPageHostController: NSViewController {
     private var controllers: [MGPage: NSViewController] = [:]
     private var currentPage: MGPage?
+    private var pendingPage: MGPage?
 
     override func loadView() {
         let root = NSView()
@@ -88,7 +89,19 @@ private final class SettingsPageHostController: NSViewController {
         view = root
     }
 
+    /// 换页推迟到下一个 runloop:页面首次构建(扫输入法/浏览器/图标)是同步重活,
+    /// 直接换会把侧栏高亮一起卡在同一帧,点击显得不跟手。
     func setPage(_ page: MGPage) {
+        guard page != (pendingPage ?? currentPage) else { return }
+        pendingPage = page
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let target = self.pendingPage else { return }
+            self.pendingPage = nil
+            self.applyPage(target)
+        }
+    }
+
+    private func applyPage(_ page: MGPage) {
         guard page != currentPage else { return }
 
         if let currentPage, let currentController = controllers[currentPage] {
