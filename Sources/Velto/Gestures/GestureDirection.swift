@@ -60,6 +60,12 @@ enum GestureDirection {
     /// 一笔是强弧、另一笔是直线时叠加的距离惩罚。0.4 足以越过识别阈值(默认 0.34)。
     static let bowStraightPenalty: CGFloat = 0.4
 
+    /// 多段序列编辑距离里「相邻方向桶(45°)」的替换代价。折返手势的竖/斜笔画常骑在
+    /// 45° 桶边界上(模板录成 ↓↗、实际画出 ↓↑),按整错记 1 会把这种只差一档的手势
+    /// 直接推过识别阈值(两段序列一档 = 0.5 > 0.34)。0.25 让「一档之差」稳稳落在
+    /// 阈值内(双腿都差一档 = 0.25),又不至于把差两档(90°)的真不同手势拉进来。
+    static let adjacentSubstitutionCost: CGFloat = 0.25
+
     private static let glyphs = ["→", "↘", "↓", "↙", "←", "↖", "↑", "↗"]
 
     // MARK: - 主入口
@@ -245,26 +251,38 @@ enum GestureDirection {
         return 0
     }
 
-    /// 方向序列差异度,归一化到约 [0, 1]:0 = 完全一致。编辑距离 ÷ 较长序列长度。
+    /// 方向序列差异度,归一化到约 [0, 1]:0 = 完全一致。加权编辑距离 ÷ 较长序列长度。
+    ///
+    /// 只要任一序列是多段(折返),替换代价就分级:相邻方向桶只记
+    /// `adjacentSubstitutionCost`,其余仍记 1。单段 vs 单段保持严格二值 —— 单段的
+    /// 相邻方向放宽由 `distance` 的「同弧向」判据把关,这里再放宽会让 → 直线与 ↗
+    /// 直线互相误命中。
     private static func sequenceDistance(_ lhs: [Int], _ rhs: [Int]) -> CGFloat {
         if lhs == rhs { return 0 }
         if lhs.isEmpty || rhs.isEmpty { return 1 }
-        return CGFloat(levenshtein(lhs, rhs)) / CGFloat(max(lhs.count, rhs.count))
+        let graded = lhs.count > 1 || rhs.count > 1
+        return levenshtein(lhs, rhs, graded: graded) / CGFloat(max(lhs.count, rhs.count))
     }
 
-    /// 标准动态规划编辑距离(两行滚动数组)。序列很短(通常 1~3),开销可忽略。
-    private static func levenshtein(_ lhs: [Int], _ rhs: [Int]) -> Int {
-        var previous = Array(0...rhs.count)
-        var current = [Int](repeating: 0, count: rhs.count + 1)
+    /// 加权动态规划编辑距离(两行滚动数组)。序列很短(通常 1~3),开销可忽略。
+    private static func levenshtein(_ lhs: [Int], _ rhs: [Int], graded: Bool) -> CGFloat {
+        var previous = (0...rhs.count).map(CGFloat.init)
+        var current = [CGFloat](repeating: 0, count: rhs.count + 1)
         for i in 1...lhs.count {
-            current[0] = i
+            current[0] = CGFloat(i)
             for j in 1...rhs.count {
-                let cost = lhs[i - 1] == rhs[j - 1] ? 0 : 1
+                let cost = substitutionCost(lhs[i - 1], rhs[j - 1], graded: graded)
                 current[j] = min(previous[j] + 1, current[j - 1] + 1, previous[j - 1] + cost)
             }
             swap(&previous, &current)
         }
         return previous[rhs.count]
+    }
+
+    private static func substitutionCost(_ a: Int, _ b: Int, graded: Bool) -> CGFloat {
+        if a == b { return 0 }
+        if graded, circularBucketDistance(a, b) == 1 { return adjacentSubstitutionCost }
+        return 1
     }
 
     // MARK: - 几何
