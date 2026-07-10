@@ -23,10 +23,66 @@ final class InputSourcePunctuationController: @unchecked Sendable {
   /// 按键映射等分支再加工。
   static let syntheticEventMarker: Int64 = 0x56_45_4C_50 // "VELP"
 
+  /// IME 组字状态推演(候选窗是否可见的近似)。tap 线程拿不到输入法真实组字
+  /// 状态,只能按键流估计缓冲长度:字母 +1、退格 -1、提交/取消键归零。
+  /// 宁可误判"在组字"(标点透传一次,最多出一个中文标点)也不能误判"没组字"
+  /// (吞掉 [ ] - 会让候选窗翻不了页)。
+  struct CompositionTracker {
+    private(set) var bufferedKeyCount = 0
+    var isComposing: Bool { bufferedKeyCount > 0 }
+
+    /// 组字缓冲上限估计。IME 缓冲不会无限长,封顶防状态漂移后卡死在"组字中"。
+    private static let maxBufferedKeys = 64
+
+    private static let letterKeyCodes: Set<Int64> = Set(
+      [
+        kVK_ANSI_A, kVK_ANSI_B, kVK_ANSI_C, kVK_ANSI_D, kVK_ANSI_E, kVK_ANSI_F, kVK_ANSI_G,
+        kVK_ANSI_H, kVK_ANSI_I, kVK_ANSI_J, kVK_ANSI_K, kVK_ANSI_L, kVK_ANSI_M, kVK_ANSI_N,
+        kVK_ANSI_O, kVK_ANSI_P, kVK_ANSI_Q, kVK_ANSI_R, kVK_ANSI_S, kVK_ANSI_T, kVK_ANSI_U,
+        kVK_ANSI_V, kVK_ANSI_W, kVK_ANSI_X, kVK_ANSI_Y, kVK_ANSI_Z,
+      ].map(Int64.init))
+
+    /// 这些键要么提交要么取消组字:空格/回车选字、Esc 撤销、Tab 补全、数字选候选。
+    private static let commitKeyCodes: Set<Int64> = Set(
+      [
+        kVK_Space, kVK_Return, kVK_ANSI_KeypadEnter, kVK_Escape, kVK_Tab,
+        kVK_ANSI_1, kVK_ANSI_2, kVK_ANSI_3, kVK_ANSI_4, kVK_ANSI_5,
+        kVK_ANSI_6, kVK_ANSI_7, kVK_ANSI_8, kVK_ANSI_9, kVK_ANSI_0,
+      ].map(Int64.init))
+
+    mutating func noteKeyDown(keyCode: Int64, flags: CGEventFlags) {
+      // ⌘⌃ 快捷键基本都会提交/取消组字(⌘A、⌘Tab 切 App 等),保守归零。
+      guard flags.intersection([.maskCommand, .maskControl]).isEmpty else {
+        bufferedKeyCount = 0
+        return
+      }
+      if Self.letterKeyCodes.contains(keyCode) {
+        // ⌥/Fn+字母出的是特殊符号,不进拼音缓冲。
+        guard flags.intersection([.maskAlternate, .maskSecondaryFn]).isEmpty else { return }
+        bufferedKeyCount = min(bufferedKeyCount + 1, Self.maxBufferedKeys)
+      } else if keyCode == Int64(kVK_Delete) || keyCode == Int64(kVK_ForwardDelete) {
+        bufferedKeyCount = max(0, bufferedKeyCount - 1)
+      } else if Self.commitKeyCodes.contains(keyCode) {
+        bufferedKeyCount = 0
+      }
+      // 其余键(方向键/PgUp/PgDn/=/F 区)组字中都在导航候选,状态不变。
+    }
+
+    mutating func reset() { bufferedKeyCount = 0 }
+  }
+
+  /// 组字期间的候选导航键:Apple 拼音/双拼里 [ ] 翻页、- 翻页(= 不在替换表,天然放行)。
+  /// 这些键组字中必须透传原事件 —— 换成 keyCode 0 的合成事件后输入法认不出翻页键,
+  /// 候选窗会彻底翻不了页(2026-07 实测双拼 [ ] 翻页失灵的根因)。
+  static let candidateNavigationKeyCodes: Set<Int64> = Set(
+    [kVK_ANSI_LeftBracket, kVK_ANSI_RightBracket, kVK_ANSI_Minus].map(Int64.init))
+
   /// 功能全局开关快照。tap 线程独占(主线程经 performOnTapThread 写入)。
   private var active = false
   /// 当前输入法是否 CJKV 的快照。tap 线程独占,主线程监听系统输入法变更通知后推入。
   private var inputSourceIsCJKV = false
+  /// 组字状态推演。tap 线程独占。
+  private var compositionTracker = CompositionTracker()
   /// 原标点 keyDown 被吞掉后,对应的物理 keyUp 也必须吞掉,避免目标 App 看到不成对按键。
   private var suppressedKeyUpCounts: [Int64: Int] = [:]
 
@@ -60,6 +116,7 @@ final class InputSourcePunctuationController: @unchecked Sendable {
   func setActive(_ newValue: Bool) {
     guard active != newValue else { return }
     active = newValue
+    compositionTracker.reset()
     InputSourceSwitchDebugLog.log("强制英文标点 active=\(newValue)")
   }
 
@@ -67,7 +124,13 @@ final class InputSourcePunctuationController: @unchecked Sendable {
   func setCurrentInputSourceIsCJKV(_ newValue: Bool) {
     guard inputSourceIsCJKV != newValue else { return }
     inputSourceIsCJKV = newValue
+    compositionTracker.reset()
     InputSourceSwitchDebugLog.log("强制英文标点 currentIsCJKV=\(newValue)")
+  }
+
+  /// 在 tap 线程调用:鼠标按下会提交/取消 IME 组字,推演状态跟着归零。
+  func noteMouseDown() {
+    compositionTracker.reset()
   }
 
   /// 合成事件标记判断。EventTapManager 先放行这些事件,避免被按键映射或本控制器二次处理。
@@ -81,12 +144,22 @@ final class InputSourcePunctuationController: @unchecked Sendable {
   /// 落调试日志 —— "开了却没效果"全靠这几行定位。
   func handleKeyDown(event: CGEvent) -> Bool {
     let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
-    guard Self.englishMap[keyCode] != nil else { return false }
+    guard Self.englishMap[keyCode] != nil else {
+      // 非标点键只喂组字推演(字母/退格/提交键),零日志零额外开销。
+      if active, inputSourceIsCJKV {
+        compositionTracker.noteKeyDown(keyCode: keyCode, flags: event.flags)
+      }
+      return false
+    }
     guard active else {
       InputSourceSwitchDebugLog.log("强制英文标点:keyCode=\(keyCode) 放行 —— 功能未启用(active=false)")
       return false
     }
     guard let replacement = Self.replacementString(keyCode: keyCode, flags: event.flags) else {
+      // ⌘[ 这类快捷键多半会打断组字,同样喂给推演(内部只对 ⌘⌃ 归零)。
+      if inputSourceIsCJKV {
+        compositionTracker.noteKeyDown(keyCode: keyCode, flags: event.flags)
+      }
       InputSourceSwitchDebugLog.log(
         "强制英文标点:keyCode=\(keyCode) 放行 —— 带快捷键修饰或该组合无映射 flags=\(event.flags.rawValue)")
       return false
@@ -96,10 +169,18 @@ final class InputSourcePunctuationController: @unchecked Sendable {
       InputSourceSwitchDebugLog.log("强制英文标点:keyCode=\(keyCode) 放行 —— 当前非 CJKV 输入法")
       return false
     }
+    // 组字中(候选窗可见)的 [ ] - 是翻页键,必须把原事件透传给输入法。
+    if compositionTracker.isComposing, Self.candidateNavigationKeyCodes.contains(keyCode) {
+      InputSourceSwitchDebugLog.log(
+        "强制英文标点:keyCode=\(keyCode) 放行 —— 组字中候选导航键(缓冲估计=\(compositionTracker.bufferedKeyCount))")
+      return false
+    }
     guard postReplacementTap(replacement: replacement, originalTimestamp: event.timestamp) else {
       InputSourceSwitchDebugLog.log("强制英文标点:合成事件创建失败 keyCode=\(keyCode),透传原事件")
       return false
     }
+    // 合成标点会让 IME 提交当前组字,推演状态跟着归零。
+    compositionTracker.reset()
     if event.getIntegerValueField(.keyboardEventAutorepeat) == 0 {
       suppressedKeyUpCounts[keyCode, default: 0] += 1
     }

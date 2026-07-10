@@ -585,9 +585,14 @@ final class EventTapManager: @unchecked Sendable {
                 : Unmanaged.passUnretained(event)
 
         case .leftMouseDown, .leftMouseUp, .otherMouseDown, .otherMouseUp:
-            return mouseControlController.handleTriggerEvent(type: type, event: event, normalizedFlags: raw)
-                ? nil
-                : Unmanaged.passUnretained(event)
+            if mouseControlController.handleTriggerEvent(type: type, event: event, normalizedFlags: raw) {
+                return nil
+            }
+            // 透传到 App 的鼠标按下会提交/取消 IME 组字,强制英文标点的组字推演跟着归零。
+            if type == .leftMouseDown || type == .otherMouseDown {
+                inputSourcePunctuationController.noteMouseDown()
+            }
+            return Unmanaged.passUnretained(event)
 
         case .mouseMoved:
             guard !gestureEngine.isHandlingRightMouse else {
