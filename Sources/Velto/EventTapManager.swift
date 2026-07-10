@@ -199,7 +199,9 @@ final class EventTapManager: @unchecked Sendable {
         inputSourcePunctuationController.setActive(
             store.preferences.inputSourceSwitch.forceEnglishPunctuationEnabled
         )
-        inputSourcePunctuationController.setCurrentInputSourceIsCJKV(Self.currentInputSourceIsCJKV())
+        let punctuationSnapshot = Self.currentPunctuationSnapshot()
+        inputSourcePunctuationController.setCurrentInputSourceIsCJKV(punctuationSnapshot.isCJKV)
+        inputSourcePunctuationController.setCurrentInputSourceProcessID(punctuationSnapshot.imePID)
 
         inputSourceObserver = DistributedNotificationCenter.default().addObserver(
             forName: Notification.Name(kTISNotifySelectedKeyboardInputSourceChanged as String),
@@ -237,14 +239,15 @@ final class EventTapManager: @unchecked Sendable {
                 self.applyPreferenceSnapshots(preferences)
                 // 强制英文标点是全局开关,偏好一变立刻同步快照。
                 let punctuationActive = preferences.inputSourceSwitch.forceEnglishPunctuationEnabled
-                let punctuationInputSourceIsCJKV = Self.currentInputSourceIsCJKV()
+                let punctuationSnapshot = Self.currentPunctuationSnapshot()
                 self.performOnTapThread { [weak self] in
                     self?.gesturesEnabledForTap = preferences.gesturesEnabled
                     self?.windowManagementEnabledForTap = preferences.windowManagementEnabled
                     self?.gestureEngine.updatePreferences(preferences)
                     self?.gestureEngine.updateGestures(gestures, version: version)
                     self?.inputSourcePunctuationController.setActive(punctuationActive)
-                    self?.inputSourcePunctuationController.setCurrentInputSourceIsCJKV(punctuationInputSourceIsCJKV)
+                    self?.inputSourcePunctuationController.setCurrentInputSourceIsCJKV(punctuationSnapshot.isCJKV)
+                    self?.inputSourcePunctuationController.setCurrentInputSourceProcessID(punctuationSnapshot.imePID)
                 }
             }
         }
@@ -822,14 +825,21 @@ final class EventTapManager: @unchecked Sendable {
         CFRunLoopWakeUp(runLoop)
     }
 
-    private static func currentInputSourceIsCJKV() -> Bool {
-        InputSourceCatalog.current()?.isCJKV ?? false
+    /// 强制英文标点需要的当前输入法快照:是否 CJKV + 宿主进程 PID(查候选窗在屏用)。
+    /// 只能在主线程调(TIS + NSRunningApplication)。
+    private static func currentPunctuationSnapshot() -> (isCJKV: Bool, imePID: pid_t?) {
+        guard let info = InputSourceCatalog.current(), info.isCJKV else { return (false, nil) }
+        let pid = info.bundleID.flatMap {
+            NSRunningApplication.runningApplications(withBundleIdentifier: $0).first?.processIdentifier
+        }
+        return (true, pid)
     }
 
     private func syncPunctuationInputSourceSnapshot() {
-        let isCJKV = Self.currentInputSourceIsCJKV()
+        let snapshot = Self.currentPunctuationSnapshot()
         performOnTapThread { [weak self] in
-            self?.inputSourcePunctuationController.setCurrentInputSourceIsCJKV(isCJKV)
+            self?.inputSourcePunctuationController.setCurrentInputSourceIsCJKV(snapshot.isCJKV)
+            self?.inputSourcePunctuationController.setCurrentInputSourceProcessID(snapshot.imePID)
         }
     }
 

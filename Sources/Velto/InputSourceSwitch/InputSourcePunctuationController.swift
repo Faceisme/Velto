@@ -81,7 +81,9 @@ final class InputSourcePunctuationController: @unchecked Sendable {
   private var active = false
   /// 当前输入法是否 CJKV 的快照。tap 线程独占,主线程监听系统输入法变更通知后推入。
   private var inputSourceIsCJKV = false
-  /// 组字状态推演。tap 线程独占。
+  /// 当前输入法宿主进程 PID(nil=键盘布局或解析失败)。tap 线程独占,主线程推入。
+  private var imeProcessID: pid_t?
+  /// 组字状态推演。仅在 imeProcessID 解析不到时兜底用。tap 线程独占。
   private var compositionTracker = CompositionTracker()
   /// 原标点 keyDown 被吞掉后,对应的物理 keyUp 也必须吞掉,避免目标 App 看到不成对按键。
   private var suppressedKeyUpCounts: [Int64: Int] = [:]
@@ -128,9 +130,36 @@ final class InputSourcePunctuationController: @unchecked Sendable {
     InputSourceSwitchDebugLog.log("强制英文标点 currentIsCJKV=\(newValue)")
   }
 
+  /// 在 tap 线程调用(主线程解析后经 performOnTapThread 推入)。
+  func setCurrentInputSourceProcessID(_ pid: pid_t?) {
+    guard imeProcessID != pid else { return }
+    imeProcessID = pid
+    InputSourceSwitchDebugLog.log("强制英文标点 imePID=\(pid.map(String.init) ?? "nil")")
+  }
+
   /// 在 tap 线程调用:鼠标按下会提交/取消 IME 组字,推演状态跟着归零。
   func noteMouseDown() {
     compositionTracker.reset()
+  }
+
+  /// 组字判定。首选真值:IME 宿主进程有在屏窗口(候选窗)=正在组字 —— 空闲时
+  /// SCIM/豆包都没有任何在屏窗口(2026-07-10 实测)。按键流推演推不出「数字/空格
+  /// 选字只上屏一段、候选窗还开着」的场景(第一次翻页正常、选字后翻页失灵的根因),
+  /// 只在 PID 解析不到时兜底。
+  private func isComposingNow() -> (composing: Bool, via: String) {
+    if let pid = imeProcessID {
+      let composing = Self.processOwnsOnScreenWindow(pid: pid)
+      return (composing, "候选窗\(composing ? "在屏" : "不在屏") imePID=\(pid)")
+    }
+    return (compositionTracker.isComposing, "按键流推演(缓冲=\(compositionTracker.bufferedKeyCount))")
+  }
+
+  /// WindowServer 一次 IPC(实测远低于 1ms),只发生在标点导航键按下时,热路径无感。
+  private static func processOwnsOnScreenWindow(pid: pid_t) -> Bool {
+    guard let list = CGWindowListCopyWindowInfo(
+      [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]
+    else { return false }
+    return list.contains { ($0[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == pid }
   }
 
   /// 合成事件标记判断。EventTapManager 先放行这些事件,避免被按键映射或本控制器二次处理。
@@ -170,10 +199,13 @@ final class InputSourcePunctuationController: @unchecked Sendable {
       return false
     }
     // 组字中(候选窗可见)的 [ ] - 是翻页键,必须把原事件透传给输入法。
-    if compositionTracker.isComposing, Self.candidateNavigationKeyCodes.contains(keyCode) {
-      InputSourceSwitchDebugLog.log(
-        "强制英文标点:keyCode=\(keyCode) 放行 —— 组字中候选导航键(缓冲估计=\(compositionTracker.bufferedKeyCount))")
-      return false
+    if Self.candidateNavigationKeyCodes.contains(keyCode) {
+      let verdict = isComposingNow()
+      if verdict.composing {
+        InputSourceSwitchDebugLog.log(
+          "强制英文标点:keyCode=\(keyCode) 放行 —— 组字中候选导航键(\(verdict.via))")
+        return false
+      }
     }
     guard postReplacementTap(replacement: replacement, originalTimestamp: event.timestamp) else {
       InputSourceSwitchDebugLog.log("强制英文标点:合成事件创建失败 keyCode=\(keyCode),透传原事件")

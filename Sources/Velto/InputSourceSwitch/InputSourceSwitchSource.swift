@@ -10,6 +10,9 @@ struct InputSourceInfo: Identifiable, Equatable {
   var localizedName: String
   var sourceLanguages: [String]
   var isEnabled: Bool
+  /// kTISPropertyBundleID:输入法宿主进程的 bundle id(键盘布局无宿主为 nil)。
+  /// 强制英文标点靠它定位 IME 进程,查候选窗是否在屏。
+  var bundleID: String?
 
   /// 持久化 ID。对齐 InputSourcePro:sourceID::inputModeID。
   var id: String {
@@ -96,7 +99,8 @@ enum InputSourceCatalog {
       inputModeID: inputModeID,
       localizedName: name,
       sourceLanguages: langs,
-      isEnabled: enabled
+      isEnabled: enabled,
+      bundleID: stringProperty(source, kTISPropertyBundleID)
     )
   }
 
