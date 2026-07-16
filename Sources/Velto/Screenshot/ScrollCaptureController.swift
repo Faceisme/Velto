@@ -19,7 +19,8 @@ final class ScrollCaptureController {
   var onProgress: ((CGImage?, Int) -> Void)?
 
   private let snapshot: DisplaySnapshot
-  private let captureRect: CGRect
+  /// 捕获区(全局点坐标)。底边扩展后原地放大,后续抓帧按新区进行。
+  private var captureRect: CGRect
   private let backingScale: CGFloat
   private let maxPixelHeight = 30_000
   private let maxPixelCount = 50_000_000
@@ -130,10 +131,10 @@ final class ScrollCaptureController {
 
   // MARK: - Frame capture
 
-  private func captureFrame() async -> CGImage? {
+  private func captureFrame(rect: CGRect? = nil) async -> CGImage? {
     guard let image = try? await ScreenshotCapturer.captureRegion(
       in: snapshot,
-      globalRect: captureRect
+      globalRect: rect ?? captureRect
     ) else { return nil }
     return normalizeFrame(image)
   }
@@ -158,12 +159,12 @@ final class ScrollCaptureController {
     return context.makeImage()
   }
 
-  private func captureSettledFrame() async -> CGImage? {
+  private func captureSettledFrame(rect: CGRect? = nil) async -> CGImage? {
     var previousCG: CGImage?
     var wait = Duration.milliseconds(10)
 
     for _ in 0..<30 {
-      guard !Task.isCancelled, let cg = await captureFrame() else {
+      guard !Task.isCancelled, let cg = await captureFrame(rect: rect) else {
         try? await Task.sleep(for: .milliseconds(30))
         continue
       }
@@ -219,6 +220,46 @@ final class ScrollCaptureController {
       return
     }
     _ = process(currentFrame: currentFrame, previousFrame: previousFrame, isSettled: true)
+  }
+
+  /// 选区底边向下扩展 delta 点:抓取新露出的条带(稳定帧)追加到长图底部,并原地放大捕获区。
+  /// 拼好的长图底部就是最近一帧的选区底边,紧邻其下的屏上条带天然连续,可直接追加。
+  /// 扩展后旧基准帧尺寸已对不上,作废之;继续滚动时下一帧自动成为新基准,拼接照常。
+  /// 失败(高度超上限 / 抓帧失败 / 宽度不一致)返回 false,捕获区保持不变。
+  func extendBottom(byPoints delta: CGFloat) async -> Bool {
+    guard isActive, delta >= 1, mergedImage != nil else { return false }
+    while isCapturing {
+      try? await Task.sleep(for: .milliseconds(25))
+      guard isActive, !Task.isCancelled else { return false }
+    }
+    isCapturing = true
+    defer { isCapturing = false }
+
+    let stripRect = CGRect(
+      x: captureRect.minX, y: captureRect.minY - delta,
+      width: captureRect.width, height: delta
+    )
+    guard let strip = await captureSettledFrame(rect: stripRect), isActive,
+          let existing = mergedImage else { return false }
+    let rowLimit = min(maxPixelHeight, maxPixelCount / max(1, existing.width))
+    guard strip.width == existing.width,
+          existing.height + strip.height <= rowLimit,
+          mergeNewContent(currentFrame: strip, offsetPx: strip.height) else {
+      ScreenshotDebugLog.log("macshot核心:底边扩展失败 strip=\(strip.width)x\(strip.height) "
+        + "existing=\(existing.width)x\(existing.height) rowLimit=\(rowLimit)")
+      return false
+    }
+
+    captureRect = CGRect(
+      x: captureRect.minX, y: captureRect.minY - delta,
+      width: captureRect.width, height: captureRect.height + delta
+    )
+    shotA = nil
+    stripCount += 1
+    emitProgress()
+    ScreenshotDebugLog.log("macshot核心:底边扩展 +\(strip.height)px result="
+      + "\(Int(stitchedPixelSize.width))x\(Int(stitchedPixelSize.height))")
+    return true
   }
 
   private func process(currentFrame: CGImage, previousFrame: CGImage, isSettled: Bool) -> Bool {

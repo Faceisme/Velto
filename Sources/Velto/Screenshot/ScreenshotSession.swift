@@ -15,8 +15,12 @@ final class ScreenshotSession: ScreenshotOverlayDelegate {
   private var previousApp: NSRunningApplication?
   private var scrollHUD: ScrollCaptureHUD?
   private var scrollActionBar: ScrollCaptureActionBar?
+  private var scrollEdgeHandle: ScrollCaptureEdgeHandle?
   private var scrollController: ScrollCaptureController?
   private var scrollStartTask: Task<Void, Never>?
+  private var scrollExtendTask: Task<Void, Never>?
+  /// 本次滚动捕获中底边扩展过:Esc 退回选区编辑时需按新几何重建标注画布。
+  private var scrollRegionExtended = false
   /// 输出失败后保留已定稿长图,让用户可直接重试复制/保存。
   private var scrollFinalImage: CGImage?
   private var scrollRegion: CGRect?
@@ -130,6 +134,7 @@ final class ScreenshotSession: ScreenshotOverlayDelegate {
     scrollRegion = globalRect
     scrollSnapshot = snapshot
     scrollFinalImage = nil
+    scrollRegionExtended = false
     scrollActivity = ProcessInfo.processInfo.beginActivity(
       options: [.userInitiated, .latencyCritical],
       reason: "滚动长截图捕获")
@@ -145,7 +150,8 @@ final class ScreenshotSession: ScreenshotOverlayDelegate {
     hud.onSave = { [weak self] in self?.finishScrollCapture(.save) }
     hud.onCancel = { [weak self] in self?.cancelScrollCapture() }
     hud.orderFrontRegardless()
-    hud.update(thumbnail: nil, heightPx: 0, hint: "请手动向下滚动  Enter 完成 · 保存 · Esc 取消")
+    hud.update(thumbnail: nil, heightPx: 0,
+               hint: "请手动向下滚动,滚到底可下拽底边手柄补内容\nEnter 完成 · 保存 · Esc 取消")
     scrollHUD = hud
 
     let actionBar = ScrollCaptureActionBar(selectionRect: globalRect, screenFrame: snapshot.frame)
@@ -155,6 +161,20 @@ final class ScreenshotSession: ScreenshotOverlayDelegate {
     actionBar.onCancel = { [weak self] in self?.cancelScrollCapture() }
     actionBar.orderFrontRegardless()
     scrollActionBar = actionBar
+
+    // 底边下拽手柄:滚到底还差一点没框进来时,把底边拖下来补进长图。
+    let edgeHandle = ScrollCaptureEdgeHandle(selectionRect: globalRect, screenFrame: snapshot.frame)
+    edgeHandle.onPreview = { [weak self] delta in
+      guard let self, let region = self.scrollRegion else { return }
+      self.activeOverlay?.setSelectionGlobalRect(CGRect(
+        x: region.minX, y: region.minY - delta,
+        width: region.width, height: region.height + delta))
+    }
+    edgeHandle.onCommit = { [weak self] delta in
+      self?.commitScrollRegionExtension(byPoints: delta)
+    }
+    edgeHandle.orderFrontRegardless()
+    scrollEdgeHandle = edgeHandle
 
     let controller = ScrollCaptureController(snapshot: snapshot, captureRect: globalRect)
     scrollController = controller
@@ -204,6 +224,46 @@ final class ScreenshotSession: ScreenshotOverlayDelegate {
         return
       }
       ScreenshotDebugLog.log("滚动截图控制器已启动: source=SCScreenshotManager core=macshot manual=true")
+    }
+  }
+
+  /// 手柄松手提交底边扩展:控制器把新露出的条带追加进长图,成功则选区/操作条/手柄都落到新位,
+  /// 失败(超高度上限、抓帧失败)则边框与手柄弹回原位。忙碌或已定稿时忽略并回弹。
+  private func commitScrollRegionExtension(byPoints delta: CGFloat) {
+    guard let controller = scrollController,
+          let region = scrollRegion,
+          let snapshot = scrollSnapshot,
+          scrollFinalImage == nil,
+          scrollExtendTask == nil,
+          delta >= 1 else {
+      if let region = scrollRegion {
+        activeOverlay?.setSelectionGlobalRect(region)
+        scrollEdgeHandle?.position(selectionRect: region)
+      }
+      return
+    }
+    scrollExtendTask = Task { @MainActor [weak self, weak controller] in
+      defer { self?.scrollExtendTask = nil }
+      guard let controller else { return }
+      let extended = await controller.extendBottom(byPoints: delta)
+      guard let self, self.scrollController === controller else { return }
+      let newRegion = extended
+        ? CGRect(x: region.minX, y: region.minY - delta,
+                 width: region.width, height: region.height + delta)
+        : region
+      if extended {
+        self.scrollRegion = newRegion
+        self.scrollRegionExtended = true
+        self.scrollActionBar?.reposition(selectionRect: newRegion, screenFrame: snapshot.frame)
+        ScreenshotDebugLog.log("滚动截图:底边扩展 +\(Int(delta))pt region="
+          + "\(Int(newRegion.minX)),\(Int(newRegion.minY)) "
+          + "\(Int(newRegion.width))x\(Int(newRegion.height))")
+      } else {
+        NSSound.beep()
+        ScreenshotDebugLog.log("滚动截图:底边扩展失败,选区回退")
+      }
+      self.activeOverlay?.setSelectionGlobalRect(newRegion)
+      self.scrollEdgeHandle?.position(selectionRect: newRegion)
     }
   }
 
@@ -260,6 +320,7 @@ final class ScreenshotSession: ScreenshotOverlayDelegate {
   }
 
   private func cancelScrollCapture() {
+    let regionWasExtended = scrollRegionExtended
     teardownScrollUI()
     NSApp.activate()
     if let overlay = activeOverlay, let overlayWindow = overlay.window {
@@ -268,6 +329,8 @@ final class ScreenshotSession: ScreenshotOverlayDelegate {
       overlay.setAnnotationUIHidden(false)
       overlayWindow.orderFrontRegardless()
       overlayWindow.makeKey()
+      // 底边扩展过:选区几何已变,按新选区重建标注画布(重新裁切冻结底图)。
+      if regionWasExtended { overlay.remountAnnotationUIAfterGeometryChange() }
       overlay.needsDisplay = true
     }
     ScreenshotDebugLog.log("滚动截图取消:已返回选区编辑")
@@ -276,6 +339,8 @@ final class ScreenshotSession: ScreenshotOverlayDelegate {
   private func teardownScrollUI() {
     scrollStartTask?.cancel()
     scrollStartTask = nil
+    scrollExtendTask?.cancel()
+    scrollExtendTask = nil
     scrollController?.cancelSession()
     scrollController = nil
     scrollFinalImage = nil
@@ -292,8 +357,13 @@ final class ScreenshotSession: ScreenshotOverlayDelegate {
     scrollActionBar?.onSave = nil
     scrollActionBar?.onCancel = nil
     scrollActionBar = nil
+    scrollEdgeHandle?.orderOut(nil)
+    scrollEdgeHandle?.onPreview = nil
+    scrollEdgeHandle?.onCommit = nil
+    scrollEdgeHandle = nil
     scrollSnapshot = nil
     scrollRegion = nil
+    scrollRegionExtended = false
     activeOverlay?.window?.ignoresMouseEvents = false
     activeOverlay?.scrollCaptureActive = false
     if let scrollActivity {

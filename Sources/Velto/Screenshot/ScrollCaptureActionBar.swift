@@ -48,6 +48,15 @@ final class ScrollCaptureActionBar: NSPanel {
   override var canBecomeKey: Bool { false }
   override var canBecomeMain: Bool { false }
 
+  /// 选区几何变化(底边扩展)后按新选区重新落位。
+  func reposition(selectionRect: CGRect, screenFrame: CGRect) {
+    setFrame(ScrollCaptureActionBarLayout.place(
+      selection: selectionRect,
+      screenBounds: screenFrame,
+      barSize: Self.barSize
+    ), display: true)
+  }
+
   private func setupContent(size: CGSize) {
     let content = NSStackView(frame: CGRect(origin: .zero, size: size))
     content.orientation = .vertical

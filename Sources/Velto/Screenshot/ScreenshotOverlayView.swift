@@ -41,6 +41,13 @@ final class ScreenshotOverlayView: NSView {
   /// 滚动捕获进行中:不压暗、不画冻结快照,只保留选区边框,露出底下真实 App 供滚动。
   var scrollCaptureActive: Bool = false { didSet { needsDisplay = true } }
 
+  /// 滚动捕获中由会话更新选区几何(底边扩展的预览与落定):只重设边框,不动标注 UI。
+  func setSelectionGlobalRect(_ rect: CGRect) {
+    selection = appKitGlobalRectToLocal(rect)
+    needsDisplay = true
+    window?.invalidateCursorRects(for: self)
+  }
+
   // MARK: - 标注 UI(选区激活后挂载)
 
   /// 选区一旦激活就置 true:此后不再画自带选区 chrome / 放大镜,交给画布与工具栏。
@@ -624,7 +631,8 @@ final class ScreenshotOverlayView: NSView {
   }
 
   /// 缩放/平移结束:还没画标注时按新选区重建画布(重新裁切底图);否则仅恢复显示。
-  private func remountAnnotationUIAfterGeometryChange() {
+  /// 滚动捕获中扩展过底边后退回选区编辑时,会话也走这里让画布跟上新几何。
+  func remountAnnotationUIAfterGeometryChange() {
     guard let s = selection, s.width > 2, s.height > 2 else { return }
     if canvasView?.editor.document.elements.isEmpty != false {
       mountAnnotationUI(selection: s)
