@@ -142,16 +142,23 @@ final class InputSourcePunctuationController: @unchecked Sendable {
     compositionTracker.reset()
   }
 
-  /// 组字判定。首选真值:IME 宿主进程有在屏窗口(候选窗)=正在组字 —— 空闲时
-  /// SCIM/豆包都没有任何在屏窗口(2026-07-10 实测)。按键流推演推不出「数字/空格
-  /// 选字只上屏一段、候选窗还开着」的场景(第一次翻页正常、选字后翻页失灵的根因),
-  /// 只在 PID 解析不到时兜底。
+  /// 组字判定。两路信号取「或」,缺一不可:
+  /// 1. 首选真值 —— IME 宿主进程有在屏候选窗 = 正在组字。豆包等**进程外**输入法候选窗
+  ///    归自己 PID,这一路能覆盖「数字/空格选字后候选窗还开着」(选字后翻页失灵的根因)。
+  /// 2. 兜底 —— 按键流推演缓冲。Apple **自带**输入法(SCIM 拼音/双拼)候选窗**不进**
+  ///    CGWindowList、也不归属 SCIM_Extension 进程(2026-07-21 实测:组字时 sawSCIMWindow=false),
+  ///    真值那一路对它恒为 false;只能靠推演:敲了字母(缓冲>0)即判为组字中,让 [ ] - 翻页键透传。
+  /// 只留真值 → 自带输入法翻页全废(本次修复的 Bug);只留推演 → 进程外输入法选字后翻页失灵。
+  /// ponytail: 自带输入法「选字后候选窗仍开、缓冲已归零」这一 case 推演漏判,仍会吞一次翻页 ——
+  ///           拿不到自带输入法候选窗真值,无解,待 Apple 暴露可查组字状态再补;当前已优于「全废」。
   private func isComposingNow() -> (composing: Bool, via: String) {
-    if let pid = imeProcessID {
-      let composing = Self.processOwnsOnScreenWindow(pid: pid)
-      return (composing, "候选窗\(composing ? "在屏" : "不在屏") imePID=\(pid)")
+    if let pid = imeProcessID, Self.processOwnsOnScreenWindow(pid: pid) {
+      return (true, "候选窗在屏 imePID=\(pid)")
     }
-    return (compositionTracker.isComposing, "按键流推演(缓冲=\(compositionTracker.bufferedKeyCount))")
+    if compositionTracker.isComposing {
+      return (true, "按键流推演(缓冲=\(compositionTracker.bufferedKeyCount))")
+    }
+    return (false, imeProcessID.map { "候选窗不在屏 imePID=\($0) 且推演缓冲=0" } ?? "按键流推演(缓冲=0)")
   }
 
   /// WindowServer 一次 IPC(实测远低于 1ms),只发生在标点导航键按下时,热路径无感。
