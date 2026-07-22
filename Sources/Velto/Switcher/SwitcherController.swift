@@ -75,8 +75,14 @@ final class SwitcherController {
     private var thumbnailTrimTask: Task<Void, Never>?
     private static let thumbnailTrimDelayNanos: UInt64 = 120 * 1_000_000_000
     private static let thumbnailTrimKeepTop = 100
-    /// 快速松开触发键时,至少让 panel 停留一小段时间,避免看起来"没弹出来"。
-    private var panelVisibility = SwitcherPanelVisibilityState()
+    /// 确认节流状态。minimumVisibleDuration 置 0 —— 松手即刻 raise(Win11 同款
+    /// 体感)。曾经的 120ms"最短可见"会让快速 tap-tap(间隔 <120ms)的第二次
+    /// trigger 撞上未开火的 pendingConfirm:确认被取消、在**旧快照**里 step 到
+    /// index 2,表现为"想 A↔B 却切到第三个 app / 概率切换失败"。即时确认后每次
+    /// tap-release 独立完成,MRU 同步推进,快速交替永远正确。
+    /// struct 本身保留:pendingConfirmMaxAge 的乱序 latch(release 先于 trigger
+    /// 到达)仍然在用,那是独立机制,不回退。
+    private var panelVisibility = SwitcherPanelVisibilityState(minimumVisibleDuration: 0)
     private var pendingConfirmTask: Task<Void, Never>?
     /// panel 是 lazy 创建 —— 第一次 trigger 时才实例化,避免拖慢启动
     private var _panel: SwitcherPanel?
@@ -110,6 +116,12 @@ final class SwitcherController {
             }
         }
         let started = keyTap.start()
+        // 预热 panel:玻璃视图 + NSPanel 的构造有可感知成本,懒加载会把它记在
+        // 首次 ⌘Tab 的账上("第一下特别慢")。启动后空转一圈 runloop 再实例化,
+        // 不挡 start() 本身。
+        Task { @MainActor [weak self] in
+            _ = self?.panel
+        }
         // 同步偏好里的开关 + 触发快捷键到 KeyTap,再订阅未来变化做实时同步
         applyPreferencesToKeyTap()
         NotificationCenter.default.addObserver(

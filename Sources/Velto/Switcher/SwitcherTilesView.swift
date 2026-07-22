@@ -12,6 +12,13 @@ final class SwitcherTilesView: NSView {
 
     private(set) var tiles: [SwitcherTileView] = []
 
+    /// 上次 rebuild 的参数 —— 复用判定用。快速连按 ⌘Tab 时窗口集合几乎不变,
+    /// 全量重建视图(每 tile 5 个子视图 + tracking area)是召唤路径的大头开销。
+    private var lastStyle: SwitcherAppearanceStyle?
+    private var lastHideWindowTitle = false
+    private var lastMaxSize: NSSize = .zero
+    private var lastContentSize: NSSize = .zero
+
     var onHover: ((Int) -> Void)?
     var onClick: ((Int) -> Void)?
 
@@ -19,6 +26,10 @@ final class SwitcherTilesView: NSView {
     /// `hideWindowTitle`:perApp 分组时为 true,tile 只显示 app 名。
     /// `maxSize`:面板可用的屏幕区域。据此①按宽度自动算每行列数(一行绝不超出屏幕);
     /// ②多行也超高时,整体等比缩小 tile 塞进一屏。
+    ///
+    /// 快路径:同一批窗口(对象恒等集合)+ 同参数 → 复用现有 tile 视图,只按新
+    /// MRU 序重排 frame + 轻量刷新(标题/缩略图),零视图重建。快速交替切换时
+    /// 每次召唤只变顺序不变集合,正好全走这条。
     @discardableResult
     func rebuild(
         with windows: [SwitcherWindow],
@@ -26,49 +37,39 @@ final class SwitcherTilesView: NSView {
         hideWindowTitle: Bool = false,
         maxSize: NSSize = NSSize(width: 1_000_000, height: 1_000_000)
     ) -> NSSize {
-        for t in tiles { t.removeFromSuperview() }
-        tiles.removeAll()
-
         guard !windows.isEmpty else {
+            for t in tiles { t.removeFromSuperview() }
+            tiles.removeAll()
+            lastStyle = nil
             return NSSize(width: 200, height: 80)
         }
 
-        let tileSize = SwitcherTileView.tileSize(for: style)
-        let inset = Self.containerInset
-        let sp = Self.tileSpacing
+        let layout = SwitcherTilesLayout(
+            count: windows.count, style: style, maxSize: maxSize,
+            spacing: Self.tileSpacing, inset: Self.containerInset
+        )
 
-        // ① 每行列数 = 在可用宽度内能放下几个 tile(至少 1,至多窗口数)。
-        //    宽屏多排、窄屏少排,一行绝不顶出屏幕;不再写死 6/12。
-        let availW = max(tileSize.width, maxSize.width - inset * 2)
-        let fitPerRow = max(1, Int((availW + sp) / (tileSize.width + sp)))
-        let perRow = min(fitPerRow, windows.count)
-        let rows = Int(ceil(Double(windows.count) / Double(perRow)))
+        if style == lastStyle, hideWindowTitle == lastHideWindowTitle, maxSize == lastMaxSize,
+           let reordered = reusableTiles(for: windows)
+        {
+            tiles = reordered
+            for (idx, tile) in tiles.enumerated() {
+                tile.frame = layout.frame(at: idx)
+                tile.refreshForReuse()
+            }
+            return lastContentSize
+        }
 
-        // ② 满尺寸下的内容尺寸;若超出可用宽/高,算一个统一缩放比 ≤1。
-        let fullW = CGFloat(perRow) * tileSize.width + CGFloat(perRow - 1) * sp + inset * 2
-        let fullH = CGFloat(rows) * tileSize.height + CGFloat(rows - 1) * sp + inset * 2
-        let scale = min(1, min(maxSize.width / fullW, maxSize.height / fullH))
-
-        let tW = tileSize.width * scale
-        let tH = tileSize.height * scale
-        let ssp = sp * scale
-        let sInset = inset * scale
-        let contentW = fullW * scale
-        let contentH = fullH * scale
+        for t in tiles { t.removeFromSuperview() }
+        tiles.removeAll()
 
         for (idx, w) in windows.enumerated() {
-            let row = idx / perRow
-            let col = idx % perRow
-            let x = sInset + CGFloat(col) * (tW + ssp)
-            let yFromTop = sInset + CGFloat(row) * (tH + ssp)
-            let y = contentH - yFromTop - tH
-
             let tile = SwitcherTileView(window: w, style: style, hideWindowTitle: hideWindowTitle)
-            tile.frame = NSRect(x: x, y: y, width: tW, height: tH)
+            tile.frame = layout.frame(at: idx)
             // 缩放:让 tile 的坐标系(bounds)保持满尺寸,frame 是缩放后的 ——
             // AppKit 会把内容(缩略图 / 图标 / 文字)整体等比缩小填进去。scale==1 不动。
-            if scale < 1 {
-                tile.bounds = NSRect(origin: .zero, size: tileSize)
+            if layout.scale < 1 {
+                tile.bounds = NSRect(origin: .zero, size: layout.tileSize)
             }
             tile.onHover = { [weak self] t in
                 guard let self else { return }
@@ -86,7 +87,26 @@ final class SwitcherTilesView: NSView {
             tiles.append(tile)
         }
 
-        return NSSize(width: contentW, height: contentH)
+        lastStyle = style
+        lastHideWindowTitle = hideWindowTitle
+        lastMaxSize = maxSize
+        lastContentSize = layout.contentSize
+        return layout.contentSize
+    }
+
+    /// 窗口集合与现有 tiles 一一对应(对象恒等)且没有 tile 的副标题显隐需要
+    /// 翻转(那会改布局)时,返回按新顺序重排的 tiles;否则 nil → 全量重建。
+    private func reusableTiles(for windows: [SwitcherWindow]) -> [SwitcherTileView]? {
+        guard tiles.count == windows.count else { return nil }
+        var byWindow = [ObjectIdentifier: SwitcherTileView](minimumCapacity: tiles.count)
+        for t in tiles { byWindow[ObjectIdentifier(t.window_)] = t }
+        var result: [SwitcherTileView] = []
+        result.reserveCapacity(windows.count)
+        for w in windows {
+            guard let t = byWindow[ObjectIdentifier(w)], !t.subtitleVisibilityWouldFlip else { return nil }
+            result.append(t)
+        }
+        return result
     }
 
     func setSelectedIndex(_ index: Int) {
@@ -104,5 +124,49 @@ final class SwitcherTilesView: NSView {
     func clearHover() {
         for t in tiles { t.isHovered = false }
         onHover?(-1)
+    }
+}
+
+/// 网格布局纯计算:列数、缩放、每个下标的 frame。从 rebuild 里抽出来,
+/// 复用路径与全量路径共享同一份数学,也便于单测。
+struct SwitcherTilesLayout {
+    let perRow: Int
+    /// 满尺寸 tile(缩放前)—— scale<1 时 tile.bounds 用它。
+    let tileSize: NSSize
+    let scale: CGFloat
+    let contentSize: NSSize
+    private let tW: CGFloat
+    private let tH: CGFloat
+    private let ssp: CGFloat
+    private let sInset: CGFloat
+
+    init(count: Int, style: SwitcherAppearanceStyle, maxSize: NSSize, spacing: CGFloat, inset: CGFloat) {
+        let tileSize = SwitcherTileView.tileSize(for: style)
+        // ① 每行列数 = 在可用宽度内能放下几个 tile(至少 1,至多窗口数)。
+        //    宽屏多排、窄屏少排,一行绝不顶出屏幕。
+        let availW = max(tileSize.width, maxSize.width - inset * 2)
+        let fitPerRow = max(1, Int((availW + spacing) / (tileSize.width + spacing)))
+        let perRow = min(fitPerRow, count)
+        let rows = Int(ceil(Double(count) / Double(perRow)))
+        // ② 满尺寸下的内容尺寸;若超出可用宽/高,算一个统一缩放比 ≤1。
+        let fullW = CGFloat(perRow) * tileSize.width + CGFloat(perRow - 1) * spacing + inset * 2
+        let fullH = CGFloat(rows) * tileSize.height + CGFloat(rows - 1) * spacing + inset * 2
+        let scale = min(1, min(maxSize.width / fullW, maxSize.height / fullH))
+        self.perRow = perRow
+        self.tileSize = tileSize
+        self.scale = scale
+        self.tW = tileSize.width * scale
+        self.tH = tileSize.height * scale
+        self.ssp = spacing * scale
+        self.sInset = inset * scale
+        self.contentSize = NSSize(width: fullW * scale, height: fullH * scale)
+    }
+
+    func frame(at idx: Int) -> NSRect {
+        let row = idx / perRow
+        let col = idx % perRow
+        let x = sInset + CGFloat(col) * (tW + ssp)
+        let yFromTop = sInset + CGFloat(row) * (tH + ssp)
+        return NSRect(x: x, y: contentSize.height - yFromTop - tH, width: tW, height: tH)
     }
 }

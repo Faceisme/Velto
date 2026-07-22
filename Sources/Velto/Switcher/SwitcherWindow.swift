@@ -18,6 +18,11 @@ final class SwitcherWindow: @unchecked Sendable {
     /// CGS 视角的窗口 id。从 _AXUIElementGetWindow 读出来。
     let cgWindowId: CGWindowID
 
+    /// 这个窗口是不是走 CGWindowList 兜底管线建的(富途牛牛这类对 Accessibility
+    /// 零窗口暴露的 app)。为 true 时:axUiElement 只是 app 元素占位、不订阅窗口级
+    /// AX 通知(没有真窗口 element 可订),raise 全靠 SLPS(只需 pid+wid)。
+    let isCgOnly: Bool
+
     /// AX 视角的窗口句柄。focus / minimize / 读 title 都用它。
     /// 可变:app 重建 AX 树时(微信 4.x)同一个 wid 会换新 element,
     /// SwitcherWindowList.applyProbes 负责替换并重挂窗口级通知。主线程改。
@@ -86,11 +91,13 @@ final class SwitcherWindow: @unchecked Sendable {
          isFullscreen: Bool,
          spaceIds: [CGSSpaceID],
          position: CGPoint?,
-         size: CGSize?)
+         size: CGSize?,
+         isCgOnly: Bool = false)
     {
         self.id = "wid-\(cgWindowId)"
         self.application = application
         self.cgWindowId = cgWindowId
+        self.isCgOnly = isCgOnly
         self.axUiElement = axUiElement
         self.title = title
         self.isMinimized = isMinimized

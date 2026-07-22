@@ -23,6 +23,8 @@ struct SwitcherWindowProbe: @unchecked Sendable {
     let isMinimized: Bool
     let isFullscreen: Bool
     let hasOnlyWindowChromeChildren: Bool
+    /// 走 CGWindowList 兜底管线构造(见 SwitcherWindowList.cgFallbackProbe)。
+    var isCgOnly: Bool = false
 
     func hasUserVisibleTitle(appLocalizedName: String?) -> Bool {
         if Self.normalizedTitle(cgTitle) != nil { return true }
@@ -268,7 +270,7 @@ final class SwitcherWindowList {
         guard let app = apps[pid] else { return }
         AXCallQueue.shared.schedule("sync-\(pid)") { [weak self] in
             guard let axWindows = app.copyAxWindows(includeBruteForce: includeBruteForce) else { return }
-            let probes: [SwitcherWindowProbe] = axWindows.compactMap { ax in
+            var probes: [SwitcherWindowProbe] = axWindows.compactMap { ax in
                 guard let wid = SwitcherAxRead.cgWindowId(of: ax) else { return nil }
                 let attrs = SwitcherAxRead.multiAttributes(ax, [
                     kAXTitleAttribute as String,
@@ -308,6 +310,12 @@ final class SwitcherWindowList {
                     hasOnlyWindowChromeChildren: hasOnlyWindowChromeChildren
                 )
             }
+            // AX 兜底:富途牛牛这类 app 对 Accessibility 零窗口暴露(kAXWindows
+            // 与私有暴力枚举都返回空),AX 管线永远看不见它们的窗口 —— 改用
+            // CGWindowList 兜底,它对所有进程的窗口一视同仁。
+            if probes.isEmpty {
+                probes = Self.cgFallbackProbes(pid: pid, appElement: app.axUiElement)
+            }
             let spaceMap = SwitcherSpaces.spaces(forWindowIds: probes.map(\.wid))
             Task { @MainActor [weak self] in
                 self?.applyProbes(
@@ -318,6 +326,53 @@ final class SwitcherWindowList {
                 )
             }
         }
+    }
+
+    /// CGWindowList 兜底管线。对 AX 空窗的 app 才调,后台 AX 队列上执行。
+    /// 构造的探针标记 isCgOnly:不订阅窗口级 AX 通知(没有真窗口 element 可订),
+    /// 用 app 元素占位 axUiElement —— raise 走 SLPS 只需 pid+wid,AX raise 那步落在
+    /// app 元素上无害空转。
+    /// ponytail: 每次全量扫一遍系统窗口;只对 AX 空窗 app 触发、频率低,够用;
+    /// 真成热点再按 pid 做缓存。
+    nonisolated static func cgFallbackProbes(pid: pid_t, appElement: AXUIElement) -> [SwitcherWindowProbe] {
+        let options: CGWindowListOption = [.optionAll, .excludeDesktopElements]
+        guard let info = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
+            return []
+        }
+        return info.compactMap { cgFallbackProbe(row: $0, pid: pid, appElement: appElement) }
+    }
+
+    /// 单行 CGWindowList 记录 → 探针的纯函数(便于单测)。保留条件:属于本 app、
+    /// layer 0(普通窗口,排除菜单/浮层)、alpha 可见、有非空标题(排除工具条/
+    /// 无名浮层,也是 tile 标签来源)、尺寸过关(与 AX 判别同阈值)。
+    nonisolated static func cgFallbackProbe(row: [String: Any], pid: pid_t, appElement: AXUIElement) -> SwitcherWindowProbe? {
+        guard let owner = row[kCGWindowOwnerPID as String] as? Int, owner == Int(pid),
+              (row[kCGWindowLayer as String] as? Int) == 0,
+              let widInt = row[kCGWindowNumber as String] as? Int,
+              let rawName = row[kCGWindowName as String] as? String
+        else { return nil }
+        let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return nil }
+        let alpha = (row[kCGWindowAlpha as String] as? Double) ?? 1
+        guard alpha > 0.1 else { return nil }
+        guard let boundsDict = row[kCGWindowBounds as String] as? [String: Any],
+              let bounds = CGRect(dictionaryRepresentation: boundsDict as CFDictionary),
+              bounds.width > 100, bounds.height > 50
+        else { return nil }
+        return SwitcherWindowProbe(
+            axUiElement: appElement,
+            wid: CGWindowID(widInt),
+            title: name,
+            cgTitle: name,
+            subrole: kAXStandardWindowSubrole as String,
+            role: kAXWindowRole as String,
+            size: bounds.size,
+            position: bounds.origin,
+            isMinimized: false,
+            isFullscreen: false,
+            hasOnlyWindowChromeChildren: false,
+            isCgOnly: true
+        )
     }
 
     private func applyProbes(
@@ -376,7 +431,7 @@ final class SwitcherWindowList {
                 // app 重建 AX 树后(微信 4.x 周期性干这事),同一个 wid 会带着
                 // 全新的 element 回来 —— 旧句柄已死,raise / 通知订阅都会失效,
                 // 必须换新并重挂窗口级通知。
-                if !CFEqual(existing.axUiElement, probe.axUiElement) {
+                if !probe.isCgOnly, !CFEqual(existing.axUiElement, probe.axUiElement) {
                     unsubscribeWindowNotifications(existing)
                     existing.axUiElement = probe.axUiElement
                     subscribeWindowNotifications(existing)
@@ -399,7 +454,8 @@ final class SwitcherWindowList {
                     isFullscreen: probe.isFullscreen,
                     spaceIds: spaceMap[probe.wid] ?? [],
                     position: probe.position,
-                    size: probe.size
+                    size: probe.size,
+                    isCgOnly: probe.isCgOnly
                 )
                 // 新窗口排在末尾,等真实 focus 通知再上调;短期内删又加的
                 // (AX 抖动误删)恢复被删前的 MRU 位
@@ -441,6 +497,9 @@ final class SwitcherWindowList {
 
     /// 给单个 SwitcherWindow 订阅窗口级别的 AX 通知。
     private func subscribeWindowNotifications(_ window: SwitcherWindow) {
+        // CG 兜底窗口没有真窗口 AX element(axUiElement 只是 app 元素占位),
+        // 订不了窗口级通知 —— 直接跳过。生命周期靠 CGWindowList 重扫维护。
+        guard !window.isCgOnly else { return }
         guard let observer = window.application.axObserver else { return }
         let refcon = Unmanaged.passUnretained(self).toOpaque()
         for notification in SwitcherWindow.observedNotifications {
@@ -450,6 +509,7 @@ final class SwitcherWindowList {
 
     /// 反订阅 —— 窗口移除前调,避免泄漏到 runloop 里。
     private func unsubscribeWindowNotifications(_ window: SwitcherWindow) {
+        guard !window.isCgOnly else { return }
         guard let observer = window.application.axObserver else { return }
         for notification in SwitcherWindow.observedNotifications {
             AXObserverRemoveNotification(observer, window.axUiElement, notification as CFString)
@@ -614,16 +674,125 @@ final class SwitcherWindowList {
         }
         SwitcherDebugLog.log("destroyed AX element wid=\(window.cgWindowId) app=\(window.application.localizedName ?? "?") 仍被 WindowServer 认可 — 保留条目并重扫")
         syncWindowsForApp(pid: window.application.pid, includeBruteForce: true)
+        // 上面的重扫若 miss(真关闭,只是撞上了关闭动画期 CGS 还认 wid),
+        // miss=1 停在阈值 2 之下,之后可能再没有事件触发扫描 —— 0.8s 后补一次,
+        // 把真关闭的窗口 miss 推到阈值删掉。微信 churn 场景 element 会重建回来,
+        // 两次扫描都能看到窗口,无害。
+        let pid = window.application.pid
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 800_000_000)
+            self?.syncWindowsForApp(pid: pid)
+        }
     }
 
-    /// WindowServer 是否还认识这个 wid。不限 on-screen —— 最小化 / 其他 Space
-    /// 的窗口也查得到,只有真正关闭的窗口才会消失。单 wid 查询,主线程廉价。
-    private static func windowServerKnowsWindow(_ wid: CGWindowID) -> Bool {
-        let ids = [NSNumber(value: wid)] as CFArray
-        guard let info = CGWindowListCreateDescriptionFromArray(ids) as? [[String: Any]] else {
-            return false
+    /// 召唤瞬间与 WindowServer 的权威对账:一次批量 CGS 查询(单 IPC,主线程
+    /// 廉价)拿到每个 wid 的存活 + 在屏状态,三件事同步做完:
+    ///
+    ///   1. CGS 不认识的 wid → 删。窗口真关闭时 AX destroy 常撞上关闭动画
+    ///      (那一刻 CGS 还认 wid,destroy 处理走"保留 + 重扫",重扫 miss=1 <
+    ///      阈值 2,之后可能再没有事件触发第二次扫描),条目会永远残留。
+    ///   2. 在屏的窗口 → 同步清 isInvisible。微信这类"关窗=隐藏"的 app 重开
+    ///      窗口后,异步 ghost 探针没落地前第一次召唤会看不到它。
+    ///   3. 不在屏、又没有最小化 / Cmd+H / 他 Space 这些合法理由的可疑窗口 →
+    ///      再付一次 CGS visible 桶查询,复用 SwitcherGhostDetector 的同一套
+    ///      规则同步标 isInvisible。微信关窗只是 orderOut(wid 一直活着,
+    ///      AX element 也在),第 1 步的"认不认识"拦不住它,异步探针 500ms
+    ///      节流 + 后台跑,首次召唤必残留 —— 这里当场判掉。
+    ///
+    /// 微信 AX 树重建时 CG wid 一直活着且在屏,不会被误删/误隐 —— 与 churn
+    /// 防护一致。常态(没有刚关的窗口)下第 3 步不触发,零额外开销。
+    private func reconcileWindowsWithWindowServer(visibleSpaces: Set<CGSSpaceID>) {
+        guard !windows.isEmpty else { return }
+        let onscreenByWid = Self.windowServerOnscreenStates(Array(windows.keys))
+        // 保险丝:批量查询返回空(API 失败 / 编码回归)绝不删 —— 所有被跟踪窗口
+        // "同时全部关闭"在召唤瞬间不可能,空结果只能是查询本身坏了。宁可残留,
+        // 不能把整张清单清空(2026-07-22 的 NSNumber 编码事故就是这么让切换器
+        // 彻底失效的)。
+        guard !onscreenByWid.isEmpty else { return }
+        let stale = windows.values.filter { onscreenByWid[$0.cgWindowId] == nil }
+        if !stale.isEmpty {
+            for w in stale {
+                SwitcherDebugLog.log("prune wid=\(w.cgWindowId) app=\(w.application.localizedName ?? "?") reason=WindowServer 已不认")
+                removeWindow(w, compact: false)
+            }
+            compactMRUOrdering()
         }
-        return !info.isEmpty
+        var suspects: [SwitcherWindow] = []
+        for w in windows.values {
+            guard let isOnscreen = onscreenByWid[w.cgWindowId] else { continue }
+            if isOnscreen {
+                // 在屏 = 必定可见,不用等异步探针
+                if w.isInvisible {
+                    SwitcherDebugLog.log("un-ghost wid=\(w.cgWindowId) app=\(w.application.localizedName ?? "?") reason=已在屏")
+                    w.isInvisible = false
+                }
+            } else if !w.isInvisible, !w.isMinimized, !w.isAppHidden,
+                      w.spaceIds.isEmpty || w.spaceIds.contains(where: { visibleSpaces.contains($0) })
+            {
+                // 不在屏且没有合法理由(最小化 / Cmd+H / 纯他-Space 窗口)——
+                // 候选交给 detector 终审。他-Space 窗口在这里就放行,常态下
+                // suspects 为空,不付下面那次 visible 桶查询。
+                suspects.append(w)
+            }
+        }
+        guard !suspects.isEmpty else { return }
+        // 与异步 ghost 探针同一套判定:visible 桶现查,allWids 用上面批量查询
+        // 的结果(能进 suspects 的必然被 CGS 认识,规则 1 恒不触发)。
+        let probe = WindowVisibilityProbe(
+            visibleWids: Set(SwitcherSpaces.windowsInSpaces(SwitcherSpaces.allSpaceIds(), includeInvisible: false)),
+            allWids: Set(onscreenByWid.keys)
+        )
+        for w in suspects {
+            let ghost = SwitcherGhostDetector.isInvisible(
+                wid: w.cgWindowId,
+                isMinimized: w.isMinimized,
+                isAppHidden: w.isAppHidden,
+                isTabbed: false,
+                windowSpaceIds: w.spaceIds,
+                visibleSpaceIds: visibleSpaces,
+                probe: probe
+            )
+            if ghost {
+                SwitcherDebugLog.log("ghost wid=\(w.cgWindowId) app=\(w.application.localizedName ?? "?") reason=不在屏且无 Space 归属(orderOut 隐藏,召唤时同步判)")
+                w.isInvisible = true
+            }
+        }
+    }
+
+    /// `CGWindowListCreateDescriptionFromArray` 的正确调用姿势:CFArray 元素必须
+    /// 是 **raw CGWindowID 位模式塞进指针槽**(alt-tab 同款),**不是** NSNumber/
+    /// CFNumber —— 用 NSNumber 时该 API 不报错、静默返回空数组。此前
+    /// windowServerKnowsWindow 的 NSNumber 版恒 false,微信 churn 的第一道防护
+    /// (destroy 先问 WindowServer)从未真正生效,一直靠 re-add 恢复 MRU 兜底。
+    /// 返回 WindowServer 认识的每个 wid 的在屏状态(不在返回里 = CGS 不认识);
+    /// 不限 on-screen —— 最小化 / 其他 Space 的窗口也查得到,只是 value 为
+    /// false。单次 IPC,主线程廉价。
+    static func windowServerOnscreenStates(_ wids: [CGWindowID]) -> [CGWindowID: Bool] {
+        guard !wids.isEmpty else { return [:] }
+        var ptrs: [UnsafeRawPointer?] = wids.map { UnsafeRawPointer(bitPattern: UInt($0)) }
+        let array = ptrs.withUnsafeMutableBufferPointer { buf in
+            CFArrayCreate(kCFAllocatorDefault, buf.baseAddress, buf.count, nil)
+        }
+        guard let array,
+              let info = CGWindowListCreateDescriptionFromArray(array) as? [[String: Any]]
+        else { return [:] }
+        var states = [CGWindowID: Bool](minimumCapacity: info.count)
+        for row in info {
+            if let n = row[kCGWindowNumber as String] as? NSNumber {
+                states[CGWindowID(truncating: n)] = (row[kCGWindowIsOnscreen as String] as? Bool) ?? false
+            }
+        }
+        return states
+    }
+
+    /// WindowServer 认识的 wid 集合 —— windowServerOnscreenStates 的键集。
+    static func windowServerKnownWids(_ wids: [CGWindowID]) -> Set<CGWindowID> {
+        Set(windowServerOnscreenStates(wids).keys)
+    }
+
+    /// WindowServer 是否还认识这个 wid。只有真正关闭的窗口才会消失。
+    private static func windowServerKnowsWindow(_ wid: CGWindowID) -> Bool {
+        !windowServerKnownWids([wid]).isEmpty
     }
 
     /// kAXTitleChangedNotification 专用的轻量更新路径。
@@ -733,8 +902,9 @@ final class SwitcherWindowList {
     /// `panelScreen`:切换器面板即将弹出的屏幕。仅当 `screensToShow == .onlySwitcherScreen`
     /// 时用到 —— 过滤出在这个屏幕上的窗口。Controller 调用前算好传进来。
     func snapshot(applying prefs: SwitcherPreferences, panelScreen: NSScreen? = nil) -> [SwitcherWindow] {
-        runGhostProbeIfDue()
         let visibleSpaces = SwitcherSpaces.visibleSpaceIds()
+        reconcileWindowsWithWindowServer(visibleSpaces: visibleSpaces)
+        runGhostProbeIfDue()
         let frontPid = frontmostPid
         var currentOnScreenWindowIds: Set<CGWindowID>?
 

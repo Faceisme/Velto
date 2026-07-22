@@ -24,6 +24,8 @@ final class SwitcherTileView: NSView {
     let style: SwitcherAppearanceStyle
     /// perApp 模式下我们只想显示 app 名(单行),不显示窗口标题副标题。
     let hideWindowTitle: Bool
+    /// init 时的副标题显隐 —— 它决定了布局(标题区高矮),复用刷新不允许翻转。
+    private let showsSubtitle: Bool
 
     /// 缩略图层 —— 仅在 thumbnails 模式可见
     private let thumbnailView: SwitcherImageView
@@ -54,6 +56,7 @@ final class SwitcherTileView: NSView {
         self.window_ = window
         self.style = style
         self.hideWindowTitle = hideWindowTitle
+        self.showsSubtitle = Self.computeShowsSubtitle(window: window, hideWindowTitle: hideWindowTitle)
         self.thumbnailView = SwitcherImageView(frame: .zero)
         self.mainIconView = NSImageView(frame: .zero)
         self.badgeIconView = NSImageView(frame: .zero)
@@ -81,7 +84,7 @@ final class SwitcherTileView: NSView {
 
         // 副标题:窗口标题,跟 app 名相同 / 为空 / perApp 模式时隐藏
         let winTitle = window.title
-        let showSubtitle = !hideWindowTitle && !winTitle.isEmpty && winTitle != appName
+        let showSubtitle = showsSubtitle
         titleLabel.font = .systemFont(ofSize: 10, weight: .regular)
         titleLabel.alignment = style == .titles ? .left : .center
         titleLabel.lineBreakMode = .byTruncatingTail
@@ -203,6 +206,32 @@ final class SwitcherTileView: NSView {
 
         thumbnailView.isHidden = true
         badgeIconView.isHidden = true
+    }
+
+    // MARK: - 复用刷新
+
+    private static func computeShowsSubtitle(window: SwitcherWindow, hideWindowTitle: Bool) -> Bool {
+        let winTitle = window.title
+        let appName = window.application.localizedName ?? ""
+        return !hideWindowTitle && !winTitle.isEmpty && winTitle != appName
+    }
+
+    /// 复用这个 tile 时副标题显隐是否会翻转 —— 翻转意味着布局要变,
+    /// TilesView 检测到就放弃复用走全量重建。
+    var subtitleVisibilityWouldFlip: Bool {
+        Self.computeShowsSubtitle(window: window_, hideWindowTitle: hideWindowTitle) != showsSubtitle
+    }
+
+    /// 复用路径的轻量刷新:标题文本 + 缩略图(面板隐藏期间 warm 路径可能更新过
+    /// window.thumbnail)+ 清 hover 残留。不动布局、不重建视图。
+    func refreshForReuse() {
+        if showsSubtitle, titleLabel.stringValue != window_.title {
+            titleLabel.stringValue = window_.title
+        }
+        if let t = window_.thumbnail {
+            updateThumbnail(t)
+        }
+        isHovered = false
     }
 
     // MARK: - Thumbnail 更新
