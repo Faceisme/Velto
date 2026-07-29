@@ -980,7 +980,30 @@ final class SwitcherWindowList {
         // showAtEnd 状态的窗口推到末尾(在它们自己的 sort 顺序内保持)。
         let sorted = Self.sort(Array(filtered), by: prefs.sortBy)
         let partitioned = Self.partitionShowAtEnd(sorted, prefs: prefs)
-        return Self.collapsePerApp(partitioned, mode: prefs.groupBy)
+        let collapsed = Self.collapsePerApp(partitioned, mode: prefs.groupBy)
+        return Self.rotateCurrentToEnd(collapsed, sortBy: prefs.sortBy, frontPid: frontPid)
+    }
+
+    /// 把"你正在用的这个 app"从列表首位挪到末尾 —— 候选框第一格就是最近用过的
+    /// **上一个** app(也就是 ⌘Tab 一下要去的地方),而不是自己脚下这个。
+    ///
+    /// 两个 app 交替是最常见用法,原来的 [当前, 上一个] 让真正的目标永远压在
+    /// 最后一格,选中框也永远停在第二格。挪完是 [上一个, 次近, ..., 当前],
+    /// 选中框落 index 0。键盘手感不变(仍是"按一下切到上一个"),只是列表读起来
+    /// 顺了:最近用的在最前。
+    ///
+    /// 只对 recentlyFocused 生效 —— 字母序/Space 序没有"首位=当前"的语义,挪了
+    /// 就是打乱。首位不是前台 app 时(onlyNonActive 等过滤把它剔了)也不动。
+    private static func rotateCurrentToEnd(
+        _ windows: [SwitcherWindow],
+        sortBy: SwitcherSortOrder,
+        frontPid: pid_t?
+    ) -> [SwitcherWindow] {
+        guard sortBy == .recentlyFocused, windows.count > 1,
+              let current = windows.first,
+              current.application.pid == frontPid
+        else { return windows }
+        return Array(windows.dropFirst()) + [current]
     }
 
     /// perApp 模式:每个 app 在结果里只保留第一个出现的窗口(也就是排序后
