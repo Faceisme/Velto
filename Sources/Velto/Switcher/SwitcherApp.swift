@@ -1,6 +1,27 @@
 import ApplicationServices
 import Cocoa
 
+/// AX 通知注册/反注册要跨进程 IPC,不能在主线程执行。
+/// `@unchecked Sendable`:CF 引用和 refcon 都只读,由 AX 后台串行队列使用。
+struct SwitcherAXNotificationSubscription: @unchecked Sendable {
+    let observer: AXObserver
+    let element: AXUIElement
+    let notifications: [String]
+    let refcon: UnsafeMutableRawPointer?
+
+    func register() {
+        for notification in notifications {
+            AXObserverAddNotification(observer, element, notification as CFString, refcon)
+        }
+    }
+
+    func unregister() {
+        for notification in notifications {
+            AXObserverRemoveNotification(observer, element, notification as CFString)
+        }
+    }
+}
+
 /// 一个被切换器跟踪的 app。负责:
 ///   1. 拿到 app 的 AXUIElement (`AXUIElementCreateApplication`)
 ///   2. 订阅 app 级别的 AX 通知(窗口创建、focus 变化、隐藏/显示)
@@ -29,8 +50,8 @@ final class SwitcherApp: @unchecked Sendable {
         kAXApplicationShownNotification,
     ]
 
-    /// 在 AXObserver 回调里要用,所以做成 instance 字段。`axObserver` 在
-    /// 主线程订阅事件后由 AX framework retain;我们用 `release()` 显式解绑。
+    /// 在 AXObserver 回调里要用,所以做成 instance 字段。主线程负责挂载
+    /// runloop source,通知注册走 AX 后台队列;`stopObserving` 显式解绑 source。
     private(set) var axObserver: AXObserver?
 
     /// 主线程读写 —— 用于 MRU 排序时记住"这个 app 是不是当前最前台"。
@@ -54,8 +75,8 @@ final class SwitcherApp: @unchecked Sendable {
         }
     }
 
-    /// 装上 AXObserver。要求在主线程调用 —— `CFRunLoopAddSource` 需要 main runloop。
-    /// 多次调用是幂等的。
+    /// 装上 AXObserver。要求在主线程调用 —— `CFRunLoopAddSource` 需要 main
+    /// runloop;可能阻塞的通知注册提交给 AX 后台串行队列。多次调用是幂等的。
     @MainActor
     func startObserving(_ callback: AXObserverCallback, _ refcon: UnsafeMutableRawPointer?) {
         guard axObserver == nil else { return }
@@ -69,11 +90,16 @@ final class SwitcherApp: @unchecked Sendable {
         // runloop —— AX 回调本身轻量(只是 dispatch 到队列),不会阻塞。
         CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .commonModes)
 
-        // 把所有通知都订上。订阅本身可能因为 app 还没准备好而失败 —— 没关系,
-        // 后续通过事件再补;subscribeToNotification 返回 .notificationAlreadyRegistered
-        // 也算成功。
-        for notification in Self.observedNotifications {
-            AXObserverAddNotification(observer, axUiElement, notification as CFString, refcon)
+        // 注册是跨进程 IPC,目标 app 启动中时可能卡住数百毫秒;不能占住负责
+        // 弹出切换面板的主线程。紧随其后的首次窗口扫描走同一串行队列。
+        let subscription = SwitcherAXNotificationSubscription(
+            observer: observer,
+            element: axUiElement,
+            notifications: Self.observedNotifications,
+            refcon: refcon
+        )
+        AXCallQueue.shared.submit {
+            subscription.register()
         }
     }
 

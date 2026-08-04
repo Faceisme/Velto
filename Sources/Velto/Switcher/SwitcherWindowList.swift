@@ -501,18 +501,29 @@ final class SwitcherWindowList {
         // 订不了窗口级通知 —— 直接跳过。生命周期靠 CGWindowList 重扫维护。
         guard !window.isCgOnly else { return }
         guard let observer = window.application.axObserver else { return }
-        let refcon = Unmanaged.passUnretained(self).toOpaque()
-        for notification in SwitcherWindow.observedNotifications {
-            AXObserverAddNotification(observer, window.axUiElement, notification as CFString, refcon)
+        let subscription = SwitcherAXNotificationSubscription(
+            observer: observer,
+            element: window.axUiElement,
+            notifications: SwitcherWindow.observedNotifications,
+            refcon: Unmanaged.passUnretained(self).toOpaque()
+        )
+        AXCallQueue.shared.submit {
+            subscription.register()
         }
     }
 
-    /// 反订阅 —— 窗口移除前调,避免泄漏到 runloop 里。
+    /// 反订阅 —— 窗口移除前按序提交,避免泄漏到 runloop 里。
     private func unsubscribeWindowNotifications(_ window: SwitcherWindow) {
         guard !window.isCgOnly else { return }
         guard let observer = window.application.axObserver else { return }
-        for notification in SwitcherWindow.observedNotifications {
-            AXObserverRemoveNotification(observer, window.axUiElement, notification as CFString)
+        let subscription = SwitcherAXNotificationSubscription(
+            observer: observer,
+            element: window.axUiElement,
+            notifications: SwitcherWindow.observedNotifications,
+            refcon: nil
+        )
+        AXCallQueue.shared.submit {
+            subscription.unregister()
         }
     }
 
@@ -1083,13 +1094,13 @@ final class SwitcherWindowList {
     private func runGhostProbeNow() {
         guard !ghostProbeInFlight else { return }
         ghostProbeInFlight = true
-        let allSpaces = SwitcherSpaces.allSpaceIds()
-        let visibleSpaces = SwitcherSpaces.visibleSpaceIds()
         let snapshotWindows = Array(windows.values)
         // ghost probe 走的是 CGS API(SwitcherSpaces),不是 AX,跟 AXCallQueue
         // 的串行锁没冲突。放进 detached task,不要白白堵 AX 队列后面的 title /
         // sync 工作。in-flight 旗子已经保证不会并发多个 probe。
         Task.detached(priority: .userInitiated) { [weak self] in
+            let allSpaces = SwitcherSpaces.allSpaceIds()
+            let visibleSpaces = SwitcherSpaces.visibleSpaceIds()
             let probe = SwitcherGhostDetector.probe(across: allSpaces)
             await MainActor.run { [weak self] in
                 self?.applyGhostProbe(probe, visibleSpaces: visibleSpaces, against: snapshotWindows)
