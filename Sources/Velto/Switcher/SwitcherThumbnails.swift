@@ -107,7 +107,10 @@ final class SwitcherThumbnails {
                 guard let switcherWindow = widMap[wid] else { continue }
                 let switcherWindowBox = SwitcherWindowBox(window: switcherWindow)
                 group.addTask {
-                    if let contents = await captureOne(scBox: box) {
+                    if let contents = await captureOne(
+                        scBox: box,
+                        allowProtectedDisplayCapture: false
+                    ) {
                         await MainActor.run {
                             onThumbnailReady(switcherWindowBox.window, contents)
                         }
@@ -128,7 +131,10 @@ final class SwitcherThumbnails {
         let wid = await MainActor.run { box.window.cgWindowId }
         let scBoxes = await cache.boxes(forWids: [wid])
         guard let scBox = scBoxes[wid] else { return }
-        guard let contents = await captureOne(scBox: scBox) else { return }
+        guard let contents = await captureOne(
+            scBox: scBox,
+            allowProtectedDisplayCapture: true
+        ) else { return }
         await MainActor.run {
             box.window.thumbnail = contents
         }
@@ -136,8 +142,12 @@ final class SwitcherThumbnails {
 
     /// 真正干活的 SCK 调用。返回 CALayerContents.pixelBuffer —— IOSurface 零拷贝路径。
     /// 抄自 alt-tab `WindowCaptureScreenshots.oneTimeCapture` + `CMSampleBuffer.pixelBuffer()`。
-    /// 失败时降级到 CGSHWCaptureWindowList 私有 API,兜底最小化窗口。
-    private static func captureOne(scBox: SCWindowBox) async -> CALayerContents? {
+    /// 失败时先降级到 CGSHWCaptureWindowList 兜底最小化窗口；如果目标是当前
+    /// 屏幕上可见的 sharingNone 窗口，再复用截图模块的 AV 整屏捕获并裁出窗口。
+    private static func captureOne(
+        scBox: SCWindowBox,
+        allowProtectedDisplayCapture: Bool
+    ) async -> CALayerContents? {
         let scWindow = scBox.scWindow
         let filter = SCContentFilter(desktopIndependentWindow: scWindow)
         let config = SCStreamConfiguration()
@@ -160,12 +170,102 @@ final class SwitcherThumbnails {
             if let pixelBuffer = sampleBuffer.thumbnailPixelBuffer() {
                 return .pixelBuffer(pixelBuffer)
             }
-            // SCK 没拿到有效帧 —— 走兜底
-            return captureViaPrivateApi(wid: scWindow.windowID)
+            return await captureFallback(
+                for: scWindow,
+                allowProtectedDisplayCapture: allowProtectedDisplayCapture
+            )
         } catch {
-            // 整个 SCK 调用失败(目标已销毁、最小化导致 SCK 拒绝等)—— 走兜底
-            return captureViaPrivateApi(wid: scWindow.windowID)
+            return await captureFallback(
+                for: scWindow,
+                allowProtectedDisplayCapture: allowProtectedDisplayCapture
+            )
         }
+    }
+
+    private static func captureFallback(
+        for window: SCWindow,
+        allowProtectedDisplayCapture: Bool
+    ) async -> CALayerContents? {
+        if let privateCapture = captureViaPrivateApi(wid: window.windowID) {
+            return privateCapture
+        }
+        guard allowProtectedDisplayCapture else { return nil }
+        return await captureProtectedWindowViaDisplay(wid: window.windowID)
+    }
+
+    /// 单窗口 API 会把 sharingNone 窗口返回成黑帧。仅在窗口此刻真的可见时，
+    /// 抓它所在显示器并裁出可见窗口区域；其他 Space / 已关闭窗口不能这样做，
+    /// 否则会误把后方内容当成窗口预览。
+    private static func captureProtectedWindowViaDisplay(wid: CGWindowID) async -> CALayerContents? {
+        guard let target = protectedWindowTarget(wid: wid) else { return nil }
+        guard await MainActor.run(body: { !SwitcherSession.isActive }) else { return nil }
+        guard let image = try? await ScreenshotCapturer.captureCompatibilityDisplayImage(
+            displayID: target.displayID,
+            cropRect: target.cropRect,
+            scaleFactor: target.scaleFactor
+        ) else { return nil }
+        guard await MainActor.run(body: { !SwitcherSession.isActive }) else { return nil }
+        return .cgImage(image)
+    }
+
+    private static func protectedWindowTarget(wid: CGWindowID) -> ProtectedWindowTarget? {
+        let rows = CGWindowListCopyWindowInfo(.optionIncludingWindow, wid) as? [[String: Any]] ?? []
+        guard let row = rows.first(where: {
+            ($0[kCGWindowNumber as String] as? NSNumber)?.uint32Value == wid
+        }),
+        (row[kCGWindowSharingState as String] as? NSNumber)?.uint32Value
+            == CGWindowSharingType.none.rawValue,
+        (row[kCGWindowLayer as String] as? NSNumber)?.intValue == 0,
+        (row[kCGWindowAlpha as String] as? NSNumber)?.doubleValue ?? 0 > 0,
+        (row[kCGWindowIsOnscreen as String] as? NSNumber)?.boolValue == true,
+        let boundsDictionary = row[kCGWindowBounds as String] as? NSDictionary,
+        let windowFrame = CGRect(dictionaryRepresentation: boundsDictionary),
+        !windowFrame.isEmpty
+        else { return nil }
+
+        var count: UInt32 = 0
+        guard CGGetActiveDisplayList(0, nil, &count) == .success, count > 0 else { return nil }
+        var displayIDs = [CGDirectDisplayID](repeating: 0, count: Int(count))
+        guard CGGetActiveDisplayList(count, &displayIDs, &count) == .success else { return nil }
+        return displayIDs.prefix(Int(count)).compactMap { displayID -> ProtectedWindowTarget? in
+            let displayFrame = CGDisplayBounds(displayID)
+            let intersection = windowFrame.intersection(displayFrame)
+            guard !intersection.isNull, !intersection.isEmpty else { return nil }
+            guard let cropRect = compatibilityAVCropRect(
+                windowFrame: windowFrame,
+                displayFrame: displayFrame
+            ) else { return nil }
+            let nativeScale = CGDisplayCopyDisplayMode(displayID).map {
+                CGFloat($0.pixelWidth) / displayFrame.width
+            } ?? 1
+            let maxPixels = Self.maxDimension * 2
+            let scaleFactor = min(
+                1,
+                maxPixels / (max(cropRect.width, cropRect.height) * nativeScale)
+            )
+            return ProtectedWindowTarget(
+                displayID: displayID,
+                cropRect: cropRect,
+                scaleFactor: scaleFactor,
+                visibleArea: intersection.width * intersection.height
+            )
+        }.max { $0.visibleArea < $1.visibleArea }
+    }
+
+    static func compatibilityAVCropRect(
+        windowFrame: CGRect,
+        displayFrame: CGRect
+    ) -> CGRect? {
+        let visible = windowFrame.intersection(displayFrame)
+        guard !visible.isNull, !visible.isEmpty, displayFrame.width > 0, displayFrame.height > 0 else {
+            return nil
+        }
+        return CGRect(
+            x: visible.minX - displayFrame.minX,
+            y: displayFrame.maxY - visible.maxY,
+            width: visible.width,
+            height: visible.height
+        )
     }
 
     /// `CGSHWCaptureWindowList` 私有 API 兜底。
@@ -181,6 +281,13 @@ final class SwitcherThumbnails {
         guard let cgImage = array.first else { return nil }
         return .cgImage(cgImage)
     }
+}
+
+private struct ProtectedWindowTarget {
+    let displayID: CGDirectDisplayID
+    let cropRect: CGRect
+    let scaleFactor: CGFloat
+    let visibleArea: CGFloat
 }
 
 // MARK: - CMSampleBuffer 提取 PixelBuffer

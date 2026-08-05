@@ -1,4 +1,5 @@
 import Cocoa
+import QuartzCore
 
 /// 切换器面板里的 tiles 网格容器。
 ///
@@ -7,8 +8,17 @@ import Cocoa
 ///   - `appIcons`:单行(像 macOS 原生 Cmd+Tab),最多 12 个换行
 ///   - `titles`:单列(像列表),每行 1 个
 final class SwitcherTilesView: NSView {
+    static let selectionAnimationDuration: CFTimeInterval = 0.10
+
     private static let tileSpacing: CGFloat = 8
     private static let containerInset: CGFloat = 24
+    private static let highlightBorderWidth: CGFloat = 3
+
+    /// 一个高亮层在 tiles 之间移动。快速连按时从 presentation layer 的当前位置
+    /// 和速度继续滑向新目标，不会跳回旧位置或让每个 tile 自己弹跳。
+    private let selectionLayer = CALayer()
+    private var lastSelectionPosition: CGPoint?
+    private var lastSelectionSampleTime: CFTimeInterval?
 
     private(set) var tiles: [SwitcherTileView] = []
 
@@ -21,6 +31,34 @@ final class SwitcherTilesView: NSView {
 
     var onHover: ((Int) -> Void)?
     var onClick: ((Int) -> Void)?
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        selectionLayer.opacity = 0
+        selectionLayer.cornerCurve = .continuous
+        selectionLayer.allowsEdgeAntialiasing = true
+        updateSelectionLayerScale()
+        updateSelectionLayerColors()
+        layer?.insertSublayer(selectionLayer, at: 0)
+    }
+
+    required init?(coder: NSCoder) { fatalError("not implemented") }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateSelectionLayerColors()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        updateSelectionLayerScale()
+    }
+
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        updateSelectionLayerScale()
+    }
 
     /// 用 windows 列表重建整张网格。返回内容尺寸,Panel 拿去调整自己。
     /// `hideWindowTitle`:perApp 分组时为 true,tile 只显示 app 名。
@@ -109,10 +147,99 @@ final class SwitcherTilesView: NSView {
         return result
     }
 
-    func setSelectedIndex(_ index: Int) {
-        for (i, t) in tiles.enumerated() {
-            t.isSelected = (i == index)
+    func setSelectedIndex(_ index: Int, animated: Bool = true) {
+        guard tiles.indices.contains(index) else {
+            for tile in tiles { tile.isSelected = false }
+            lastSelectionPosition = nil
+            lastSelectionSampleTime = nil
+            selectionLayer.removeAllAnimations()
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            selectionLayer.opacity = 0
+            CATransaction.commit()
+            return
         }
+
+        for (i, tile) in tiles.enumerated() { tile.isSelected = (i == index) }
+        let tile = tiles[index]
+        let now = CACurrentMediaTime()
+        let currentPosition = selectionLayer.presentation()?.position ?? selectionLayer.position
+        let wasAnimating = selectionLayer.animation(forKey: "selectionSlide") != nil
+        let previousPosition = lastSelectionPosition
+        let previousTime = lastSelectionSampleTime
+        let wasVisible = selectionLayer.presentation()?.opacity ?? selectionLayer.opacity
+        let targetFrame = tile.frame
+        let scale = targetFrame.width / max(tile.bounds.width, 1)
+
+        selectionLayer.removeAnimation(forKey: "selectionSlide")
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        selectionLayer.frame = targetFrame
+        selectionLayer.cornerRadius = SwitcherPanel.cellCornerRadius * scale
+        selectionLayer.borderWidth = Self.highlightBorderWidth * scale
+        selectionLayer.opacity = 1
+        CATransaction.commit()
+
+        guard animated,
+              wasVisible > 0,
+              !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
+              currentPosition != selectionLayer.position
+        else {
+            lastSelectionPosition = selectionLayer.position
+            lastSelectionSampleTime = now
+            return
+        }
+
+        let targetPosition = selectionLayer.position
+        var initialVelocity: CGFloat = 0
+        if wasAnimating, let previousPosition, let previousTime {
+            initialVelocity = Self.projectedSelectionVelocity(
+                current: currentPosition,
+                target: targetPosition,
+                previous: previousPosition,
+                elapsed: now - previousTime
+            )
+        }
+        lastSelectionPosition = currentPosition
+        lastSelectionSampleTime = now
+
+        // 临界阻尼：保留重定向前的速度，但不允许位置过冲或回弹。
+        let spring = CASpringAnimation(keyPath: "position")
+        spring.fromValue = currentPosition
+        spring.toValue = targetPosition
+        spring.mass = 1
+        spring.stiffness = 3600
+        spring.damping = 120
+        spring.initialVelocity = initialVelocity
+        spring.duration = Self.selectionAnimationDuration
+        selectionLayer.add(spring, forKey: "selectionSlide")
+    }
+
+    static func projectedSelectionVelocity(
+        current: CGPoint,
+        target: CGPoint,
+        previous: CGPoint,
+        elapsed: CFTimeInterval
+    ) -> CGFloat {
+        let dx = target.x - current.x
+        let dy = target.y - current.y
+        let distanceSquared = dx * dx + dy * dy
+        guard elapsed > 0.001, distanceSquared > 1 else { return 0 }
+        let vx = (current.x - previous.x) / elapsed
+        let vy = (current.y - previous.y) / elapsed
+        return max(-8, min(8, (vx * dx + vy * dy) / distanceSquared))
+    }
+
+    private func updateSelectionLayerScale() {
+        selectionLayer.contentsScale = window?.backingScaleFactor
+            ?? NSScreen.main?.backingScaleFactor
+            ?? 2
+    }
+
+    private func updateSelectionLayerColors() {
+        let accent = NSColor.controlAccentColor
+        selectionLayer.backgroundColor = accent.withAlphaComponent(0.2).cgColor
+        selectionLayer.borderColor = accent.cgColor
     }
 
     func setHoveredIndex(_ index: Int) {

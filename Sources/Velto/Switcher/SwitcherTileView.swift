@@ -5,7 +5,7 @@ import Cocoa
 ///   - `.appIcons`(macOS 原生 Cmd+Tab 风格):正方形大图标,标题在下
 ///   - `.titles`(列表风格):横向条,小图标 + 长标题
 ///
-/// 选中态都用 alt-tab `TileUnderLayer` 同款:accent 色 20% 填充 + 100% 边框。
+/// 选中态由 SwitcherTilesView 的单个高亮层统一绘制和移动。
 final class SwitcherTileView: NSView {
     /// 根据样式给出 tile 的尺寸 —— TilesView 用这个排布局。
     static func tileSize(for style: SwitcherAppearanceStyle) -> NSSize {
@@ -37,14 +37,15 @@ final class SwitcherTileView: NSView {
     private let appNameLabel: NSTextField
     /// 副标题:窗口标题(可能是网页名/文档名/标签页名,跟 app 名不同时才显示)
     private let titleLabel: NSTextField
-
     var onHover: ((SwitcherTileView) -> Void)?
     var onClick: ((SwitcherTileView) -> Void)?
 
     // mouseMoved 会高频回调 onHover,Tiles 又会广播 setHoveredIndex 到所有
     // tile。加去重,只有真变化时才 redraw,避免拖动鼠标时的 redraw 风暴。
-    var isSelected: Bool = false {
-        didSet { if oldValue != isSelected { needsDisplay = true } }
+    var isSelected = false {
+        didSet {
+            if oldValue != isSelected, isHovered { needsDisplay = true }
+        }
     }
     var isHovered: Bool = false {
         didSet { if oldValue != isHovered { needsDisplay = true } }
@@ -271,13 +272,7 @@ final class SwitcherTileView: NSView {
         let path = NSBezierPath(roundedRect: bounds.insetBy(dx: inset, dy: inset),
                                 xRadius: Self.cornerRadius,
                                 yRadius: Self.cornerRadius)
-        if isSelected {
-            NSColor.controlAccentColor.withAlphaComponent(0.2).setFill()
-            path.fill()
-            NSColor.controlAccentColor.setStroke()
-            path.lineWidth = Self.highlightBorderWidth
-            path.stroke()
-        } else if isHovered {
+        if !isSelected && isHovered {
             NSColor.controlAccentColor.withAlphaComponent(0.1).setFill()
             path.fill()
             NSColor.controlAccentColor.withAlphaComponent(0.7).setStroke()

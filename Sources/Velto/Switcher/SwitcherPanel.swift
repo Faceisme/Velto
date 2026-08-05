@@ -1,4 +1,5 @@
 import Cocoa
+import QuartzCore
 
 /// 切换器的浮动面板。NSPanel 而不是 NSWindow,因为 NSPanel 支持
 /// `.nonactivatingPanel`(显示时不抢前台进程的 keyboard focus,我们靠 CGEvent
@@ -9,6 +10,7 @@ import Cocoa
 /// 就是 26,所以不做老系统降级。
 final class SwitcherPanel: NSPanel {
     static let shared = SwitcherPanel()
+    static let revealAnimationDuration: CFTimeInterval = 0.085
 
     /// `NSGlassEffectView` 子类。Liquid Glass 视图本身既是背景容器、也是 tracking
     /// 事件源 —— 直接作为 contentView,中间不能再夹一层 NSView(会破坏玻璃渲染)。
@@ -22,11 +24,6 @@ final class SwitcherPanel: NSPanel {
     static let windowPadding: CGFloat = 25
     static let windowCornerRadius: CGFloat = 32
     static let cellCornerRadius: CGFloat = 18
-
-    // 不做 fade-in / fade-out 动画。alt-tab 也没做 —— 它的"丝滑"靠的就是
-    // 即时响应。哪怕 0.14s 的 fade-in 都会被感受为"按下后等了一下"。
-    // 如果未来想做"出现 / 消失"动效,做 micro-bounce(50ms 缩放)比 fade
-    // 更不影响响应感。
 
     private init() {
         let initialFrame = NSRect(x: 0, y: 0, width: 600, height: 200)
@@ -68,6 +65,7 @@ final class SwitcherPanel: NSPanel {
     /// 重建 tiles + 计算尺寸 + 居中 + 立即显示。
     func show(
         with windows: [SwitcherWindow],
+        selectedIndex: Int,
         style: SwitcherAppearanceStyle = .thumbnails,
         hideWindowTitle: Bool = false,
         on screen: NSScreen? = nil
@@ -84,16 +82,34 @@ final class SwitcherPanel: NSPanel {
         )
         let frame = positionedFrame(for: contentSize, on: panelScreen)
         setFrame(frame, display: true)
-        // 即时显示 —— 跟 alt-tab 一致。fade-in 会被感受为"按下后等了一下"。
+        tilesView.setSelectedIndex(selectedIndex, animated: false)
         alphaValue = 1
+        prepareRevealAnimation()
         orderFrontRegardless()
     }
 
     func hidePanel() {
-        // 即时隐藏 —— 用户松开 Cmd 那一刻 panel 就应该消失。fade-out 会让 panel
-        // 在松手后继续可见 100ms,跟点击响应即时反馈的预期冲突。
+        glass.layer?.removeAnimation(forKey: "switcherReveal")
         orderOut(nil)
         tilesView.clearHover()
+    }
+
+    /// model layer 始终是最终状态,只给 presentation layer 一个短入场。
+    /// 因此 panel 立即可见、松键立即消失,动画不会进入切换时序。
+    private func prepareRevealAnimation() {
+        guard let layer = glass.layer else { return }
+        layer.removeAnimation(forKey: "switcherReveal")
+        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
+
+        let opacity = CABasicAnimation(keyPath: "opacity")
+        opacity.fromValue = 0.88
+        opacity.toValue = 1
+
+        let group = CAAnimationGroup()
+        group.animations = [opacity]
+        group.duration = Self.revealAnimationDuration
+        group.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        layer.add(group, forKey: "switcherReveal")
     }
 
     private func positionedFrame(for contentSize: NSSize, on screen: NSScreen?) -> NSRect {

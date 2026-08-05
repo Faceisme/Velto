@@ -245,12 +245,12 @@ final class SwitcherController {
         keyTap.isActive = true
         panel.show(
             with: snapshot,
+            selectedIndex: session.selectedIndex,
             style: prefs.appearanceStyle,
             hideWindowTitle: prefs.groupBy == .perApp,
             on: panelScreen
         )
         panelVisibility.markShown(at: ProcessInfo.processInfo.systemUptime)
-        panel.tilesView.setSelectedIndex(session.selectedIndex)
 
         // 启动缩略图抓取 —— 异步,抓到一张更新一张 tile,不阻塞 panel 显示。
         // 没有 Screen Recording 权限就直接什么也不做,UI 保持纯图标态。

@@ -34,7 +34,7 @@ enum ScreenshotCapturer {
       let backend: String
       if requiresCompatibilityCapture(windowInfo: windowInfo, displayFrame: display.frame) {
         do {
-          image = try await AVDisplayFrameCapture(displayID: display.displayID).capture()
+          image = try await captureCompatibilityDisplayImage(displayID: display.displayID)
           backend = "AVCaptureScreenInput"
         } catch {
           ScreenshotDebugLog.log(
@@ -59,6 +59,20 @@ enum ScreenshotCapturer {
       )
     }
     return result
+  }
+
+  /// `sharingNone` 窗口唯一可用的整屏捕获后端。截图与切换器缩略图共用，
+  /// 避免两边各维护一套 AVCaptureSession 生命周期。
+  static func captureCompatibilityDisplayImage(
+    displayID: CGDirectDisplayID,
+    cropRect: CGRect? = nil,
+    scaleFactor: CGFloat = 1
+  ) async throws -> CGImage {
+    try await AVDisplayFrameCapture(
+      displayID: displayID,
+      cropRect: cropRect,
+      scaleFactor: scaleFactor
+    ).capture()
   }
 
   static func requiresCompatibilityCapture(
@@ -208,14 +222,18 @@ private final class AVDisplayFrameCapture: NSObject,
   @unchecked Sendable
 {
   private let displayID: CGDirectDisplayID
+  private let cropRect: CGRect?
+  private let scaleFactor: CGFloat
   private let queue: DispatchQueue
   private var continuation: CheckedContinuation<CGImage, any Error>?
   private var session: AVCaptureSession?
   private var output: AVCaptureVideoDataOutput?
   private var outcome: Result<CGImage, any Error>?
 
-  init(displayID: CGDirectDisplayID) {
+  init(displayID: CGDirectDisplayID, cropRect: CGRect?, scaleFactor: CGFloat) {
     self.displayID = displayID
+    self.cropRect = cropRect
+    self.scaleFactor = scaleFactor
     queue = DispatchQueue(label: "com.velto.screenshot.av-display-\(displayID)")
   }
 
@@ -235,6 +253,10 @@ private final class AVDisplayFrameCapture: NSObject,
     }
     input.capturesCursor = false
     input.capturesMouseClicks = false
+    if let cropRect {
+      input.cropRect = cropRect
+      input.scaleFactor = scaleFactor
+    }
 
     let output = AVCaptureVideoDataOutput()
     output.alwaysDiscardsLateVideoFrames = true
