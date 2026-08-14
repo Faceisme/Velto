@@ -221,19 +221,10 @@ final class SwitcherController {
             return
         }
         SwitcherDebugLog.log("summon windowCount=\(snapshot.count) style=\(prefs.appearanceStyle) groupBy=\(prefs.groupBy) screen=\(prefs.showOnScreen)")
-        // snapshot 已经把"当前正在用的 app"挪到列表末尾(rotateCurrentToEnd),
-        // 所以正向就是选 index 0 —— 第一格即最近用过的上一个 app。
-        // 反向 = 从当前 app 往回一格 = 最靠后的**非当前** app:当前 app 占着末尾时
-        // 要跳过它,没被挪走时(onlyNonActive 等过滤剔掉了)末尾本身就是。
-        let initialSelection: Int
-        if snapshot.count == 1 {
-            initialSelection = 0
-        } else if reverse {
-            let currentAtEnd = snapshot.last?.application.pid == windowList.frontmostPid
-            initialSelection = currentAtEnd ? snapshot.count - 2 : snapshot.count - 1
-        } else {
-            initialSelection = 0
-        }
+        // snapshot 已经把"当前正在用的这个"从候选里去掉(dropCurrent),列表里
+        // 全是能切过去的目标 —— 正向选第一格(最近用过的上一个 app),反向选
+        // 最后一格(最久没用的)。count==1 时两者都落 0。
+        let initialSelection = reverse ? snapshot.count - 1 : 0
         // 诊断:打印 snapshot 的 MRU 序与初始选中。用来确认"切了等于没切"是不是
         // 因为 MRU 还没更新到位(刚切到的窗口仍排在 index 1)。
         SwitcherDebugLog.log("summon order selected=\(initialSelection) [" +
@@ -346,7 +337,7 @@ final class SwitcherController {
             SwitcherDebugLog.log("confirm raise app=\(target.application.localizedName ?? "?") wid=\(target.cgWindowId)")
             // 先把 MRU 同步顶到这个窗口,再 raise —— 这样紧接着的下一次 trigger
             // 即便 AX activate 通知还没回来,snapshot 的 MRU 序也已经是新的,
-            // 刚切到的这个才会被 rotateCurrentToEnd 挪到末尾,index 0 落在
+            // 刚切到的这个才会被 dropCurrent 从候选里去掉,index 0 落在
             // "真正的上一个 app"而不是它自己。
             windowList.promoteForConfirmedSwitch(window: target)
             SwitcherFocus.raise(window: target)

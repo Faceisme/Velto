@@ -83,9 +83,27 @@ enum SwitcherDebugLog {
         }
     }
 
-    /// 只对"我们想盯着看"的 app 触发(目前是微信/Dropbox/1Password)。其他 app 静默。
+    /// 临时 trace 名单:`VELTO_SWITCHER_TRACE_APPS=DBeaver,Figma`(逗号分隔,对
+    /// app 名和 bundle id 做大小写无关子串匹配)。
+    ///
+    /// 排查"某个 app 不出现在候选框"时必须能盯着那个 app 看,而 trace 原先绑死在
+    /// `AppQuirks.hidesSyntheticSwitcherWindows` 名单上 —— 想看新 app 就得先改
+    /// quirk 规则(那有真实副作用)。这个口子只影响日志,不碰任何业务判定。
+    private static let extraTraceKeywords: [String] = {
+        guard let raw = ProcessInfo.processInfo.environment["VELTO_SWITCHER_TRACE_APPS"] else { return [] }
+        return raw.split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
+            .filter { !$0.isEmpty }
+    }()
+
+    /// 只对"我们想盯着看"的 app 触发(quirk 名单:微信/Dropbox/1Password,
+    /// 外加 VELTO_SWITCHER_TRACE_APPS 指定的)。其他 app 静默。
     static func shouldTrace(bundleIdentifier: String?, appName: String?) -> Bool {
         guard isEnabled else { return false }
+        if !extraTraceKeywords.isEmpty {
+            let haystack = "\(appName ?? "") \(bundleIdentifier ?? "")".lowercased()
+            if extraTraceKeywords.contains(where: { haystack.contains($0) }) { return true }
+        }
         return AppQuirks.hidesSyntheticSwitcherWindows(
             bundleIdentifier: bundleIdentifier,
             appName: appName

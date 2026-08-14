@@ -269,9 +269,26 @@ final class SwitcherWindowList {
         guard maintainsIndex else { return }
         guard let app = apps[pid] else { return }
         AXCallQueue.shared.schedule("sync-\(pid)") { [weak self] in
-            guard let axWindows = app.copyAxWindows(includeBruteForce: includeBruteForce) else { return }
+            let traceApp = SwitcherDebugLog.shouldTrace(
+                bundleIdentifier: app.bundleIdentifier,
+                appName: app.localizedName
+            )
+            guard let axWindows = app.copyAxWindows(includeBruteForce: includeBruteForce) else {
+                // AX 完全不响应(标准调用失败 + 暴力枚举也空)。注意这条路径**不会**
+                // 走下面的 CGWindowList 兜底 —— 兜底只接"AX 成功但返回空"。
+                if traceApp {
+                    SwitcherDebugLog.log("sync pid=\(pid) app=\(app.localizedName ?? "?") copyAxWindows=nil(AX 不响应)→ 整轮跳过,CG 兜底没机会跑")
+                }
+                return
+            }
             var probes: [SwitcherWindowProbe] = axWindows.compactMap { ax in
-                guard let wid = SwitcherAxRead.cgWindowId(of: ax) else { return nil }
+                guard let wid = SwitcherAxRead.cgWindowId(of: ax) else {
+                    if traceApp {
+                        let t = SwitcherAxRead.multiAttributes(ax, [kAXTitleAttribute as String, kAXSubroleAttribute as String])
+                        SwitcherDebugLog.log("  sync DROP: _AXUIElementGetWindow 拿不到 wid title=\"\(t[kAXTitleAttribute as String] as? String ?? "-")\" subrole=\(t[kAXSubroleAttribute as String] as? String ?? "-")")
+                    }
+                    return nil
+                }
                 let attrs = SwitcherAxRead.multiAttributes(ax, [
                     kAXTitleAttribute as String,
                     kAXSubroleAttribute as String,
@@ -315,6 +332,11 @@ final class SwitcherWindowList {
             // CGWindowList 兜底,它对所有进程的窗口一视同仁。
             if probes.isEmpty {
                 probes = Self.cgFallbackProbes(pid: pid, appElement: app.axUiElement)
+                if traceApp {
+                    SwitcherDebugLog.log("sync pid=\(pid) app=\(app.localizedName ?? "?") AX 探针为空 → CG 兜底捞到 \(probes.count) 个")
+                }
+            } else if traceApp {
+                SwitcherDebugLog.log("sync pid=\(pid) app=\(app.localizedName ?? "?") axWindows=\(axWindows.count) probes=\(probes.count)(有 AX 探针,不走 CG 兜底)")
             }
             let spaceMap = SwitcherSpaces.spaces(forWindowIds: probes.map(\.wid))
             Task { @MainActor [weak self] in
@@ -992,20 +1014,24 @@ final class SwitcherWindowList {
         let sorted = Self.sort(Array(filtered), by: prefs.sortBy)
         let partitioned = Self.partitionShowAtEnd(sorted, prefs: prefs)
         let collapsed = Self.collapsePerApp(partitioned, mode: prefs.groupBy)
-        return Self.rotateCurrentToEnd(collapsed, sortBy: prefs.sortBy, frontPid: frontPid)
+        return Self.dropCurrent(collapsed, sortBy: prefs.sortBy, frontPid: frontPid)
     }
 
-    /// 把"你正在用的这个 app"从列表首位挪到末尾 —— 候选框第一格就是最近用过的
-    /// **上一个** app(也就是 ⌘Tab 一下要去的地方),而不是自己脚下这个。
+    /// 把"你正在用的这个"从候选里去掉 —— 候选框只列**能切过去的目标**,第一格
+    /// 就是最近用过的上一个 app。
     ///
-    /// 两个 app 交替是最常见用法,原来的 [当前, 上一个] 让真正的目标永远压在
-    /// 最后一格,选中框也永远停在第二格。挪完是 [上一个, 次近, ..., 当前],
-    /// 选中框落 index 0。键盘手感不变(仍是"按一下切到上一个"),只是列表读起来
-    /// 顺了:最近用的在最前。
+    /// ⌘Tab 永远不会切到自己,留着那一格只会让人在列表里找不到目标(先是压在
+    /// 末尾看不见,挪到首位又占着最该给上一个 app 的位置)。想留在原地按 Esc。
     ///
-    /// 只对 recentlyFocused 生效 —— 字母序/Space 序没有"首位=当前"的语义,挪了
-    /// 就是打乱。首位不是前台 app 时(onlyNonActive 等过滤把它剔了)也不动。
-    private static func rotateCurrentToEnd(
+    /// 两种分组都只需去掉首位,因为 collapsePerApp 已经跑在前面:
+    ///   - perApp:前台 app 只剩一个代表条目,且必在首位 → 整个 app 从候选消失
+    ///   - perWindow:首位是 MRU=0 的当前聚焦窗口 → 只去掉它,同 app 的其他窗口
+    ///     仍然是合法目标(appsToShow=.onlyActive 的 app 内切窗口正靠这个)
+    ///
+    /// 只对 recentlyFocused 生效 —— 字母序/Space 序没有"首位=当前"的语义。
+    /// 首位不是前台 app 时(onlyNonActive 等过滤已把它剔了)不动。只剩一个窗口
+    /// 时也不动:宁可显示一格"自己",也不给用户一个空面板 + beep。
+    private static func dropCurrent(
         _ windows: [SwitcherWindow],
         sortBy: SwitcherSortOrder,
         frontPid: pid_t?
@@ -1014,7 +1040,7 @@ final class SwitcherWindowList {
               let current = windows.first,
               current.application.pid == frontPid
         else { return windows }
-        return Array(windows.dropFirst()) + [current]
+        return Array(windows.dropFirst())
     }
 
     /// perApp 模式:每个 app 在结果里只保留第一个出现的窗口(也就是排序后
