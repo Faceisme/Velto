@@ -49,6 +49,20 @@ final class WindowDragController: @unchecked Sendable {
     private var pendingUpdate: PendingUpdate?
     private var updateScheduled = false
 
+    /// 目标定位失败后的冷却截止时间(window-drag 队列独占,无需加锁)。
+    ///
+    /// `beginDrag` 失败时 `session` 保持 nil,原先会让**每一个** mouseMoved 重跑
+    /// 一整轮跨进程目标定位:CGWindowListCopyWindowInfo 全窗口枚举 + 最多两次
+    /// systemwide `AXUIElementCopyElementAtPosition`。后者是同步 IPC,会逼指针
+    /// 下的 App 在主线程上跑 AX 命中测试;120Hz 的鼠标移动就是每秒上百次。
+    ///
+    /// Telegram / 富途这类**不暴露 AX 窗口**的 App(实测 kAXWindows 返回 0 个)
+    /// 定位必然失败,于是 100% 落进这条重试路径:Velto 这边 0.1s 超时就放弃,
+    /// 目标进程那边照样得把请求排队处理完,积压只增不减,主线程再也腾不出手响应
+    /// 点击 —— 表现就是"窗口像冻住了:选不中文字、交通灯没反应、切不动会话"。
+    /// 失败后冷却一段时间再试,把重试频率从每秒上百次压到每秒两次。
+    private var lookupBackoffUntil: CFAbsoluteTime = 0
+
     // MARK: - Preference snapshot
 
     func updateModifierFlags(move: UInt64, resize: UInt64) {
@@ -92,6 +106,7 @@ final class WindowDragController: @unchecked Sendable {
 
         queue.async { [weak self] in
             self?.session = nil
+            self?.lookupBackoffUntil = 0
         }
     }
 
@@ -99,8 +114,10 @@ final class WindowDragController: @unchecked Sendable {
 
     private func prewarmDragLookup(mode: DragMode, at location: CGPoint) {
         queue.async { [weak self] in
-            guard let self else { return }
-            _ = self.beginDrag(mode: mode, at: location)
+            guard let self, self.lookupAllowed() else { return }
+            if self.beginDrag(mode: mode, at: location) == nil {
+                self.noteLookupFailure()
+            }
         }
     }
 
@@ -143,9 +160,26 @@ final class WindowDragController: @unchecked Sendable {
 
     // MARK: - Drag math (window-drag queue only)
 
+    /// 冷却窗口:失败后 0.5s 内不再重跑目标定位。这段时间里指针下的窗口不会凭空
+    /// 出现,重试纯属白烧目标进程的主线程。
+    private static let lookupBackoff: TimeInterval = 0.5
+
+    private func lookupAllowed() -> Bool {
+        CFAbsoluteTimeGetCurrent() >= lookupBackoffUntil
+    }
+
+    private func noteLookupFailure() {
+        lookupBackoffUntil = CFAbsoluteTimeGetCurrent() + Self.lookupBackoff
+    }
+
     private func applyUpdate(mode: DragMode, at location: CGPoint) -> Bool {
         if session?.mode != mode {
+            guard lookupAllowed() else { return false }
             session = beginDrag(mode: mode, at: location)
+            if session == nil {
+                noteLookupFailure()
+                return false
+            }
         }
 
         guard let session else { return false }

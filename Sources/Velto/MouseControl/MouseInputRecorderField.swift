@@ -12,6 +12,11 @@ struct MouseInputRecorderField: View {
     @State private var monitor: Any?
     @State private var resignObservers: [NSObjectProtocol] = []
 
+    /// 录制中已按下的修饰键并集与最后一颗修饰键的 keyCode。纯修饰键组合(⌃⌥)必须
+    /// 等键全松开才能定稿 —— 一按下就收工的话,先按的那颗会把组合直接截断成单键。
+    @State private var pendingModifierRaw: UInt64 = 0
+    @State private var pendingModifierCode: UInt16 = 0
+
     var body: some View {
         Button {
             if !isRecording { beginRecording() }
@@ -83,6 +88,7 @@ struct MouseInputRecorderField: View {
         }
         resignObservers = []
         isRecording = false
+        pendingModifierRaw = 0
     }
 
     private func handle(_ event: NSEvent) {
@@ -96,12 +102,21 @@ struct MouseInputRecorderField: View {
         case .flagsChanged:
             guard allowsModifierOnly else { return }
             let raw = ModifierFormatter.normalizedRawValue(from: event.modifierFlags)
-            guard raw != 0 else { return }
+            if raw != 0 {
+                // 还在往上加键,先攒着。
+                pendingModifierRaw |= raw
+                pendingModifierCode = event.keyCode
+                return
+            }
+            guard pendingModifierRaw != 0 else { return }
             trigger = MouseInputTrigger(
                 kind: .keyboard,
-                code: event.keyCode,
-                displayName: ModifierFormatter.displayName(rawValue: raw)
+                code: pendingModifierCode,
+                // code 那颗键的 flag 本就含在并集里,存全集,判定时取并即可。
+                modifierFlags: pendingModifierRaw,
+                displayName: ModifierFormatter.displayName(rawValue: pendingModifierRaw)
             )
+            pendingModifierRaw = 0
             endRecording()
         case .keyDown:
             if let shortcut = ShortcutFormatter.shortcut(from: event) {

@@ -350,18 +350,23 @@ final class MouseControlController: @unchecked Sendable {
     }
 
     private func updateHotkeyStateLocked(_ event: MouseTriggerEvent, hotkeys: MouseScrollHotkeys) {
-        if let trigger = hotkeys.acceleration,
-           event.matches(trigger) {
-            hotkeyState.acceleration = event.isDown
-        }
-        if let trigger = hotkeys.directionToggle,
-           event.matches(trigger) {
-            hotkeyState.directionToggle = event.isDown
-        }
-        if let trigger = hotkeys.disableSmooth,
-           event.matches(trigger) {
-            hotkeyState.disableSmooth = event.isDown
-        }
+        hotkeyState.acceleration = resolvedHotkey(
+            hotkeys.acceleration, event: event, current: hotkeyState.acceleration)
+        hotkeyState.directionToggle = resolvedHotkey(
+            hotkeys.directionToggle, event: event, current: hotkeyState.directionToggle)
+        hotkeyState.disableSmooth = resolvedHotkey(
+            hotkeys.disableSmooth, event: event, current: hotkeyState.disableSmooth)
+    }
+
+    /// 纯修饰键触发器走"当前 flags 有没有按齐"的判定,其余仍按事件匹配 + isDown。
+    private func resolvedHotkey(
+        _ trigger: MouseInputTrigger?,
+        event: MouseTriggerEvent,
+        current: Bool
+    ) -> Bool {
+        guard let trigger else { return false }
+        if let active = event.modifierTriggerActive(trigger) { return active }
+        return event.matches(trigger) ? event.isDown : current
     }
 
     private func consumeButtonBindingLocked(
@@ -447,7 +452,7 @@ final class MouseControlController: @unchecked Sendable {
     }
 }
 
-private struct MouseTriggerEvent {
+struct MouseTriggerEvent {
     let kind: MouseInputKind
     let code: UInt16
     let modifierFlags: UInt64
@@ -493,6 +498,21 @@ private struct MouseTriggerEvent {
         default:
             return nil
         }
+    }
+
+    /// 纯修饰键触发器(含 ⌃⌥ 这类组合)的判定:不看事件 keycode,直接问"当前 flags
+    /// 是否已经按齐了触发器要求的全部修饰键"。非修饰键触发器返回 nil,交回 `matches`。
+    ///
+    /// 按 keycode 匹配的老写法只在触发器那一颗键的 flagsChanged 上更新状态,组合键会
+    /// 废掉:先按 ⌃ 再按 ⌥ 能亮,先按 ⌥ 再按 ⌃ 永远亮不了,松开 ⌃ 也不灭。修饰键每
+    /// 按下/松开都会来一次 flagsChanged,每次重算,按下顺序和松开就都天然正确了。
+    func modifierTriggerActive(_ trigger: MouseInputTrigger) -> Bool? {
+        guard kind == .keyboard,
+              let triggerFlag = MouseKeyCodes.modifierKeyToFlag[trigger.code] else {
+            return nil
+        }
+        let required = UInt64(triggerFlag.rawValue) | trigger.modifierFlags
+        return modifierFlags & required == required
     }
 
     func matches(_ trigger: MouseInputTrigger) -> Bool {
