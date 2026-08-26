@@ -24,7 +24,10 @@ final class WindowDragController: @unchecked Sendable {
     /// would get stuck the moment that edge hits the screen boundary.
     private struct DragSession {
         var mode: DragMode
-        var window: AXUIElement
+        /// `nil` = AX 哑巴 app(Telegram / 微信 / 富途),只能靠 `cgWindowID` 挪窗。
+        var window: AXUIElement?
+        /// WindowServer 兜底用。`0` = 没解析到,只能走 AX。
+        var cgWindowID: CGWindowID
         var startPointer: CGPoint
         var startDragPointer: CGPoint
         var usesConvertedDragPointer: Bool
@@ -194,25 +197,45 @@ final class WindowDragController: @unchecked Sendable {
                 x: session.startFrame.origin.x + dx,
                 y: session.startFrame.origin.y + dy
             )
-            return GestureTargetController.setPosition(nextOrigin, ofWindow: session.window)
+            if let window = session.window {
+                return GestureTargetController.setPosition(nextOrigin, ofWindow: window)
+            }
+            var origin = nextOrigin
+            return SLSMoveWindow(CGS_CONNECTION, session.cgWindowID, &origin) == .success
 
         case .resize:
+            // CG 兜底会话没法改大小:SkyLight 改 shape 不通知 app 重新布局。
+            guard let window = session.window else { return false }
             let nextFrame = resizedFrame(from: session, dx: dx, dy: dy)
-            return GestureTargetController.setSize(nextFrame.size, ofWindow: session.window)
+            return GestureTargetController.setSize(nextFrame.size, ofWindow: window)
         }
     }
 
     private func beginDrag(mode: DragMode, at location: CGPoint) -> DragSession? {
         let modeText = mode == .move ? "move" : "resize"
-        guard let window = GestureTargetController.windowUnderPointer(at: location),
-              let frame = GestureTargetController.frame(ofWindow: window) else {
+
+        var window = GestureTargetController.windowUnderPointer(at: location)
+        var frame = window.flatMap(GestureTargetController.frame(ofWindow:))
+        var cgWindowID: CGWindowID = 0
+
+        // AX 拿不到窗口 → 走 WindowServer。Telegram / 微信 / 富途对 kAXWindows 恒
+        // 返回 0 个窗口,⌥ 拖窗口在这些 app 上从来就没工作过;SLSMoveWindow 只要
+        // wid,不需要目标 app 配合。resize 没有等价兜底,仍然放弃。
+        if frame == nil, mode == .move, let cg = GestureTargetController.cgWindowUnderPointer(at: location) {
+            window = nil
+            frame = cg.frame
+            cgWindowID = cg.id
+            WindowManagementDebugLog.log("  AX 无窗口 → 改用 WindowServer 兜底: wid=\(cg.id)")
+        }
+
+        guard let frame else {
             WindowManagementDebugLog.log(
                 "beginDrag(\(modeText)) @ (\(Int(location.x)),\(Int(location.y))): 未拿到窗口/frame → 放弃")
             return nil
         }
 
         WindowManagementDebugLog.log(
-            "beginDrag(\(modeText)) @ (\(Int(location.x)),\(Int(location.y))): 进入拖动会话,目标窗口 frame=[\(Int(frame.minX)),\(Int(frame.minY)) \(Int(frame.width))×\(Int(frame.height))],光标在窗口内=\(frame.contains(location))")
+            "beginDrag(\(modeText)) @ (\(Int(location.x)),\(Int(location.y))): 进入拖动会话\(window == nil ? "(WindowServer 兜底)" : ""),目标窗口 frame=[\(Int(frame.minX)),\(Int(frame.minY)) \(Int(frame.width))×\(Int(frame.height))],光标在窗口内=\(frame.contains(location))")
 
         let dragPoint = initialDragPoint(for: location, in: frame)
         let screenFrame = DisplayCoordinateConverter.visibleAccessibilityFrame(containingEventLocation: location)
@@ -220,6 +243,7 @@ final class WindowDragController: @unchecked Sendable {
         return DragSession(
             mode: mode,
             window: window,
+            cgWindowID: cgWindowID,
             startPointer: location,
             startDragPointer: dragPoint.point,
             usesConvertedDragPointer: dragPoint.usesConvertedPointer,

@@ -73,6 +73,14 @@ func CGSGetWindowLevel(_ cid: CGSConnectionID, _ wid: CGWindowID, _ level: Unsaf
 @_silgen_name("CGSCopyWindowProperty") @discardableResult
 func CGSCopyWindowProperty(_ cid: CGSConnectionID, _ wid: CGWindowID, _ property: CFString, _ value: UnsafeMutablePointer<CFTypeRef?>) -> CGError
 
+/// 直接让 WindowServer 挪窗口,**只需要 wid,不需要目标 app 配合**。
+/// 给 Telegram / 微信 / 富途这种对 `kAXWindows` 恒返回 0 的 app 兜底拖拽用
+/// (实测跨进程有效,不需要动 SIP)。`origin` 与 CGWindowList bounds 同坐标系
+/// (y-down、左上原点)。只管位置;改大小要走 AX,SkyLight 改 shape 不会通知
+/// app 重新布局,拉出来是花的。
+@_silgen_name("SLSMoveWindow") @discardableResult
+func SLSMoveWindow(_ cid: CGSConnectionID, _ wid: CGWindowID, _ origin: UnsafePointer<CGPoint>) -> CGError
+
 // MARK: - 屏幕
 
 @_silgen_name("CGSCopyActiveMenuBarDisplayIdentifier")

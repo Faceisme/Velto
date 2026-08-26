@@ -405,8 +405,10 @@ enum GestureTargetController {
             if WindowManagementDebugLog.isEnabled {
                 WindowManagementDebugLog.log("  AX 命中失败(AXUIElementCopyElementAtPosition 全部返回 nil)→ 回退 CGWindowList")
             }
+            // 这里**不熔断**:命中测试失败可能只是一次偶发超时,而熔断会让健康
+            // app 的 ⌥ 拖拽降级 5 秒。紧接着的 target(from:) 会去查 kAXWindows,
+            // 那个「success + 0 个窗口」才是 AX 哑巴的确定性信号,由它来记账。
             if let candidate = candidateFromWindowList() {
-                markAxDead(candidate.pid, reason: "命中测试全部返回 nil")
                 return target(from: candidate)
             }
 
@@ -563,6 +565,38 @@ enum GestureTargetController {
             return nil
         }
         return element
+    }
+
+    /// 光标下最上层窗口的 **CGWindowID + 几何**,不碰 AX。
+    ///
+    /// 给「AX 哑巴 app」的拖拽兜底用:Telegram / 微信 / 富途对 `kAXWindows` 恒返回
+    /// 0 个窗口,拿不到 AX 句柄就 `AXUIElementSetAttributeValue(kAXPosition)` 无从谈起,
+    /// ⌥ 拖窗口在这些 app 上**从来就没工作过**。改走 WindowServer 的 `SLSMoveWindow`
+    /// 只需要 wid,不需要目标 app 配合。见 `WindowDragController`。
+    static func cgWindowUnderPointer(at point: CGPoint) -> (id: CGWindowID, frame: CGRect)? {
+        let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+        let windowList = (CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]]) ?? []
+
+        for p in targetLookupPoints(for: point) {
+            for info in windowList {
+                guard (info[kCGWindowLayer as String] as? NSNumber)?.intValue == 0,
+                      info[kCGWindowIsOnscreen as String] as? Bool == true,
+                      let alpha = (info[kCGWindowAlpha as String] as? NSNumber)?.doubleValue,
+                      alpha > 0.01,
+                      let pidNumber = info[kCGWindowOwnerPID as String] as? NSNumber,
+                      pid_t(pidNumber.intValue) != selfPid,
+                      let wid = (info[kCGWindowNumber as String] as? NSNumber)?.uint32Value,
+                      let boundsDictionary = info[kCGWindowBounds as String] as? NSDictionary,
+                      let bounds = CGRect(dictionaryRepresentation: boundsDictionary),
+                      bounds.width >= 40,
+                      bounds.height >= 40,
+                      bounds.contains(p) else {
+                    continue
+                }
+                return (wid, bounds)
+            }
+        }
+        return nil
     }
 
     private static func windowCandidate(in windowList: [[String: Any]], at point: CGPoint) -> WindowCandidate? {
