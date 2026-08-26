@@ -134,8 +134,18 @@ final class SwitcherApp: @unchecked Sendable {
         var stdValue: CFTypeRef?
         let stdResult = AXUIElementCopyAttributeValue(axUiElement, kAXWindowsAttribute as CFString, &stdValue)
         let stdWindows: [AXUIElement] = (stdResult == .success ? (stdValue as? [AXUIElement]) : nil) ?? []
-        let bruteWindows = includeBruteForce ? Self.windowsByBruteForce(pid: pid) : []
-        let combined = stdWindows + bruteWindows
+
+        // 对 AX 装哑巴的 app(Telegram / 微信 / 富途)暴力枚举必然空手而归,
+        // 却要把 0.1s 预算全烧在**它自己的主线程**上。熔断期内直接跳过。
+        // 账本与手势路径共用,见 `AxDeadPids`。
+        let brute = (includeBruteForce && !AxDeadPids.isDead(pid))
+            ? Self.windowsByBruteForce(pid: pid)
+            : (windows: [AXUIElement](), timedOut: false)
+        // 预算烧完还一个窗口都没有 = 慢且空,记一笔。只是"暂时没窗口"的健康 app
+        // 扫完 1000 个 id 也就几十毫秒,不会超时,不会被误伤。
+        if brute.timedOut, brute.windows.isEmpty { AxDeadPids.mark(pid) }
+
+        let combined = stdWindows + brute.windows
         // 标准调用失败 + 暴力没拿到 → 视为 AX 不响应,nil 让调用方稍后重试
         if combined.isEmpty && stdResult != .success { return nil }
         // 用 AxRef 包一层去重(AXUIElement 本身没 Hashable)
@@ -146,7 +156,12 @@ final class SwitcherApp: @unchecked Sendable {
     /// `_AXUIElementCreateWithRemoteToken` 构造 AXUIElement,通过 subrole
     /// 过滤出真窗口。上限 100ms,到点就停 —— 即使有些窗口漏拿,下次 sync
     /// 还会再扫,丢失一两次不影响最终一致性。
-    nonisolated private static func windowsByBruteForce(pid: pid_t) -> [AXUIElement] {
+    ///
+    /// `timedOut` 报告有没有把预算烧完:正常 app 1000 次 RPC 只要几十毫秒,
+    /// 烧完还空手 = 对 AX 装哑巴,给调用方拿去熔断。
+    nonisolated private static func windowsByBruteForce(
+        pid: pid_t
+    ) -> (windows: [AXUIElement], timedOut: Bool) {
         var remoteToken = Data(count: 20)
         var pidValue = pid
         remoteToken.replaceSubrange(0..<4, with: withUnsafeBytes(of: &pidValue) { Data($0) })
@@ -175,9 +190,11 @@ final class SwitcherApp: @unchecked Sendable {
                 results.append(element)
             }
             // 超时早退 —— 没扫完没关系,后续 sync 会接着补
-            if CFAbsoluteTimeGetCurrent() - startTime > timeoutSeconds { break }
+            if CFAbsoluteTimeGetCurrent() - startTime > timeoutSeconds {
+                return (results, true)
+            }
         }
-        return results
+        return (results, false)
     }
 }
 

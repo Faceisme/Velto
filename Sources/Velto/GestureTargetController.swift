@@ -193,34 +193,15 @@ enum GestureTargetController {
 
     // MARK: - AX 熔断(pid 级负缓存)
 
-    /// **不响应 AX 的 app 的黑名单**,这是"Telegram 窗口像冻住"的根治点。
-    ///
-    /// macOS 27 上实测:Telegram 的 `kAXWindows` 返回 **0 个窗口**却要花 **53ms**,
-    /// 25 秒内一条 AX 通知都不发,单次 AX RPC 比 Chrome 慢约 10 倍。微信 / 富途牛牛
-    /// 同样零窗口暴露。对这类 app 每次手势要付:最多 2 次命中测试(各上限 0.1s)+
-    /// 1~2 次 kAXWindows(实测 53ms)≈ 350ms,而这些开销**全压在目标 app 的主线程
-    /// 上** —— 更糟的是我们超时放弃并不会让对方停手,请求照样在它队列里堆着。手势
-    /// 密集时就表现为窗口点不动、交通灯没反应。
-    ///
-    /// 既然问了也永远拿不到窗口,问出一次空结果就记一笔,TTL 内直接走 CGWindowList
-    /// 几何路径(`window: nil` 本来就是这些 app 今天已有的结果,行为不变,只是不再
-    /// 去打扰它)。app 重启会换 pid,缓存自然失效。
+    /// 账本本体在 `AxDeadPids`,与切换器共用 —— 那边的暴力枚举对同一批哑巴 app
+    /// 也是纯浪费。这里只包一层日志。
     /// 同一机理的局部版见 `WindowDragController.lookupBackoffUntil`。
-    ///
-    /// ponytail: 一次失败即熔断 5s。偶发超时会让健康 app 的 ⌥ 拖拽短暂降级,
-    /// 若实际误伤明显再改成连续 N 次失败才熔断。
-    private static let axDeadTTL: CFAbsoluteTime = 5.0
-    private static let axDeadPids = Mutex<[pid_t: CFAbsoluteTime]>([:])
-
-    private static func axIsDead(_ pid: pid_t) -> Bool {
-        axDeadPids.withLock { $0[pid].map { CFAbsoluteTimeGetCurrent() < $0 } ?? false }
-    }
+    private static func axIsDead(_ pid: pid_t) -> Bool { AxDeadPids.isDead(pid) }
 
     private static func markAxDead(_ pid: pid_t, reason: @autoclosure () -> String) {
-        let alreadyDead = axIsDead(pid)
-        axDeadPids.withLock { $0[pid] = CFAbsoluteTimeGetCurrent() + axDeadTTL }
-        if WindowManagementDebugLog.isEnabled, !alreadyDead {
-            WindowManagementDebugLog.log("  🔌 AX 熔断 pid=\(pid) \(axDeadTTL)s(\(reason()))→ 后续走 CGWindowList")
+        let isNew = AxDeadPids.mark(pid)
+        if WindowManagementDebugLog.isEnabled, isNew {
+            WindowManagementDebugLog.log("  🔌 AX 熔断 pid=\(pid) \(AxDeadPids.ttlSeconds)s(\(reason()))→ 后续走 CGWindowList")
         }
     }
 
