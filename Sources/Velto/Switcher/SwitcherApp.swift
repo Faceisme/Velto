@@ -64,6 +64,9 @@ final class SwitcherApp: @unchecked Sendable {
         self.localizedName = runningApplication.localizedName
         self.isHidden = runningApplication.isHidden
         self.axUiElement = AXUIElementCreateApplication(pid)
+        // 元素级超时(只影响这一个元素,不动进程全局值),给窗口枚举留够预算 ——
+        // 进程全局被压到 0.1s 是为了手势命中测试快速失败,对 kAXWindows 太紧。
+        AXUIElementSetMessagingTimeout(axUiElement, AXCallQueue.appMessagingTimeout)
     }
 
     /// 是不是我们应该跟踪的 app。后台 daemon / agent / prohibited app 我们不管。

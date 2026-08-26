@@ -359,7 +359,7 @@ final class GestureEngine: @unchecked Sendable {
     // MARK: - Gesture matching (main actor only)
 
     /// 匹配 + 执行链路全部在主线程上跑。`recognizer` 是 `@MainActor`,target
-    /// 解析里有可能要查 AX(同步耗时操作),通过 `Task.detached` 跑后台 + Task
+    /// 解析里有可能要查 AX(同步耗时操作),通过 `targetLookupQueue` 跑后台 + Task
     /// `@MainActor` 回主线程发送快捷键。
     @MainActor
     private func runGesture(
@@ -430,6 +430,12 @@ final class GestureEngine: @unchecked Sendable {
     /// 只在主线程读写。
     @MainActor private var gestureExecutionID: UInt64 = 0
 
+    /// 手势目标 AX 查找专用串行队列(真线程,非协作池)。见 `resolveTargetAndExecute`。
+    private static let targetLookupQueue = DispatchQueue(
+        label: "com.velto.gesture.target-lookup",
+        qos: .userInitiated
+    )
+
     @MainActor
     private func resolveTargetAndExecute(
         shortcut: Shortcut,
@@ -454,15 +460,21 @@ final class GestureEngine: @unchecked Sendable {
             )
 
         case .windowUnderPointer:
-            // AX 查找可能阻塞,在 detached task 上跑(AX 调用本身已设消息超时,见
-            // GestureTargetController),完成后切回主线程。
-            Task.detached(priority: .userInitiated) { [weak self] in
+            // AX 查找是**同步阻塞**的跨进程 RPC,完成后切回主线程。
+            //
+            // 这里必须用真线程的串行队列,不能用 Task.detached:detached task 跑在
+            // Swift 协作线程池上,池宽度 ≈ 核心数,而阻塞式 IPC 会把线程整根占住
+            // (协作池不会像 GCD 那样补线程)。手势连画时旧的 AX 查找并不会被取消
+            // (executionID 只丢弃**结果**),几次就能把池占满,进而卡住全 app 的
+            // await —— 包括回主线程那一跳。串行队列同时也天然把并发 AX 压成 1,
+            // 与切换器的 AXCallQueue 同一思路。
+            Self.targetLookupQueue.async { [weak self] in
                 let target = GestureTargetController.executionTarget(
                     at: targetPoint,
                     policy: policy,
                     frontmostApplicationAtGestureStart: nil
                 )
-                await MainActor.run {
+                Task { @MainActor in
                     guard let self else { return }
                     // 期间又有新手势触发 → 这次 AX 结果已过期,丢弃。
                     guard executionID == self.gestureExecutionID else {

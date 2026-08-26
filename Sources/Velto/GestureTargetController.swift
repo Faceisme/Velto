@@ -191,6 +191,39 @@ enum GestureTargetController {
     private static let windowListCacheTTL: CFAbsoluteTime = 0.25
     private static let windowListCache = Mutex(WindowListSnapshot())
 
+    // MARK: - AX 熔断(pid 级负缓存)
+
+    /// **不响应 AX 的 app 的黑名单**,这是"Telegram 窗口像冻住"的根治点。
+    ///
+    /// macOS 27 上实测:Telegram 的 `kAXWindows` 返回 **0 个窗口**却要花 **53ms**,
+    /// 25 秒内一条 AX 通知都不发,单次 AX RPC 比 Chrome 慢约 10 倍。微信 / 富途牛牛
+    /// 同样零窗口暴露。对这类 app 每次手势要付:最多 2 次命中测试(各上限 0.1s)+
+    /// 1~2 次 kAXWindows(实测 53ms)≈ 350ms,而这些开销**全压在目标 app 的主线程
+    /// 上** —— 更糟的是我们超时放弃并不会让对方停手,请求照样在它队列里堆着。手势
+    /// 密集时就表现为窗口点不动、交通灯没反应。
+    ///
+    /// 既然问了也永远拿不到窗口,问出一次空结果就记一笔,TTL 内直接走 CGWindowList
+    /// 几何路径(`window: nil` 本来就是这些 app 今天已有的结果,行为不变,只是不再
+    /// 去打扰它)。app 重启会换 pid,缓存自然失效。
+    /// 同一机理的局部版见 `WindowDragController.lookupBackoffUntil`。
+    ///
+    /// ponytail: 一次失败即熔断 5s。偶发超时会让健康 app 的 ⌥ 拖拽短暂降级,
+    /// 若实际误伤明显再改成连续 N 次失败才熔断。
+    private static let axDeadTTL: CFAbsoluteTime = 5.0
+    private static let axDeadPids = Mutex<[pid_t: CFAbsoluteTime]>([:])
+
+    private static func axIsDead(_ pid: pid_t) -> Bool {
+        axDeadPids.withLock { $0[pid].map { CFAbsoluteTimeGetCurrent() < $0 } ?? false }
+    }
+
+    private static func markAxDead(_ pid: pid_t, reason: @autoclosure () -> String) {
+        let alreadyDead = axIsDead(pid)
+        axDeadPids.withLock { $0[pid] = CFAbsoluteTimeGetCurrent() + axDeadTTL }
+        if WindowManagementDebugLog.isEnabled, !alreadyDead {
+            WindowManagementDebugLog.log("  🔌 AX 熔断 pid=\(pid) \(axDeadTTL)s(\(reason()))→ 后续走 CGWindowList")
+        }
+    }
+
     /// 标题栏带命中测试 —— **滚动线程专用**。只做本地几何匹配 + 最多一次
     /// WindowServer IPC(缓存过期时),绝不做 AX 调用:调用方与平滑滚动动画器
     /// 同线程,卡死 app 的同步 AX RPC(上界 1s)会冻结整条滚动链路,甚至触发
@@ -358,11 +391,22 @@ enum GestureTargetController {
             return nil
         }
 
+        // 已熔断的 app(Telegram / 微信 / 富途这类对 AX 零窗口暴露的)直接跳过命中
+        // 测试 —— 那两次上限 0.1s 的同步 RPC 压的是它自己的主线程,而结果必然是 nil。
+        if let topCandidate = windowCandidate(in: cachedWindowList, at: point),
+           axIsDead(topCandidate.pid) {
+            if WindowManagementDebugLog.isEnabled {
+                WindowManagementDebugLog.log("  ⏭️ pid=\(topCandidate.pid) app=\"\(topCandidate.ownerName)\" 已 AX 熔断 → 跳过命中测试,直接走 CGWindowList")
+            }
+            return target(from: topCandidate)
+        }
+
         guard let element = firstElementAtPosition(candidatePoints) else {
             if WindowManagementDebugLog.isEnabled {
                 WindowManagementDebugLog.log("  AX 命中失败(AXUIElementCopyElementAtPosition 全部返回 nil)→ 回退 CGWindowList")
             }
             if let candidate = candidateFromWindowList() {
+                markAxDead(candidate.pid, reason: "命中测试全部返回 nil")
                 return target(from: candidate)
             }
 
@@ -493,11 +537,20 @@ enum GestureTargetController {
     /// 跨进程 AX 查询:遇到卡死 / 无响应的目标 App 可能长时间阻塞。给它设一个消息
     /// 超时,超时后调用快速失败(返回非 .success),上层回退到 frontmost App,避免
     /// detached task 长期挂住、最终晚回来补发旧手势。
-    private static let axMessagingTimeout: Float = 0.10
+    ///
+    /// ⚠️ 传 systemWide 元素 = **设置整个进程的全局默认超时**(SDK 头文件明确写了:
+    /// "Pass the system-wide accessibility object ... if you want to set the timeout
+    /// globally for this process")。所以这里只在首次调用时设一次,不能每次命中测试
+    /// 都重设 —— 否则会持续覆盖 AXCallQueue 给切换器设的 1.0s 预算。切换器改为在
+    /// 自己的 app 元素上设置(元素级,不污染全局),见 SwitcherApp。
+    static let axMessagingTimeout: Float = AXCallQueue.processMessagingTimeout
+    private static let installGlobalTimeout: Void = {
+        AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), axMessagingTimeout)
+    }()
 
     private static func elementAtPosition(_ point: CGPoint) -> AXUIElement? {
+        _ = installGlobalTimeout
         let systemWide = AXUIElementCreateSystemWide()
-        AXUIElementSetMessagingTimeout(systemWide, axMessagingTimeout)
         var element: AXUIElement?
         let result = AXUIElementCopyElementAtPosition(
             systemWide,
@@ -603,8 +656,15 @@ enum GestureTargetController {
     }
 
     private static func axWindow(matching candidate: WindowCandidate, pid: pid_t? = nil) -> AXUIElement? {
-        let app = AXUIElementCreateApplication(pid ?? candidate.pid)
-        guard let windows = axElementArrayAttribute(kAXWindowsAttribute, of: app) else {
+        let targetPid = pid ?? candidate.pid
+        guard !axIsDead(targetPid) else { return nil }
+
+        let app = AXUIElementCreateApplication(targetPid)
+        // 空列表和取属性失败都视为"这个 app 不暴露 AX 窗口":Telegram 实测就是
+        // success + 0 个窗口,而这 53ms 是白花的。距离匹配不上(bestDistance > 80)
+        // 不算,那是几何问题不是 AX 哑巴,不熔断。
+        guard let windows = axElementArrayAttribute(kAXWindowsAttribute, of: app), !windows.isEmpty else {
+            markAxDead(targetPid, reason: "kAXWindows 无窗口")
             return nil
         }
 
