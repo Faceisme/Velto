@@ -5,10 +5,14 @@ import Cocoa
 ///   - `.appIcons`(macOS 原生 Cmd+Tab 风格):正方形大图标,标题在下
 ///   - `.titles`(列表风格):横向条,小图标 + 长标题
 ///
-/// 选中态都用 alt-tab `TileUnderLayer` 同款:accent 色 20% 填充 + 100% 边框。
+/// hover 态用 alt-tab `TileUnderLayer` 同款:accent 色浅填充 + 半透明边框。
+/// **选中态不在这里画** —— 它是 TilesView 的一块独立 layer(要做位移动画),
+/// 见 `SwitcherTilesView.selectionLayer`。
 final class SwitcherTileView: NSView {
     /// 根据样式给出 tile 的尺寸 —— TilesView 用这个排布局。
-    static func tileSize(for style: SwitcherAppearanceStyle) -> NSSize {
+    /// `nonisolated`:纯查表,`SwitcherTilesLayout` 这种纯计算类型要在非主线程
+    /// 隔离的上下文里调它。
+    nonisolated static func tileSize(for style: SwitcherAppearanceStyle) -> NSSize {
         switch style {
         case .thumbnails: return NSSize(width: 232, height: 168)
         case .appIcons:   return NSSize(width: 130, height: 130)
@@ -16,9 +20,10 @@ final class SwitcherTileView: NSView {
         }
     }
 
-    private static let cornerRadius: CGFloat = 18
+    /// TilesView 的选中高亮层要跟 tile 的圆角 / 边框宽度严丝合缝,所以这两个不私有。
+    static let cornerRadius: CGFloat = 18
+    static let highlightBorderWidth: CGFloat = 3
     private static let thumbnailCornerRadius: CGFloat = 10
-    private static let highlightBorderWidth: CGFloat = 3
 
     let window_: SwitcherWindow
     let style: SwitcherAppearanceStyle
@@ -43,9 +48,6 @@ final class SwitcherTileView: NSView {
 
     // mouseMoved 会高频回调 onHover,Tiles 又会广播 setHoveredIndex 到所有
     // tile。加去重,只有真变化时才 redraw,避免拖动鼠标时的 redraw 风暴。
-    var isSelected: Bool = false {
-        didSet { if oldValue != isSelected { needsDisplay = true } }
-    }
     var isHovered: Bool = false {
         didSet { if oldValue != isHovered { needsDisplay = true } }
     }
@@ -116,7 +118,9 @@ final class SwitcherTileView: NSView {
         let titleAreaH: CGFloat = hasSubtitle ? 40 : 26
         let thumbH: CGFloat = size.height - titleAreaH - contentInset
         let iconSize: CGFloat = 88
-        let badgeSize: CGFloat = 88
+        // badge 是压在缩略图右下角的**小**角标(缩略图区才 116pt 高),
+        // 曾经跟 fallback 大图标一样是 88 —— 那不是角标,那是把缩略图糊掉一半。
+        let badgeSize: CGFloat = 44
         let badgePad: CGFloat = 8
 
         let thumbFrame = NSRect(
@@ -268,21 +272,14 @@ final class SwitcherTileView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
         let inset = Self.highlightBorderWidth / 2
+        guard isHovered else { return }
         let path = NSBezierPath(roundedRect: bounds.insetBy(dx: inset, dy: inset),
                                 xRadius: Self.cornerRadius,
                                 yRadius: Self.cornerRadius)
-        if isSelected {
-            NSColor.controlAccentColor.withAlphaComponent(0.2).setFill()
-            path.fill()
-            NSColor.controlAccentColor.setStroke()
-            path.lineWidth = Self.highlightBorderWidth
-            path.stroke()
-        } else if isHovered {
-            NSColor.controlAccentColor.withAlphaComponent(0.1).setFill()
-            path.fill()
-            NSColor.controlAccentColor.withAlphaComponent(0.7).setStroke()
-            path.lineWidth = Self.highlightBorderWidth
-            path.stroke()
-        }
+        NSColor.controlAccentColor.withAlphaComponent(0.1).setFill()
+        path.fill()
+        NSColor.controlAccentColor.withAlphaComponent(0.7).setStroke()
+        path.lineWidth = Self.highlightBorderWidth
+        path.stroke()
     }
 }

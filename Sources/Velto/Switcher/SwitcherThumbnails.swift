@@ -27,18 +27,27 @@ final class SwitcherThumbnails {
 
     private init() {}
 
+    /// 缩略图时效:超过这个年龄的图在召唤时重抓。
+    /// 曾经的规则是"有图就永不重抓",结果面板会拿十分钟前的画面糊弄人 ——
+    /// Slack / 终端 / 浏览器早就变样了,图和现实对不上,看一眼就不敢盲切。
+    /// 重抓期间**旧图继续显示**,新图到位才替换,所以不会退回一片纯图标。
+    /// 2s:同一次连按 ⌘Tab 的多次召唤仍然全部命中缓存,不会重复烧 SCK。
+    private static let staleAfter: CFAbsoluteTime = 2.0
+
     /// 给一组窗口异步抓缩略图。每抓到一张就调一次 `onThumbnailReady`,在主线程
     /// 回到 caller。`completion` 在所有窗口都跑完后回调(也回主线程)。
     ///
-    /// **重要**:已有 `window.thumbnail` 的窗口会被跳过 —— 我们把 8 个并发槽位
-    /// 都留给真正没图的窗口(典型场景:新开 app、Space 切换、长时间没召唤过
-    /// 切换器)。已有图的窗口已经被预热路径覆盖过了,session 中不需要立刻刷新。
+    /// 跳过条件:已有图**且**还新鲜(见 `staleAfter`)。这样 8 个并发槽位优先
+    /// 给完全没图的窗口,同时保证陈旧的图会被刷新。
     func captureThumbnails(
         for windows: [SwitcherWindow],
         onThumbnailReady: @escaping @MainActor (SwitcherWindow, CALayerContents) -> Void,
         completion: @escaping @MainActor () -> Void
     ) {
-        let needsCapture = windows.filter { $0.thumbnail == nil }
+        let now = CFAbsoluteTimeGetCurrent()
+        let needsCapture = windows.filter {
+            $0.thumbnail == nil || now - $0.thumbnailCapturedAt > Self.staleAfter
+        }
         guard !needsCapture.isEmpty else {
             // 所有窗口都有缓存图了 —— 直接完事,session 全程不抓 SCK
             completion()
@@ -130,7 +139,7 @@ final class SwitcherThumbnails {
         guard let scBox = scBoxes[wid] else { return }
         guard let contents = await captureOne(scBox: scBox) else { return }
         await MainActor.run {
-            box.window.thumbnail = contents
+            box.window.setThumbnail(contents)
         }
     }
 

@@ -23,10 +23,13 @@ final class SwitcherPanel: NSPanel {
     static let windowCornerRadius: CGFloat = 32
     static let cellCornerRadius: CGFloat = 18
 
-    // 不做 fade-in / fade-out 动画。alt-tab 也没做 —— 它的"丝滑"靠的就是
-    // 即时响应。哪怕 0.14s 的 fade-in 都会被感受为"按下后等了一下"。
-    // 如果未来想做"出现 / 消失"动效,做 micro-bounce(50ms 缩放)比 fade
-    // 更不影响响应感。
+    // 不做 fade-in / fade-out。alt-tab 也没做 —— 它的"丝滑"靠的就是即时响应,
+    // 哪怕 0.14s 的 fade-in 都会被感受为"按下后等了一下"。
+    // 出现动效走 micro-bounce:面板**第 0 帧就是全不透明的**(没有等待感),
+    // 只是内容从 0.97 弹到 1.0。系统级面板(Spotlight / 通知中心)都是这个套路
+    // —— 落位感来自缩放收敛,不是来自淡入。
+    private static let appearScaleFrom: CGFloat = 0.97
+    private static let appearDuration: CFTimeInterval = 0.09
 
     private init() {
         let initialFrame = NSRect(x: 0, y: 0, width: 600, height: 200)
@@ -83,10 +86,34 @@ final class SwitcherPanel: NSPanel {
             maxSize: maxSize
         )
         let frame = positionedFrame(for: contentSize, on: panelScreen)
+        // 已经在屏上时只是换内容(session 中途重扫),不能再弹一次 —— 那会变成抽搐。
+        let wasVisible = isVisible
         setFrame(frame, display: true)
         // 即时显示 —— 跟 alt-tab 一致。fade-in 会被感受为"按下后等了一下"。
         alphaValue = 1
         orderFrontRegardless()
+        if !wasVisible { playAppearSettle() }
+    }
+
+    /// 出现时的落位动效:内容 0.97 → 1.0,90ms easeOut。见类顶部注释。
+    private func playAppearSettle() {
+        guard let layer = tilesView.layer else { return }
+        // 绕**内容中心**缩放。NSView 背衬层的 anchorPoint 由 AppKit 说了算(不保证
+        // 是中心),直接动 transform.scale 可能从某个角上长出来,所以自己补平移。
+        let b = layer.bounds
+        let dx = b.midX - (b.minX + layer.anchorPoint.x * b.width)
+        let dy = b.midY - (b.minY + layer.anchorPoint.y * b.height)
+        let s = Self.appearScaleFrom
+        var from = CATransform3DMakeTranslation(dx, dy, 0)
+        from = CATransform3DScale(from, s, s, 1)
+        from = CATransform3DTranslate(from, -dx, -dy, 0)
+
+        let anim = CABasicAnimation(keyPath: "transform")
+        anim.fromValue = NSValue(caTransform3D: from)
+        anim.toValue = NSValue(caTransform3D: CATransform3DIdentity)
+        anim.duration = Self.appearDuration
+        anim.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        layer.add(anim, forKey: "appearSettle")
     }
 
     func hidePanel() {
@@ -149,8 +176,24 @@ final class SwitcherGlassView: NSGlassEffectView {
 }
 
 extension NSScreen {
+    /// 鼠标所在的屏幕。
+    ///
+    /// 光标压在屏幕边界像素上、或落在高度不一致的双屏之间的"空档"里时,
+    /// `frame.contains` 会全部失手返回 nil,调用方的 `?? NSScreen.main` 兜底
+    /// 就把面板扔到「有 key window 的那块屏」—— 跟鼠标毫无关系。表现为
+    /// 面板偶尔莫名其妙弹到另一个显示器上。改成退化到**最近**的屏幕。
     static func screenContainingMouse() -> NSScreen? {
-        let mouseLocation = NSEvent.mouseLocation
-        return NSScreen.screens.first { $0.frame.contains(mouseLocation) }
+        let mouse = NSEvent.mouseLocation
+        if let hit = NSScreen.screens.first(where: { $0.frame.contains(mouse) }) { return hit }
+        return NSScreen.screens.min {
+            squaredDistance(from: $0.frame, to: mouse) < squaredDistance(from: $1.frame, to: mouse)
+        }
+    }
+
+    /// 点到矩形的最短距离平方(点在矩形内时为 0)。只用来比大小,不开根号。
+    private static func squaredDistance(from rect: NSRect, to p: NSPoint) -> CGFloat {
+        let dx = max(rect.minX - p.x, 0, p.x - rect.maxX)
+        let dy = max(rect.minY - p.y, 0, p.y - rect.maxY)
+        return dx * dx + dy * dy
     }
 }

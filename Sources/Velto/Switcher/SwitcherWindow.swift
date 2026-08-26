@@ -69,7 +69,19 @@ final class SwitcherWindow: @unchecked Sendable {
     ///
     /// Nil 表示从没抓过 / 抓失败 / 没权限,UI 端退化到只显示 app 图标。
     /// session 结束不主动清(下次召唤可以临时复用旧图当占位,跟 alt-tab 一致)。
-    var thumbnail: CALayerContents?
+    /// **写这个字段一律走 `setThumbnail`**,否则时效戳会失真。
+    private(set) var thumbnail: CALayerContents?
+
+    /// `thumbnail` 的抓取时刻(CFAbsoluteTime)。0 = 没有图。
+    /// 用来判断"图还新不新" —— 抓过一次就永不刷新会让面板显示十分钟前的画面,
+    /// 图和现实对不上是切换器最伤信任感的一件事。见 `SwitcherThumbnails.staleAfter`。
+    private(set) var thumbnailCapturedAt: CFAbsoluteTime = 0
+
+    /// 写缩略图的唯一入口 —— 顺手记时刻。传 nil 表示释放。
+    func setThumbnail(_ contents: CALayerContents?) {
+        thumbnail = contents
+        thumbnailCapturedAt = contents == nil ? 0 : CFAbsoluteTimeGetCurrent()
+    }
 
     /// 我们想在窗口本体上订阅的 AX 通知。app 级 observer 是同一个 AXObserver,
     /// 但要把这些通知挂到具体的 window AXUIElement 上,事件才会真触发。
@@ -108,6 +120,7 @@ final class SwitcherWindow: @unchecked Sendable {
         self.isInvisible = false
         self.lastFocusOrder = Int.max
         self.thumbnail = nil
+        self.thumbnailCapturedAt = 0
     }
 
     /// 这个窗口是不是落在指定屏幕上(几何相交即算)。

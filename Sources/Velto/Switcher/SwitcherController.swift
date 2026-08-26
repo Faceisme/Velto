@@ -84,6 +84,18 @@ final class SwitcherController {
     /// 到达)仍然在用,那是独立机制,不回退。
     private var panelVisibility = SwitcherPanelVisibilityState(minimumVisibleDuration: 0)
     private var pendingConfirmTask: Task<Void, Never>?
+    /// hover 解锁基准点:最近一次"键盘做主"的时刻鼠标在哪。
+    ///
+    /// 默认 `showOnScreen = .mouse`,面板必然弹在光标附近,光标八成就压在某个
+    /// tile 上;而 tile 的 tracking area 带 `.mouseMoved`,`handleHover` 又会
+    /// 无条件覆写 `selectedIndex`。结果是:按住 ⌘ 敲 Tab 选好了第一格,触控板上
+    /// 手掌抖出 1px,选中就跳到光标底下那一格,松手切到根本没看的窗口 ——
+    /// 而且全程没有任何征兆。这是"⌘Tab 用起来不安心"的头号元凶。
+    ///
+    /// 规则:每次召唤 / 每次键盘 step 都重新打点,鼠标要**真的**移出
+    /// `hoverActivationDistance` 才认它是"用户在用鼠标选"。alt-tab 同款守卫。
+    private var hoverArmPoint: NSPoint?
+    private static let hoverActivationDistance: CGFloat = 6
     /// panel 是 lazy 创建 —— 第一次 trigger 时才实例化,避免拖慢启动
     private var _panel: SwitcherPanel?
     private var panel: SwitcherPanel {
@@ -110,8 +122,11 @@ final class SwitcherController {
         windowList.setMaintainsIndex(GestureStore.shared.preferences.switcher.enabled)
         windowList.start()
         keyTap.onEvent = { [weak self] event in
-            // KeyTap 回调在 tap 线程,所有 UI / 状态修改必须跳回 main
-            Task { @MainActor [weak self] in
+            // KeyTap 回调在 tap 线程,所有 UI / 状态修改必须跳回 main。
+            // 用 DispatchQueue 而不是 Task —— Task 进的是 Swift 并发的协作线程池,
+            // 再由它 hop 到 main actor,**多一次调度且不保证 FIFO**。按住 ⌘ 连敲
+            // Tab 时事件挨得极近,乱序就是"敲了 3 下只跳了 2 格"。主队列是严格 FIFO。
+            DispatchQueue.main.async {
                 self?.handleKeyEvent(event)
             }
         }
@@ -206,6 +221,12 @@ final class SwitcherController {
         // 新 session 起来了 —— 把上次 dismiss 后挂的"清缩略图"任务取消,
         // 避免它在 session 进行中把 MRU 之外的窗口缩略图清掉。
         cancelThumbnailTrim()
+        // 先接管键盘,再取快照 —— snapshot 是同步 IPC(实测 ~3ms),这段时间
+        // isActive 还是 false 的话方向键 / Esc 会漏进前台 app。快照为空时放回去。
+        keyTap.isActive = true
+        // 武装 hover 守卫:面板即将弹在光标附近,在用户真的挪动鼠标之前
+        // 不许 hover 抢走键盘选中。见 hoverArmPoint。
+        hoverArmPoint = NSEvent.mouseLocation
         // 首次召唤:取快照、起 session、显示 panel。
         // snapshot(applying:) 把过滤 + 排序全部按 prefs 跑完。
         let panelScreen = Self.resolvePanelScreen(for: prefs.showOnScreen)
@@ -216,6 +237,8 @@ final class SwitcherController {
         let snapshot = windowList.snapshot(applying: prefs, panelScreen: panelScreen)
         guard !snapshot.isEmpty else {
             SwitcherDebugLog.log("summon aborted: 没有可切换的窗口")
+            keyTap.isActive = false
+            hoverArmPoint = nil
             panelVisibility.clear()
             NSSound.beep()
             return
@@ -233,7 +256,6 @@ final class SwitcherController {
             }.joined(separator: ", ") + "]")
         let session = SwitcherSession(windows: snapshot, initialSelection: initialSelection)
         SwitcherSession.current = session
-        keyTap.isActive = true
         panel.show(
             with: snapshot,
             style: prefs.appearanceStyle,
@@ -268,7 +290,7 @@ final class SwitcherController {
             onThumbnailReady: { window, contents in
                 // 永远写回 window.thumbnail —— 哪怕 session 已经结束,这张图也是
                 // 下次召唤的预热缓存,丢了就得再抓一次。
-                window.thumbnail = contents
+                window.setThumbnail(contents)
                 // 但只有 panel 仍是这次 session 时才更新 tile,避免改到下一轮的 UI。
                 guard SwitcherSession.current === session else { return }
                 if let tile = panelRef.tilesView.tiles.first(where: { $0.window_ === window }) {
@@ -281,12 +303,16 @@ final class SwitcherController {
 
     private func stepSelection(reverse: Bool) {
         guard let session = SwitcherSession.current else { return }
+        // 键盘一动就重新武装 hover 守卫 —— 键盘永远压过鼠标抖动。
+        hoverArmPoint = NSEvent.mouseLocation
         session.cycleSelection(reverse ? -1 : 1)
         panel.tilesView.setSelectedIndex(session.selectedIndex)
     }
 
     private func handleHover(_ index: Int) {
         guard let session = SwitcherSession.current else { return }
+        // index < 0 是 mouseExited 的清场,永远放行。
+        if index >= 0, !mouseMovedEnoughToTakeOver() { return }
         session.hoveredIndex = index
         panel.tilesView.setHoveredIndex(index)
         // hover 也改 selected —— 鼠标和键盘共享一个选中态(用户希望可以混用)
@@ -294,6 +320,18 @@ final class SwitcherController {
             session.selectedIndex = index
             panel.tilesView.setSelectedIndex(index)
         }
+    }
+
+    /// 鼠标是否已经从最近一次"键盘做主"的位置真正挪开。见 `hoverArmPoint`。
+    /// 一旦解锁就清掉基准点,本轮后续 hover 直接放行(直到下一次键盘 step)。
+    private func mouseMovedEnoughToTakeOver() -> Bool {
+        guard let armed = hoverArmPoint else { return true }
+        let now = NSEvent.mouseLocation
+        guard hypot(now.x - armed.x, now.y - armed.y) >= Self.hoverActivationDistance else {
+            return false
+        }
+        hoverArmPoint = nil
+        return true
     }
 
     private func handleClick(_ index: Int) {
@@ -353,6 +391,7 @@ final class SwitcherController {
         pendingConfirmTask?.cancel()
         pendingConfirmTask = nil
         panelVisibility.clear()
+        hoverArmPoint = nil
         SwitcherSession.current = nil
         keyTap.isActive = false
         _panel?.hidePanel()

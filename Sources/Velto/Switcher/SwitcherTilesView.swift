@@ -12,24 +12,77 @@ final class SwitcherTilesView: NSView {
 
     private(set) var tiles: [SwitcherTileView] = []
 
-    /// 上次 rebuild 的参数 —— 复用判定用。快速连按 ⌘Tab 时窗口集合几乎不变,
-    /// 全量重建视图(每 tile 5 个子视图 + tracking area)是召唤路径的大头开销。
-    private var lastStyle: SwitcherAppearanceStyle?
-    private var lastHideWindowTitle = false
-    private var lastMaxSize: NSSize = .zero
-    private var lastContentSize: NSSize = .zero
+    /// 上次 rebuild 时**单个 tile 自身**的几何参数。只有这些变了才全量重建。
+    ///
+    /// 关键是不含 `perRow`:列数是 `min(fitPerRow, count)`,窗口数一变它就变,
+    /// 拿它当复用条件等于"增删任何一个窗口都全盘重建"—— 正是要治的病。列数只
+    /// 影响每个 tile 摆在哪,而 frame 本来每轮都重算。
+    /// 也不含原始 maxSize:屏幕 visibleFrame 抖几个点(Dock 自动隐藏、菜单栏)
+    /// 算出来的布局往往一模一样,不该打断复用。
+    private var lastLayoutKey: LayoutKey?
+
+    private struct LayoutKey: Equatable {
+        let style: SwitcherAppearanceStyle
+        let hideWindowTitle: Bool
+        /// 缩放靠改 tile 的 bounds 实现,变了就得重来。
+        let scale: CGFloat
+    }
+
+    /// 选中高亮 —— 一整块独立 layer,压在所有 tile 之下。
+    ///
+    /// 原来选中态画在每个 tile 自己的 `draw(_:)` 里:`setSelectedIndex` 要遍历
+    /// **所有** tile 设 `isSelected`,一次 step 触发两次全 tile 重绘;而且高亮是
+    /// 瞬移的 —— 敲 Tab 像拨老式拨号盘,没有连续性,这就是"太僵硬"的来源。
+    ///
+    /// 换成一块会滑的 layer 后:更快(1 次 layer 动画 vs N 次 draw),而且位移
+    /// 动画是整个模块唯一的"跟手"载体。用 spring 不用 easing —— 系统级的选中框
+    /// (Dock、聚焦环)都是弹性收敛的。它在纯装饰路径上,不挡任何输入。
+    /// 非 private 只是为了让测试能断言它的位置/动画,外部不要动它。
+    let selectionLayer = CALayer()
 
     var onHover: ((Int) -> Void)?
     var onClick: ((Int) -> Void)?
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        selectionLayer.cornerRadius = SwitcherTileView.cornerRadius
+        selectionLayer.borderWidth = SwitcherTileView.highlightBorderWidth
+        selectionLayer.isHidden = true
+        // 手动挂的 CALayer 默认带 0.25s 隐式动画 —— isHidden / bounds / 颜色一改
+        // 就会自己淡一下,选中框看着像有残影。全关掉,位移动画由我们显式 add。
+        selectionLayer.delegate = NoAnimationDelegate.shared
+        applySelectionColors()
+        layer?.addSublayer(selectionLayer)
+    }
+
+    required init?(coder: NSCoder) { fatalError("not implemented") }
+
+    /// controlAccentColor 是动态色(跟随系统强调色 + 明暗),必须在正确的
+    /// appearance 下解析成 CGColor,否则切换深浅色后高亮色会卡在旧值。
+    private func applySelectionColors() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            selectionLayer.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.2).cgColor
+            selectionLayer.borderColor = NSColor.controlAccentColor.cgColor
+        }
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        applySelectionColors()
+    }
 
     /// 用 windows 列表重建整张网格。返回内容尺寸,Panel 拿去调整自己。
     /// `hideWindowTitle`:perApp 分组时为 true,tile 只显示 app 名。
     /// `maxSize`:面板可用的屏幕区域。据此①按宽度自动算每行列数(一行绝不超出屏幕);
     /// ②多行也超高时,整体等比缩小 tile 塞进一屏。
     ///
-    /// 快路径:同一批窗口(对象恒等集合)+ 同参数 → 复用现有 tile 视图,只按新
-    /// MRU 序重排 frame + 轻量刷新(标题/缩略图),零视图重建。快速交替切换时
-    /// 每次召唤只变顺序不变集合,正好全走这条。
+    /// 复用是**逐窗口认领**的,不是"整批恒等才复用"。
+    ///
+    /// 老规则要求窗口集合对象恒等,所以关掉一个窗口、剪掉一个 ghost、微信重建
+    /// AX 树换 element……任何一点 churn 都会导致整盘 `removeFromSuperview` +
+    /// 重建 N×5 个子视图,顺带把 tracking area 和 hover 状态全清空。现在只增删
+    /// 差集:布局参数没变就留着老 tile,缺谁补谁,多谁删谁。
     @discardableResult
     func rebuild(
         with windows: [SwitcherWindow],
@@ -37,10 +90,13 @@ final class SwitcherTilesView: NSView {
         hideWindowTitle: Bool = false,
         maxSize: NSSize = NSSize(width: 1_000_000, height: 1_000_000)
     ) -> NSSize {
+        // 每次 rebuild 都先收起高亮 —— 紧随其后的 setSelectedIndex 会把它直接
+        // 摆到正确的格子上(不做位移动画)。见 setSelectedIndex。
+        selectionLayer.isHidden = true
+
         guard !windows.isEmpty else {
-            for t in tiles { t.removeFromSuperview() }
-            tiles.removeAll()
-            lastStyle = nil
+            removeAllTiles()
+            lastLayoutKey = nil
             return NSSize(width: 200, height: 80)
         }
 
@@ -48,71 +104,131 @@ final class SwitcherTilesView: NSView {
             count: windows.count, style: style, maxSize: maxSize,
             spacing: Self.tileSpacing, inset: Self.containerInset
         )
+        let layoutKey = LayoutKey(
+            style: style, hideWindowTitle: hideWindowTitle, scale: layout.scale
+        )
+        // 缩放 / 样式 / 副标题显隐变了 → tile 的 bounds 与内部布局都得重算,没得复用。
+        if layoutKey != lastLayoutKey { removeAllTiles() }
 
-        if style == lastStyle, hideWindowTitle == lastHideWindowTitle, maxSize == lastMaxSize,
-           let reordered = reusableTiles(for: windows)
-        {
-            tiles = reordered
-            for (idx, tile) in tiles.enumerated() {
-                tile.frame = layout.frame(at: idx)
-                tile.refreshForReuse()
+        var spare = [ObjectIdentifier: SwitcherTileView](minimumCapacity: tiles.count)
+        for t in tiles { spare[ObjectIdentifier(t.window_)] = t }
+
+        var next: [SwitcherTileView] = []
+        next.reserveCapacity(windows.count)
+        for w in windows {
+            let key = ObjectIdentifier(w)
+            // 副标题显隐翻转会改 tile 内部布局,那种只能重建(旧的留在 spare 里下线)
+            if let t = spare[key], !t.subtitleVisibilityWouldFlip {
+                spare.removeValue(forKey: key)
+                t.refreshForReuse()
+                next.append(t)
+            } else {
+                next.append(makeTile(for: w, style: style, hideWindowTitle: hideWindowTitle))
             }
-            return lastContentSize
         }
+        // 这一轮没被认领的 tile 下线
+        for (_, t) in spare { t.removeFromSuperview() }
 
-        for t in tiles { t.removeFromSuperview() }
-        tiles.removeAll()
-
-        for (idx, w) in windows.enumerated() {
-            let tile = SwitcherTileView(window: w, style: style, hideWindowTitle: hideWindowTitle)
-            tile.frame = layout.frame(at: idx)
-            // 缩放:让 tile 的坐标系(bounds)保持满尺寸,frame 是缩放后的 ——
-            // AppKit 会把内容(缩略图 / 图标 / 文字)整体等比缩小填进去。scale==1 不动。
+        tiles = next
+        for (idx, t) in tiles.enumerated() {
+            t.frame = layout.frame(at: idx)
+            // 缩放:frame 已经是缩小后的,再把 bounds 拉回满尺寸 —— AppKit 会把内容
+            // (缩略图 / 图标 / 文字)整体等比缩小填进去。
+            // **顺序不能反**:先设 bounds 再设 frame 的话,setFrame 会把 bounds
+            // 尺寸同步成 frame 尺寸,缩放直接失效。
             if layout.scale < 1 {
-                tile.bounds = NSRect(origin: .zero, size: layout.tileSize)
+                t.bounds = NSRect(origin: .zero, size: layout.tileSize)
             }
-            tile.onHover = { [weak self] t in
-                guard let self else { return }
-                if let i = self.tiles.firstIndex(where: { $0 === t }) {
-                    self.onHover?(i)
-                }
-            }
-            tile.onClick = { [weak self] t in
-                guard let self else { return }
-                if let i = self.tiles.firstIndex(where: { $0 === t }) {
-                    self.onClick?(i)
-                }
-            }
-            addSubview(tile)
-            tiles.append(tile)
         }
+        selectionScale = layout.scale
+        // 高亮永远压在 tile 之下 —— 新加的 subview layer 会排到它上面,重新沉底。
+        layer?.insertSublayer(selectionLayer, at: 0)
 
-        lastStyle = style
-        lastHideWindowTitle = hideWindowTitle
-        lastMaxSize = maxSize
-        lastContentSize = layout.contentSize
+        lastLayoutKey = layoutKey
         return layout.contentSize
     }
 
-    /// 窗口集合与现有 tiles 一一对应(对象恒等)且没有 tile 的副标题显隐需要
-    /// 翻转(那会改布局)时,返回按新顺序重排的 tiles;否则 nil → 全量重建。
-    private func reusableTiles(for windows: [SwitcherWindow]) -> [SwitcherTileView]? {
-        guard tiles.count == windows.count else { return nil }
-        var byWindow = [ObjectIdentifier: SwitcherTileView](minimumCapacity: tiles.count)
-        for t in tiles { byWindow[ObjectIdentifier(t.window_)] = t }
-        var result: [SwitcherTileView] = []
-        result.reserveCapacity(windows.count)
-        for w in windows {
-            guard let t = byWindow[ObjectIdentifier(w)], !t.subtitleVisibilityWouldFlip else { return nil }
-            result.append(t)
+    private func removeAllTiles() {
+        for t in tiles { t.removeFromSuperview() }
+        tiles.removeAll()
+    }
+
+    private func makeTile(
+        for w: SwitcherWindow,
+        style: SwitcherAppearanceStyle,
+        hideWindowTitle: Bool
+    ) -> SwitcherTileView {
+        let tile = SwitcherTileView(window: w, style: style, hideWindowTitle: hideWindowTitle)
+        tile.onHover = { [weak self] t in
+            guard let self else { return }
+            if let i = self.tiles.firstIndex(where: { $0 === t }) {
+                self.onHover?(i)
+            }
         }
-        return result
+        tile.onClick = { [weak self] t in
+            guard let self else { return }
+            if let i = self.tiles.firstIndex(where: { $0 === t }) {
+                self.onClick?(i)
+            }
+        }
+        addSubview(tile)
+        return tile
+    }
+
+    // MARK: - 选中高亮
+
+    /// 弹簧参数:接近临界阻尼(ζ≈0.92),几乎不过冲。
+    /// 阶跃响应实测:走完 90% 用 0.072s、99% 用 0.111s —— 敲 Tab 的手还没抬起来
+    /// 高亮就到位了。老参数(k=600 / c=45)是这个的两倍慢(90% 要 0.143s、
+    /// 99% 要 0.221s),连按时高亮明显拖在手后面。
+    /// **调速只动 stiffness,damping 要跟着按 ζ = c / (2√k) 同步改**,只改一个
+    /// 会变成过冲(太软)或退化成瞬移(太硬)。
+    private static let selectionSpringStiffness: CGFloat = 2400
+    private static let selectionSpringDamping: CGFloat = 90
+
+    /// 当前布局的缩放比 —— 高亮层的圆角 / 边框要跟着 tile 一起缩,否则窗口多到
+    /// 需要缩放时,高亮会比格子明显更圆更粗。
+    private var selectionScale: CGFloat = 1 {
+        didSet {
+            guard oldValue != selectionScale else { return }
+            selectionLayer.cornerRadius = SwitcherTileView.cornerRadius * selectionScale
+            selectionLayer.borderWidth = SwitcherTileView.highlightBorderWidth * selectionScale
+        }
     }
 
     func setSelectedIndex(_ index: Int) {
-        for (i, t) in tiles.enumerated() {
-            t.isSelected = (i == index)
+        guard index >= 0, index < tiles.count else {
+            selectionLayer.isHidden = true
+            return
         }
+        let target = tiles[index].frame
+        let targetPosition = CGPoint(x: target.midX, y: target.midY)
+
+        // 面板刚弹出来时高亮必须**第 0 帧**就在正确的格子上,不能从上一轮的
+        // 位置飞过来。只有 session 进行中的 step 才做位移动画。
+        guard !selectionLayer.isHidden else {
+            selectionLayer.bounds = NSRect(origin: .zero, size: target.size)
+            selectionLayer.position = targetPosition
+            selectionLayer.isHidden = false
+            return
+        }
+        guard selectionLayer.position != targetPosition || selectionLayer.bounds.size != target.size else {
+            return
+        }
+
+        // 从**当前屏幕上的位置**起跳,连按 Tab 时上一段动画能被平滑接管。
+        let from = selectionLayer.presentation()?.position ?? selectionLayer.position
+        selectionLayer.bounds = NSRect(origin: .zero, size: target.size)
+        selectionLayer.position = targetPosition
+
+        let spring = CASpringAnimation(keyPath: "position")
+        spring.mass = 1
+        spring.stiffness = Self.selectionSpringStiffness
+        spring.damping = Self.selectionSpringDamping
+        spring.fromValue = NSValue(point: from)
+        spring.toValue = NSValue(point: targetPosition)
+        spring.duration = spring.settlingDuration
+        selectionLayer.add(spring, forKey: "selection")
     }
 
     func setHoveredIndex(_ index: Int) {

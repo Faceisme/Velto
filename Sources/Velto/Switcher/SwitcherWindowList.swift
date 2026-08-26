@@ -1163,7 +1163,7 @@ final class SwitcherWindowList {
         let ranked = windows.values.sorted { $0.lastFocusOrder < $1.lastFocusOrder }
         guard ranked.count > keepTop else { return }
         for w in ranked.dropFirst(keepTop) where w.thumbnail != nil {
-            w.thumbnail = nil
+            w.setThumbnail(nil)
         }
     }
 

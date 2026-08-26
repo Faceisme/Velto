@@ -37,8 +37,15 @@ final class SwitcherImageLayer: CALayer {
         super.init(layer: layer)
     }
 
+    /// 图从"无"变"有"时的淡入时长。
+    /// 缩略图是异步抓的,面板已经在屏上了图才陆续到位 —— 硬切会让一整屏格子
+    /// 噼里啪啦地闪,像加载失败又刷新。120ms 淡入把它变成"浮现"。
+    /// **换图不淡入**(已经有图再抓一张新的),那种硬切才是对的:内容变化要即时。
+    private static let popInDuration: CFTimeInterval = 0.12
+
     /// 喂图。优先 pixelBuffer 路径(零拷贝),不行降级到 cgImage。
     func updateContents(_ caLayerContents: CALayerContents) {
+        let wasEmpty = contents == nil
         switch caLayerContents {
         case .pixelBuffer(let buf?):
             // CALayer.contents 接受 IOSurfaceRef,SCK 内部用的就是这个。
@@ -46,8 +53,16 @@ final class SwitcherImageLayer: CALayer {
         case .cgImage(let img?):
             contents = img
         default:
-            break
+            return
         }
+        guard wasEmpty, contents != nil else { return }
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = 0
+        fade.toValue = 1
+        fade.duration = Self.popInDuration
+        fade.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        // 显式动画不受 NoAnimationDelegate 影响(它只拦隐式动作)。
+        add(fade, forKey: "popIn")
     }
 
     func releaseImage() {
