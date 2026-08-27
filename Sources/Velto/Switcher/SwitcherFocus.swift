@@ -32,16 +32,19 @@ enum SwitcherFocus {
         }
     }
 
-    /// 实际干活的函数,必须在后台线程。
-    private static func raiseUnsafe(pid: pid_t, cgWindowId: CGWindowID, axBox: SwitcherAxRefBox) {
+    /// **只走 WindowServer** 把某个 wid 变成前台 key window —— 一次 AX 调用都不做。
+    ///
+    /// 除了切换器,手势路径也要用:AX 熔断期 `axWindow(matching:)` 直接返回 nil,
+    /// 手上只剩 CGWindowList 那个 wid,而 `NSRunningApplication.activate` 只能
+    /// 激活 app、选不中具体窗口 —— 观感就是「窗口上来了却没被选中」。SLPS 这两步
+    /// 只跟 WindowServer 说话,不碰目标 app 的主线程,正好绕开熔断要躲的那笔开销。
+    ///
+    /// 与 `raise(window:)` 不同,这个是**同步**的:手势调完紧接着就要发快捷键,
+    /// 异步排队会让按键先于 key window 落地。
+    nonisolated static func raiseByWindowServer(pid: pid_t, cgWindowId: CGWindowID) {
         // 拿目标进程的 PSN(ProcessSerialNumber)—— 老式 Carbon 概念,但 SLPS 要这个。
         var psn = ProcessSerialNumber()
-        let getResult = GetProcessForPID(pid, &psn)
-        guard getResult == noErr else {
-            // 拿不到 PSN 退回 AX 路径
-            try? performAxRaise(axBox.element)
-            return
-        }
+        guard GetProcessForPID(pid, &psn) == noErr else { return }
 
         // 第一步:让目标进程在 WindowServer 心里变成 front process,并且告诉它
         // 当前活跃的是这个 wid(而不是该 app 上次激活的那个)
@@ -51,9 +54,15 @@ enum SwitcherFocus {
         // 不投递这步的话,WindowServer 会把"该 app 上次激活的窗口"重新拉回来
         // (比如 System Preferences 跨 Space 切的时候必现)
         makeKeyWindow(psn: &psn, cgWindowId: cgWindowId)
+    }
+
+    /// 实际干活的函数,必须在后台线程。
+    private static func raiseUnsafe(pid: pid_t, cgWindowId: CGWindowID, axBox: SwitcherAxRefBox) {
+        raiseByWindowServer(pid: pid, cgWindowId: cgWindowId)
 
         // 第三步:AX kAXRaiseAction 兜底,把窗口抬到该 app 内部的最顶层。
         // 单独这一步只能"在当前 app 里调换窗口",切不了 app —— 必须跟前两步配合。
+        // 拿不到 PSN 时前两步会静默跳过,这一步就是唯一的退路。
         try? performAxRaise(axBox.element)
     }
 

@@ -13,6 +13,9 @@ struct GestureExecutionTarget: @unchecked Sendable {
     let deliveryDelay: TimeInterval
     let window: AXUIElement?
     let prefersDirectWindowClose: Bool
+    /// 光标下那个窗口的 CGWindowID。**只在 `window == nil` 时才用得上**:AX 熔断期
+    /// 拿不到 AXUIElement,靠它走 WindowServer 选中窗口(见 `prepareForExecution`)。
+    let cgWindowId: CGWindowID?
 }
 
 enum GestureTargetController {
@@ -20,6 +23,8 @@ enum GestureTargetController {
         let pid: pid_t
         let ownerName: String
         let bounds: CGRect
+        /// 0 = 这个 candidate 不是直接从 CGWindowList 来的,没有可用的 wid。
+        let wid: CGWindowID
     }
 
     struct TitleBarTarget: @unchecked Sendable {
@@ -57,7 +62,8 @@ enum GestureTargetController {
                     restoresOriginalFrontmostApplication: true,
                     deliveryDelay: 0,
                     window: nil,
-                    prefersDirectWindowClose: false
+                    prefersDirectWindowClose: false,
+                    cgWindowId: nil
                 )
             }
 
@@ -67,7 +73,8 @@ enum GestureTargetController {
                 restoresOriginalFrontmostApplication: false,
                 deliveryDelay: 0,
                 window: nil,
-                prefersDirectWindowClose: false
+                prefersDirectWindowClose: false,
+                cgWindowId: nil
             )
 
         case .windowUnderPointer:
@@ -96,6 +103,16 @@ enum GestureTargetController {
 
         if let window = target.window {
             focus(window: window, pid: pid)
+        } else if let wid = target.cgWindowId {
+            // AX 熔断期 / AX 压根拿不到窗口:`activate` 只把 app 提到前台,
+            // **选不中**具体那个窗口 —— 观感就是「窗口上来了却没被选中、像卡住」
+            // (2026-08-27 Telegram 那次用户报的正是这个)。
+            //
+            // 走 WindowServer 直接把这个 wid 变成 key window:SLPS 只跟
+            // WindowServer 说话,**一次 AX RPC 都不发给目标 app**,所以不违背
+            // 熔断「别去打扰它主线程」的初衷。
+            SwitcherFocus.raiseByWindowServer(pid: pid, cgWindowId: wid)
+            WindowManagementDebugLog.log("  ↑ AX 无窗口 → WindowServer 选中 wid=\(wid) pid=\(pid)")
         }
     }
 
@@ -246,7 +263,8 @@ enum GestureTargetController {
         let windowCandidate = WindowCandidate(
             pid: candidate.pid,
             ownerName: candidate.ownerName,
-            bounds: candidate.bounds
+            bounds: candidate.bounds,
+            wid: 0
         )
         let target = target(from: windowCandidate)
         guard let window = target.window else { return nil }
@@ -414,7 +432,8 @@ enum GestureTargetController {
                 restoresOriginalFrontmostApplication: false,
                 deliveryDelay: 0,
                 window: nil,
-                prefersDirectWindowClose: false
+                prefersDirectWindowClose: false,
+                cgWindowId: nil
             )
         }
 
@@ -444,7 +463,8 @@ enum GestureTargetController {
             restoresOriginalFrontmostApplication: false,
             deliveryDelay: policy.deliveryDelay,
             window: window,
-            prefersDirectWindowClose: policy.prefersDirectWindowClose
+            prefersDirectWindowClose: policy.prefersDirectWindowClose,
+            cgWindowId: nil
         )
     }
 
@@ -465,7 +485,8 @@ enum GestureTargetController {
             restoresOriginalFrontmostApplication: false,
             deliveryDelay: policy.deliveryDelay,
             window: window,
-            prefersDirectWindowClose: policy.prefersDirectWindowClose
+            prefersDirectWindowClose: policy.prefersDirectWindowClose,
+            cgWindowId: candidate.wid == 0 ? nil : candidate.wid
         )
     }
 
@@ -598,7 +619,8 @@ enum GestureTargetController {
             return WindowCandidate(
                 pid: pid,
                 ownerName: info[kCGWindowOwnerName as String] as? String ?? "",
-                bounds: bounds
+                bounds: bounds,
+                wid: (info[kCGWindowNumber as String] as? NSNumber)?.uint32Value ?? 0
             )
         }
 
@@ -627,7 +649,8 @@ enum GestureTargetController {
             return WindowCandidate(
                 pid: selfPid,
                 ownerName: info[kCGWindowOwnerName as String] as? String ?? "",
-                bounds: bounds
+                bounds: bounds,
+                wid: 0
             )
         }
         return nil
@@ -862,7 +885,8 @@ enum GestureTargetController {
             restoresOriginalFrontmostApplication: false,
             deliveryDelay: 0,
             window: nil,
-            prefersDirectWindowClose: false
+            prefersDirectWindowClose: false,
+            cgWindowId: nil
         )
     }
 
