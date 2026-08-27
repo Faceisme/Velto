@@ -16,8 +16,10 @@ import Synchronization
 /// (见 window-management.log 14:07 window=nil vs 14:14 window=有),所以用短 TTL
 /// 自动恢复,而不是永久拉黑。app 重启换 pid,缓存也自然失效。
 ///
-/// ponytail: 一次失败即熔断 5s。偶发超时会让健康 app 短暂降级,
-/// 若实际误伤明显再改成连续 N 次失败才熔断。
+/// ponytail: 一次失败即熔断 5s,没做"连续 N 次才拉黑"的计数器。2026-08-26 那次
+/// Chrome 误伤查下来根本不是采样抖动,是切换器的判据写错了(只看暴力枚举超时,
+/// 没看标准路径已经拿到窗口),补一个条件就没了 —— 计数器只会把它盖住。
+/// **判据要求两条 AX 路径同时空手**,这本身就够严了,真要再加计数器先拿日志说话。
 enum AxDeadPids {
   private static let ttl: CFAbsoluteTime = 5.0
   private static let entries = Mutex<[pid_t: CFAbsoluteTime]>([:])
@@ -26,11 +28,23 @@ enum AxDeadPids {
     entries.withLock { $0[pid].map { CFAbsoluteTimeGetCurrent() < $0 } ?? false }
   }
 
-  /// 返回 `true` 表示这次是**新**熔断(之前没在黑名单里),给调用方决定要不要打日志。
+  /// 返回 `true` 表示这次是**新**熔断(之前没在黑名单里)。
+  ///
+  /// **日志打在账本里,不在调用点** —— 2026-08-26 排查 Chrome 被误熔断时,
+  /// window-management.log 里 9 条 `⏭️ 已 AX 熔断` 却一条 `🔌` 都没有:
+  /// 切换器那个调用点当时不打日志,查不出是谁下的手。放这儿之后,任何调用点
+  /// 都别想再悄悄拉黑一个 app。
+  ///
+  /// 续期(`wasAlive == false`)也要打:Chrome 那次连续黑了 10.4s、超过一个
+  /// TTL,就是被反复续命续出来的,只记首次根本看不出来。
   @discardableResult
-  static func mark(_ pid: pid_t) -> Bool {
+  static func mark(_ pid: pid_t, source: @autoclosure () -> String) -> Bool {
     let wasAlive = !isDead(pid)
     entries.withLock { $0[pid] = CFAbsoluteTimeGetCurrent() + ttl }
+    if WindowManagementDebugLog.isEnabled {
+      let tag = wasAlive ? "🔌 AX 熔断" : "🔁 AX 熔断续期"
+      WindowManagementDebugLog.log("  \(tag) pid=\(pid) \(ttl)s(\(source()))→ 后续走 CGWindowList")
+    }
     return wasAlive
   }
 

@@ -194,16 +194,9 @@ enum GestureTargetController {
     // MARK: - AX 熔断(pid 级负缓存)
 
     /// 账本本体在 `AxDeadPids`,与切换器共用 —— 那边的暴力枚举对同一批哑巴 app
-    /// 也是纯浪费。这里只包一层日志。
+    /// 也是纯浪费。日志由账本自己打(每个调用点都得报上名来,见 `AxDeadPids.mark`)。
     /// 同一机理的局部版见 `WindowDragController.lookupBackoffUntil`。
     private static func axIsDead(_ pid: pid_t) -> Bool { AxDeadPids.isDead(pid) }
-
-    private static func markAxDead(_ pid: pid_t, reason: @autoclosure () -> String) {
-        let isNew = AxDeadPids.mark(pid)
-        if WindowManagementDebugLog.isEnabled, isNew {
-            WindowManagementDebugLog.log("  🔌 AX 熔断 pid=\(pid) \(AxDeadPids.ttlSeconds)s(\(reason()))→ 后续走 CGWindowList")
-        }
-    }
 
     /// 标题栏带命中测试 —— **滚动线程专用**。只做本地几何匹配 + 最多一次
     /// WindowServer IPC(缓存过期时),绝不做 AX 调用:调用方与平滑滚动动画器
@@ -679,7 +672,7 @@ enum GestureTargetController {
         // success + 0 个窗口,而这 53ms 是白花的。距离匹配不上(bestDistance > 80)
         // 不算,那是几何问题不是 AX 哑巴,不熔断。
         guard let windows = axElementArrayAttribute(kAXWindowsAttribute, of: app), !windows.isEmpty else {
-            markAxDead(targetPid, reason: "kAXWindows 无窗口")
+            AxDeadPids.mark(targetPid, source: "手势目标定位:kAXWindows 无窗口")
             return nil
         }
 

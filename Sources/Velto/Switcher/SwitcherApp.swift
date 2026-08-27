@@ -141,9 +141,22 @@ final class SwitcherApp: @unchecked Sendable {
         let brute = (includeBruteForce && !AxDeadPids.isDead(pid))
             ? Self.windowsByBruteForce(pid: pid)
             : (windows: [AXUIElement](), timedOut: false)
-        // 预算烧完还一个窗口都没有 = 慢且空,记一笔。只是"暂时没窗口"的健康 app
-        // 扫完 1000 个 id 也就几十毫秒,不会超时,不会被误伤。
-        if brute.timedOut, brute.windows.isEmpty { AxDeadPids.mark(pid) }
+        // 预算烧完、暴力枚举空手、**而且标准路径也一个窗口都没给** = 真哑巴,记一笔。
+        //
+        // `stdWindows.isEmpty` 这条不能省:光看"暴力枚举超时且为空"会误伤**临时忙**
+        // 的健康 app —— Chrome 一忙(重 JS / 加载页面)每次 AX RPC 就从 0.035ms 涨
+        // 上去,100ms 在前几百个 id 就烧光,只要这段里没撞上真窗口就被判死刑。
+        // 2026-08-26 实测:Chrome 26 次手势目标定位有 9 次因此降级,一次还连黑
+        // 10.4s(超过 5s TTL,被反复续期续出来的)。而 kAXWindows 都拿到窗口了
+        // 就根本不瞎,熔断纯亏。真哑巴 app(Telegram / 微信 / 富途)两条路都是 0,
+        // 照样熔断。日志里保留 stdWindows 数,残余误伤(窗口全在别的 Space →
+        // 标准路径也空)还能一眼认出来。
+        if brute.timedOut, brute.windows.isEmpty, stdWindows.isEmpty {
+            AxDeadPids.mark(
+                pid,
+                source: "切换器暴力枚举:100ms 烧完 0 窗口,标准路径 \(stdWindows.count) 窗口,app=\"\(localizedName ?? "?")\""
+            )
+        }
 
         let combined = stdWindows + brute.windows
         // 标准调用失败 + 暴力没拿到 → 视为 AX 不响应,nil 让调用方稍后重试
