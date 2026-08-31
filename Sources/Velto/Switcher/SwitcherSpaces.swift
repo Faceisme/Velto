@@ -1,4 +1,5 @@
 import Cocoa
+import Synchronization
 
 /// 封装所有 SkyLight 的 Space / 窗口可见性查询。
 ///
@@ -46,18 +47,52 @@ enum SwitcherSpaces {
     /// wid 然后期待返回 `[[CGSSpaceID]]`。实测它返回一维 CFArray,跟 alt-tab
     /// 源码注释一致:"queries one space at a time and inverts the result"。
     /// 所以这里改成反向遍历:对每个 Space 问"它里头有哪些 wid",再反转成 map。
-    /// N 个窗口 × M 个 Space → 从 N 次 IPC 缩到 M 次。
+    /// N 个窗口 × M 个 Space → 从 N 次 IPC 缩到 M 次,再由下面的缓存缩到"每
+    /// 200ms M 次"。
     static func spaces(forWindowIds wids: [CGWindowID]) -> [CGWindowID: [CGSSpaceID]] {
         guard !wids.isEmpty else { return [:] }
         let wanted = Set(wids)
         var map = [CGWindowID: [CGSSpaceID]]()
-        for spaceId in allSpaceIds() {
-            // 包含 invisible 桶 —— 我们想知道 ghost 候选到底有没有 Space 归属
-            for wid in windowsInSpaces([spaceId], includeInvisible: true) where wanted.contains(wid) {
+        for (spaceId, spaceWids) in windowsBySpaceCached() {
+            for wid in wanted where spaceWids.contains(wid) {
                 map[wid, default: []].append(spaceId)
             }
         }
         return map
+    }
+
+    private struct SpaceWindows: Sendable {
+        let stamp: CFAbsoluteTime
+        let bySpace: [CGSSpaceID: Set<CGWindowID>]
+    }
+
+    private static let spaceWindowsTTL: CFAbsoluteTime = 0.2
+    private static let spaceWindowsCache = Mutex<SpaceWindows?>(nil)
+
+    /// 每个 Space 上的全部 wid(含 invisible 桶),带 200ms TTL。
+    ///
+    /// 为什么要缓存:sync 路径**每扫完一个 app 就调一次** `spaces(forWindowIds:)`,
+    /// 而它要按 Space 逐个问 CGS —— 启动时是 N 个 app × M 个 Space 次 IPC,问到的
+    /// 却是同一份映射(12 个 app / 4 个 Space = 48 次)。全排在 AX 队列上就是纯等。
+    ///
+    /// TTL 取 200ms:远短于用户切 Space 的反应时间,又够覆盖一轮 sync。真拿到过期
+    /// 映射,最坏也只是把刚挪走的窗口仍算在原 Space —— ghost 判定第 4 步的结论
+    /// 不变(照样"在别的 Space,不是 ghost"),后续 sync 会接着对账。
+    ///
+    /// ponytail: 惊群没管 —— 并发线程同时 miss 会各做一轮 IPC。锁外做 IPC 是故意
+    /// 的(单次可能 10+ms,占着锁会把并发的 AX 队列线程全堵住),几轮也远少于 N 轮。
+    private static func windowsBySpaceCached() -> [CGSSpaceID: Set<CGWindowID>] {
+        let now = CFAbsoluteTimeGetCurrent()
+        if let hit = spaceWindowsCache.withLock({ $0 }), now - hit.stamp < spaceWindowsTTL {
+            return hit.bySpace
+        }
+        var fresh = [CGSSpaceID: Set<CGWindowID>]()
+        for spaceId in allSpaceIds() {
+            // 包含 invisible 桶 —— 我们想知道 ghost 候选到底有没有 Space 归属
+            fresh[spaceId] = Set(windowsInSpaces([spaceId], includeInvisible: true))
+        }
+        spaceWindowsCache.withLock { $0 = SpaceWindows(stamp: now, bySpace: fresh) }
+        return fresh
     }
 
     /// 给定一组 Space,列出这些 Space 上所有 wid。
@@ -113,13 +148,19 @@ enum SwitcherGhostDetector {
     ///      (Cmd+H、最小化、tab group 后面的 tab),不算 ghost。
     ///   4. 窗口报告自己有 spaceIds 但**没一个跟当前可见 Space 重叠** →
     ///      合法的"在其他 Space",不算 ghost。
-    ///   5. 都不符合 → 还是 ghost(典型:Outlook 提醒 alpha=0、某些 Electron
+    ///   5. **当前聚焦的窗口** → 不算 ghost。Electron app(Slack / Telegram)从
+    ///      Dock 唤回后窗口已经在屏且聚焦了,CGS 还会继续给它打 invisible 标记
+    ///      好几秒 —— 正好是用户点完 Dock 想 ⌥Tab 回去的那几秒(alt-tab #5849)。
+    ///      注意位置:必须在第 1 步**之后** —— CGS 完全不认这个 wid 是最强信号,
+    ///      聚焦态不能推翻它,只能推翻第 6 步那个弱信号。
+    ///   6. 都不符合 → 还是 ghost(典型:Outlook 提醒 alpha=0、某些 Electron
     ///      app 用 `setIgnoreMouseEvents` 弄出来的 overlay)
     static func isInvisible(
         wid: CGWindowID,
         isMinimized: Bool,
         isAppHidden: Bool,
         isTabbed: Bool,
+        isFocused: Bool,
         windowSpaceIds: [CGSSpaceID],
         visibleSpaceIds: Set<CGSSpaceID>,
         probe: WindowVisibilityProbe
@@ -136,7 +177,9 @@ enum SwitcherGhostDetector {
         {
             return false
         }
-        // 5. 都不符合 → ghost
+        // 5. 用户此刻正看着它 —— CGS 的 invisible 标记还没跟上,信它不信标记
+        if isFocused { return false }
+        // 6. 都不符合 → ghost
         return true
     }
 }

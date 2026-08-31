@@ -15,7 +15,6 @@ import ApplicationServices
 
 typealias CGSConnectionID = UInt32
 typealias CGSSpaceID = UInt64
-typealias ScreenUuid = CFString
 
 /// 跟 WindowServer 的连接 ID,启动时拿一次就够。
 let CGS_CONNECTION = CGSMainConnectionID()
@@ -51,27 +50,7 @@ func CGSCopyWindowsWithOptionsAndTags(_ cid: CGSConnectionID, _ owner: Int, _ sp
 @_silgen_name("CGSCopyManagedDisplaySpaces")
 func CGSCopyManagedDisplaySpaces(_ cid: CGSConnectionID) -> CFArray
 
-@_silgen_name("CGSManagedDisplayGetCurrentSpace")
-func CGSManagedDisplayGetCurrentSpace(_ cid: CGSConnectionID, _ displayUuid: ScreenUuid) -> CGSSpaceID
-
-enum CGSSpaceMask: Int {
-    case current = 5
-    case other = 6
-    case all = 7
-}
-
-/// 给一组窗口 wid,返回各自所在的 Space 数组。空数组意味着窗口"无 Space"
-/// (ghost / Electron 隐藏窗口的典型特征之一)。
-@_silgen_name("CGSCopySpacesForWindows")
-func CGSCopySpacesForWindows(_ cid: CGSConnectionID, _ mask: CGSSpaceMask.RawValue, _ wids: CFArray) -> CFArray
-
-// MARK: - 窗口属性
-
-@_silgen_name("CGSGetWindowLevel") @discardableResult
-func CGSGetWindowLevel(_ cid: CGSConnectionID, _ wid: CGWindowID, _ level: UnsafeMutablePointer<CGWindowLevel>) -> CGError
-
-@_silgen_name("CGSCopyWindowProperty") @discardableResult
-func CGSCopyWindowProperty(_ cid: CGSConnectionID, _ wid: CGWindowID, _ property: CFString, _ value: UnsafeMutablePointer<CFTypeRef?>) -> CGError
+// MARK: - 窗口操作
 
 /// 直接让 WindowServer 挪窗口,**只需要 wid,不需要目标 app 配合**。
 /// 给 Telegram / 微信 / 富途这种对 `kAXWindows` 恒返回 0 的 app 兜底拖拽用
@@ -80,11 +59,6 @@ func CGSCopyWindowProperty(_ cid: CGSConnectionID, _ wid: CGWindowID, _ property
 /// app 重新布局,拉出来是花的。
 @_silgen_name("SLSMoveWindow") @discardableResult
 func SLSMoveWindow(_ cid: CGSConnectionID, _ wid: CGWindowID, _ origin: UnsafePointer<CGPoint>) -> CGError
-
-// MARK: - 屏幕
-
-@_silgen_name("CGSCopyActiveMenuBarDisplayIdentifier")
-func CGSCopyActiveMenuBarDisplayIdentifier(_ cid: CGSConnectionID) -> ScreenUuid
 
 // MARK: - 符号热键(系统级 Cmd+Tab 等)
 

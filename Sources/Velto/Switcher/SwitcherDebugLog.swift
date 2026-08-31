@@ -44,14 +44,14 @@ enum SwitcherDebugLog {
     }
 
     /// 首次需要写入时才打开文件句柄(关闭状态下零文件开销;运行时打开也支持)。
-    private static func fileHandle() -> FileHandle? {
-        stateQueue.sync {
-            if !_handleOpened {
-                _handleOpened = true
-                _handle = Self.openLogFile()
-            }
-            return _handle
+    /// **只能在 `stateQueue` 上调** —— `_handle` / `_handleOpened` 全靠它串行化,
+    /// 而唯一的调用点 `log` 已经整个跑在 stateQueue 里(在那儿再 sync 回来是死锁)。
+    private static func fileHandleOnStateQueue() -> FileHandle? {
+        if !_handleOpened {
+            _handleOpened = true
+            _handle = Self.openLogFile()
         }
+        return _handle
     }
 
     private static func openLogFile() -> FileHandle? {
@@ -76,10 +76,19 @@ enum SwitcherDebugLog {
 
     static func log(_ message: @autoclosure () -> String) {
         guard isEnabled else { return }
-        let line = "[\(dateFormatter.string(from: Date()))] \(message())\n"
-        FileHandle.standardError.write(Data(line.utf8))
-        if let handle = fileHandle(), let data = line.data(using: .utf8) {
-            try? handle.write(contentsOf: data)
+        // autoclosure 捕获调用点的局部状态,必须在派发**之前**求值;时间戳同理
+        // (要的是调用时刻,不是落盘时刻)。
+        let text = message()
+        let now = Date()
+        // 格式化和写入都挪进 stateQueue:`DateFormatter` 不是线程安全的,
+        // `FileHandle.write` 并发调用也会把日志行撕开交错。后台 AX 队列改成
+        // 有界并发后,抢这里的线程从"主线程 + 一条扫描线"变成五条,必须串行化。
+        stateQueue.async {
+            let line = "[\(dateFormatter.string(from: now))] \(text)\n"
+            FileHandle.standardError.write(Data(line.utf8))
+            if let handle = fileHandleOnStateQueue(), let data = line.data(using: .utf8) {
+                try? handle.write(contentsOf: data)
+            }
         }
     }
 

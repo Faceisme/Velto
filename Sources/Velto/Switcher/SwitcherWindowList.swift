@@ -781,6 +781,7 @@ final class SwitcherWindowList {
                 isMinimized: w.isMinimized,
                 isAppHidden: w.isAppHidden,
                 isTabbed: false,
+                isFocused: isFocusedWindow(w),
                 windowSpaceIds: w.spaceIds,
                 visibleSpaceIds: visibleSpaces,
                 probe: probe
@@ -1146,6 +1147,7 @@ final class SwitcherWindowList {
                 isMinimized: w.isMinimized,
                 isAppHidden: w.isAppHidden,
                 isTabbed: false,
+                isFocused: isFocusedWindow(w),
                 windowSpaceIds: w.spaceIds,
                 visibleSpaceIds: visibleSpaces,
                 probe: probe
@@ -1165,6 +1167,14 @@ final class SwitcherWindowList {
         for w in ranked.dropFirst(keepTop) where w.thumbnail != nil {
             w.setThumbnail(nil)
         }
+    }
+
+    /// 这个窗口是不是用户此刻正看着的那个:全局 MRU 第一名 + 它的 app 在前台。
+    /// 只喂给 ghost 判定的第 5 步 —— Electron app 从 Dock 唤回后 CGS 的
+    /// invisible 标记要滞后好几秒,这几秒里不能把用户眼前的窗口判成 ghost。
+    /// 纯内存判断,不付 IPC。
+    private func isFocusedWindow(_ w: SwitcherWindow) -> Bool {
+        w.lastFocusOrder == 0 && w.application.pid == frontmostPid
     }
 
     private func runGhostProbeIfDue() {

@@ -7,7 +7,7 @@ import Foundation
 /// (Electron 应用启动期、Adobe 全家桶、Xcode 跑大编译等等),AX 调用会
 /// **挂到默认 6 秒** 才超时返回。alt-tab 把全局超时改成 1s 又自己上后台队列,
 /// 我们这里做同样的事,但简化:
-///   - 后台串行队列(避免并发轰炸 AX framework 自己的锁)
+///   - 后台队列有界并发(见 backgroundConcurrency),同 key 之间仍严格串行
 ///   - 全局每次启动一次 AXUIElementSetMessagingTimeout 把 1s 超时设上
 ///   - schedule(key:) 同 key 节流:连续来的同 wid 事件只处理最新一个
 ///
@@ -15,10 +15,19 @@ import Foundation
 final class AXCallQueue: @unchecked Sendable {
     static let shared = AXCallQueue()
 
+    /// 后台扫描的并发槽位。AX 调用是**阻塞等目标 app 主线程**,不吃我们的 CPU,
+    /// 所以串行只会让启动时的批量扫描线性叠加:暴力枚举去掉 id 上限后每个 app
+    /// 稳定烧满预算,12 个 app 就是 12 × 50ms 全排队等。
+    ///
+    /// 取 4 而不是更大:每个卡死的 app 最长占一个槽 1s(appMessagingTimeout),
+    /// 槽太多等于允许更多哑巴 app 同时压在目标进程主线程上 —— 那正是 AxDeadPids
+    /// 要防的事。4 够覆盖启动批量,又留着退路。
+    private static let backgroundConcurrency = 4
+
     private let queue: OperationQueue = {
         let q = OperationQueue()
         q.name = "Velto.Switcher.AXCallQueue"
-        q.maxConcurrentOperationCount = 1
+        q.maxConcurrentOperationCount = AXCallQueue.backgroundConcurrency
         q.qualityOfService = .userInitiated
         return q
     }()
@@ -92,8 +101,19 @@ final class AXCallQueue: @unchecked Sendable {
         let op = BlockOperation()
         // capture `op` weakly inside the closure to break the strong cycle that
         // would otherwise keep finished operations alive in the dictionary.
-        op.addExecutionBlock { [weak op] in
-            if op?.isCancelled == true { return }
+        op.addExecutionBlock { [weak self, weak op] in
+            guard let self, let op else { return }
+            // 节流:被后来的同 key 顶掉就空跑退出。
+            //
+            // 为什么不用 `Operation.cancel()`(它原来就是这么做的):cancelled 的
+            // operation 会**立即 finish 而不等自己的依赖**,于是挂在它后面的同 key
+            // op 被提前放行,和还在执行的那个撞上 —— 队列改并发后实测 peak=2。
+            // 改成字典身份判断:作废的 op 照样排在依赖链上,轮到它才秒退,链的
+            // 串行性不被破坏。
+            self.lock.lock()
+            let isCurrent = self.pending[key] === op
+            self.lock.unlock()
+            guard isCurrent else { return }
             do {
                 try block()
             } catch {
@@ -107,7 +127,11 @@ final class AXCallQueue: @unchecked Sendable {
         pending[key] = op
         lock.unlock()
 
-        previous?.cancel()
+        // 串行:同 key 意味着同一个 pid/wid,两路 `applyProbes` 乱序落到 MainActor
+        // 就是窗口误删。串行队列时代这是白送的,并发队列必须自己挂依赖。
+        if let previous {
+            op.addDependency(previous)
+        }
 
         op.completionBlock = { [weak self, weak op] in
             guard let self, let op else { return }

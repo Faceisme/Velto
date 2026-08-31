@@ -121,7 +121,7 @@ final class SwitcherApp: @unchecked Sendable {
     /// 两条管线合并:
     ///   - **标准路径** `kAXWindowsAttribute`:拿当前 Space 的窗口,快(1 次 IPC)。
     ///   - **暴力枚举** `_AXUIElementCreateWithRemoteToken`:能拿到**其他 Space**
-    ///     的窗口,但要遍历最多 1000 个 element id,慢(~100ms 上限)。
+    ///     的窗口,但要逐个 element id 试探,慢(100ms 时间预算封顶)。
     ///
     /// 公开 AX API 没有"拿一个进程所有桌面上所有窗口"的方法 —— 必须叠这两层。
     /// alt-tab `AXUIElement.allWindows(pid:)` 的同款 trick。
@@ -136,10 +136,18 @@ final class SwitcherApp: @unchecked Sendable {
         let stdWindows: [AXUIElement] = (stdResult == .success ? (stdValue as? [AXUIElement]) : nil) ?? []
 
         // 对 AX 装哑巴的 app(Telegram / 微信 / 富途)暴力枚举必然空手而归,
-        // 却要把 0.1s 预算全烧在**它自己的主线程**上。熔断期内直接跳过。
+        // 却要把预算全烧在**它自己的主线程**上。熔断期内直接跳过。
         // 账本与手势路径共用,见 `AxDeadPids`。
+        //
+        // 预算分两档:标准路径已经拿到窗口时,暴力枚举只是去补"跨 Space 那几个
+        // 漏网的",半价就够;一个窗口都没拿到时它是唯一指望(也是熔断判定的
+        // 依据),给满。启动时绝大多数 app 走的是前者 —— 去掉 id 上限后每个
+        // app 都会稳定烧满预算,这一档直接把串行队列上的启动成本砍掉一半。
+        let bruteBudget = stdWindows.isEmpty
+            ? Self.soleSourceBudgetSeconds
+            : Self.supplementalBudgetSeconds
         let brute = (includeBruteForce && !AxDeadPids.isDead(pid))
-            ? Self.windowsByBruteForce(pid: pid)
+            ? Self.windowsByBruteForce(pid: pid, budgetSeconds: bruteBudget)
             : (windows: [AXUIElement](), timedOut: false)
         // 预算烧完、暴力枚举空手、**而且标准路径也一个窗口都没给** = 真哑巴,记一笔。
         //
@@ -154,7 +162,7 @@ final class SwitcherApp: @unchecked Sendable {
         if brute.timedOut, brute.windows.isEmpty, stdWindows.isEmpty {
             AxDeadPids.mark(
                 pid,
-                source: "切换器暴力枚举:100ms 烧完 0 窗口,标准路径 \(stdWindows.count) 窗口,app=\"\(localizedName ?? "?")\""
+                source: "切换器暴力枚举:\(Int(bruteBudget * 1000))ms 内连 \(Self.slowScanIdThreshold(for: bruteBudget)) 个 id 都没走完且 0 窗口,标准路径 \(stdWindows.count) 窗口,app=\"\(localizedName ?? "?")\""
             )
         }
 
@@ -165,15 +173,39 @@ final class SwitcherApp: @unchecked Sendable {
         return Array(Set(combined.map { AxRef(element: $0) })).map(\.element)
     }
 
-    /// 暴力枚举:对 axUiElementId ∈ [0, 1000) 调
-    /// `_AXUIElementCreateWithRemoteToken` 构造 AXUIElement,通过 subrole
-    /// 过滤出真窗口。上限 100ms,到点就停 —— 即使有些窗口漏拿,下次 sync
-    /// 还会再扫,丢失一两次不影响最终一致性。
+    /// 标准路径一个窗口都没给时的暴力枚举预算 —— 它是唯一指望,也是熔断依据。
+    private static let soleSourceBudgetSeconds: Double = 0.1
+    /// 标准路径已经给了窗口时的预算 —— 暴力枚举只补跨 Space 的漏,半价。
+    private static let supplementalBudgetSeconds: Double = 0.05
+
+    /// 预算内走完这么多 id 才算健康。实测健康 app 一次 RPC 几十微秒,
+    /// 100ms 走完 1000 个绰绰有余 —— 即 10000 id/s 是"慢"的分界线。
+    /// 按预算等比缩放,让两档预算共用同一条标准(0.1s→1000,0.05s→500)。
+    private static func slowScanIdThreshold(for budgetSeconds: Double) -> AXUIElementID {
+        AXUIElementID(budgetSeconds * 10_000)
+    }
+
+    /// 暴力枚举:递增 axUiElementId 调 `_AXUIElementCreateWithRemoteToken` 构造
+    /// AXUIElement,通过 subrole 过滤出真窗口。**没有 id 上限,只有时间预算**
+    /// —— `AXUIElementID` 是 UInt64,长寿 app 的窗口元素 id 又高又稀疏,原来
+    /// `0..<1000` 那个死上限对开了几小时的 app 根本够不着(alt-tab 实测:同一个
+    /// 扫描连跑 31 次一个窗口都没捞到,Finder 的元素全在预算走不到的高位;换个
+    /// 时机运气好时一次捞到 57 个)。到点就停,漏拿的下次 sync 再补。
     ///
-    /// `timedOut` 报告有没有把预算烧完:正常 app 1000 次 RPC 只要几十毫秒,
-    /// 烧完还空手 = 对 AX 装哑巴,给调用方拿去熔断。
+    /// `timedOut` 语义**保持不变**:预算内连 `slowScanIdThreshold(for:)` 个 id
+    /// 都没走完才算,给调用方拿去熔断。走完了还继续往高位扫属于净赚,不该因此
+    /// 被判死刑 —— 否则去掉上限的同时会把所有健康 app 都变成熔断候选。
+    ///
+    /// ⚠️ 过滤只看 subrole,靠白名单天然挡住窗口的**后代元素**:
+    /// `_AXUIElementGetWindow` 对任何后代都返回容器窗口的 wid,而后代的
+    /// AXUIElementID 常常**比窗口本体低**(alt-tab #5849:tab bar 冒充窗口,
+    /// 带标签页的窗口被启动扫描稳定漏掉)。后代拿不到 AXStandardWindow /
+    /// AXDialog,所以现在免疫。**哪天为了放行某个 app(Steam / Keynote 全屏
+    /// 这类 subrole=AXUnknown)放宽白名单,必须同时加 `role == kAXWindowRole`
+    /// 校验**,否则立刻开始捞到 tab bar 和工具栏。
     nonisolated private static func windowsByBruteForce(
-        pid: pid_t
+        pid: pid_t,
+        budgetSeconds: Double
     ) -> (windows: [AXUIElement], timedOut: Bool) {
         var remoteToken = Data(count: 20)
         var pidValue = pid
@@ -186,9 +218,9 @@ final class SwitcherApp: @unchecked Sendable {
         let dialogSubrole = kAXDialogSubrole as String
         var results: [AXUIElement] = []
         let startTime = CFAbsoluteTimeGetCurrent()
-        let timeoutSeconds: Double = 0.1
+        let idThreshold = slowScanIdThreshold(for: budgetSeconds)
 
-        for axElemId: AXUIElementID in 0..<1000 {
+        for axElemId: AXUIElementID in 0..<AXUIElementID.max {
             var idValue = axElemId
             remoteToken.replaceSubrange(12..<20, with: withUnsafeBytes(of: &idValue) { Data($0) })
             guard let unmanaged = _AXUIElementCreateWithRemoteToken(remoteToken as CFData) else { continue }
@@ -202,9 +234,10 @@ final class SwitcherApp: @unchecked Sendable {
             {
                 results.append(element)
             }
-            // 超时早退 —— 没扫完没关系,后续 sync 会接着补
-            if CFAbsoluteTimeGetCurrent() - startTime > timeoutSeconds {
-                return (results, true)
+            // 超时早退 —— 没扫完没关系,后续 sync 会接着补。
+            // 只有"连健康速度该走完的 id 数都没走到"才报 timedOut(见上方注释)。
+            if CFAbsoluteTimeGetCurrent() - startTime > budgetSeconds {
+                return (results, axElemId < idThreshold)
             }
         }
         return (results, false)
