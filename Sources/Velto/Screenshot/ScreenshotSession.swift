@@ -46,6 +46,14 @@ final class ScreenshotSession: ScreenshotOverlayDelegate {
     ScreenshotDebugLog.log("session start: presented \(windows.count) overlay window(s), "
       + "previousApp=\(previousApp?.bundleIdentifier ?? "nil") activeAppPID=\(activeAppPID) "
       + "overlayWindowNumbers=\(windows.map { $0.windowNumber })")
+    // 一个覆盖层都没建出来 = 没人能收 Esc,teardown 永远不会被触发,controller 的
+    // session 会一直非 nil,之后按快捷键全部静默丢弃。这里主动收尾,别留死会话。
+    guard !windows.isEmpty else {
+      ScreenshotDebugLog.log("session start: 覆盖层为空,直接收尾")
+      NSSound.beep()
+      teardown()
+      return
+    }
   }
 
   /// 外部(如热键)取消会话:dismiss 所有覆盖窗口并回收。
