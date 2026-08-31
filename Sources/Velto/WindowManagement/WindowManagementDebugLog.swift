@@ -95,6 +95,17 @@ enum WindowManagementDebugLog {
 
   private static func fileHandle() -> FileHandle? {
     stateQueue.sync {
+      // 日志文件被删/被轮转走之后,老 fd 指向的是已经 unlink 的 inode —— 写进去
+      // 谁也看不见,而且永远不会自己恢复(2026-08-27 排查 Telegram 时就这么白丢了
+      // 一轮复现)。st_nlink == 0 正是这个状态,一个 fstat 换「删了日志不用重启」。
+      if let handle = _handle {
+        var st = stat()
+        if fstat(handle.fileDescriptor, &st) != 0 || st.st_nlink == 0 {
+          try? handle.close()
+          _handle = nil
+          _handleOpened = false
+        }
+      }
       if !_handleOpened {
         _handleOpened = true
         _handle = Self.openLogFile()

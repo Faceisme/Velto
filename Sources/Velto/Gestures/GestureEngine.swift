@@ -517,13 +517,58 @@ final class GestureEngine: @unchecked Sendable {
                 return
             }
 
+            // 快捷键是 post 到 session tap 的 —— 谁在前台就打给谁。目标定位对了不代表
+            // 按键落对地方(AX 熔断期只能靠 activate/SLPS 把 app 拱到前台,拱没拱上去
+            // 日志里原本看不见)。落一行前台快照,下次「按了没反应」一眼能分清是
+            // 「按键打偏了」还是「打对了但 app 自己不认」。
+            let front = NSWorkspace.shared.frontmostApplication
+            // 手势的右键 down/up 都被 tap 吞了,但物理按键状态是 HID 层独立记的 ——
+            // 真按下去的那一下抬没抬起来,这里才看得见。若发 ⌘W 时右键仍记为按下,
+            // 走 mouse tracking loop 的 app(Telegram)会把键盘事件排到 loop 之后,
+            // 表现就是「按了没反应」。残留修饰键同理:⌘W 会变成 ⌘⌥W 之类而失效。
+            let rightStillDown = CGEventSource.buttonState(.combinedSessionState, button: .right)
+            let liveFlags = CGEventSource.flagsState(.combinedSessionState).rawValue & 0xFFFF_0000
+            WindowManagementDebugLog.log(
+                "  ⌨️ 发 \(shortcut.displayName) → 目标 pid=\(target.pid.map(String.init) ?? "?") "
+                + "当前前台 pid=\(front?.processIdentifier.description ?? "?") app=\"\(front?.localizedName ?? "?")\" "
+                + "右键仍按下=\(rightStillDown) 实时修饰键=0x\(String(liveFlags, radix: 16))"
+            )
+            // 「按了没反应」到底是哪几次,以前只能靠用户口头说 —— 日志里 135 次
+            // 手势分不出成败,排查就只能靠猜。发完隔 250ms 再数一次目标 app 的
+            // 在屏窗口:关窗类快捷键生效就一定会掉一个,不掉就是这次真没生效。
+            let watchPid = target.pid
+            let winsBefore = watchPid.map(Self.onScreenWindowCount(pid:)) ?? -1
             ShortcutSynthesizer.send(shortcut)
+            if let watchPid {
+                Task { @MainActor in
+                    // 800ms 不是拍脑袋:Telegram 收到 ⌘W 到窗口真正从 WindowServer
+                    // 消失实测 320~367ms,一开始设的 250ms 把 20 次全判成「没生效」,
+                    // 白白造了一批假信号。留足三倍余量。
+                    try? await Task.sleep(for: .milliseconds(800))
+                    let after = Self.onScreenWindowCount(pid: watchPid)
+                    WindowManagementDebugLog.log(
+                        "  ↳ 发完 800ms:pid=\(watchPid) 在屏窗口 \(winsBefore)→\(after) "
+                        + (after < winsBefore ? "✅ 窗口少了一个" : "窗口数没变")
+                    )
+                }
+            }
 
             if restoresOriginalFrontmostApplication {
                 try? await Task.sleep(for: .milliseconds(120))
                 GestureTargetController.restoreFrontmostApplication(frontmostApplicationAtGestureStart)
             }
         }
+    }
+
+    /// 目标 app 当前有几个 layer0 在屏窗口 —— 用来判定关窗快捷键有没有真的生效。
+    static func onScreenWindowCount(pid: pid_t) -> Int {
+        let list = CGWindowListCopyWindowInfo(
+            [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID
+        ) as? [[String: Any]] ?? []
+        return list.filter {
+            ($0[kCGWindowOwnerPID as String] as? pid_t) == pid
+                && ($0[kCGWindowLayer as String] as? Int) == 0
+        }.count
     }
 
     // MARK: - Right-click replay
