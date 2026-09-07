@@ -171,6 +171,7 @@ rm -rf "$APP_DIR"
 install -d "$MACOS_DIR" "$RESOURCES_DIR" "$FINDER_EXT_MACOS_DIR" "$FINDER_EXT_RESOURCES_DIR"
 cp "$BIN_DIR/Velto" "$MACOS_DIR/Velto"
 cp "$ROOT_DIR/Resources/Info.plist" "$CONTENTS_DIR/Info.plist"
+cp -R "$ROOT_DIR/Resources/ThirdPartyNotices" "$RESOURCES_DIR/"
 # 只把版本号盖进 bundle 内的副本,源 Resources/Info.plist 保持不变 —— 否则每次打包都把
 # 它改脏,污染 git 工作区。
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $APP_VERSION" "$CONTENTS_DIR/Info.plist"

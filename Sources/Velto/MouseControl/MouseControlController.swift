@@ -132,7 +132,7 @@ final class MouseControlController: @unchecked Sendable {
     private let enabledFlag = Atomic<Bool>(false)
 
     private let lock = NSLock()
-    private let animator = MouseSmoothScrollAnimator()
+    let animator = MouseSmoothScrollAnimator()
 
     private var preferences = MouseControlPreferences.defaults
     /// bundleID → 规则的查找索引(由 `lock` 保护)。`snapshot(for:)` 每个滚动 /
@@ -197,7 +197,7 @@ final class MouseControlController: @unchecked Sendable {
         animator.detach()
     }
 
-    func handleScrollWheel(event: CGEvent) -> Bool {
+    func handleScrollWheel(event: CGEvent, captureLocked: Bool = false) -> Bool {
         guard enabledFlag.load(ordering: .relaxed) else { return false }
         let logger = MouseScrollDebugLogger.shared
         let debugID = logger.nextEventID()
@@ -235,7 +235,7 @@ final class MouseControlController: @unchecked Sendable {
 
         let profile = snapshot.profile
         let state = snapshot.hotkeyState
-        let shouldShiftVertical = state.directionToggle && hasY && !hasX
+        let shouldShiftVertical = !captureLocked && state.directionToggle && hasY && !hasX
         let reverseY = profile.reverse && (shouldShiftVertical ? profile.reverseHorizontal : profile.reverseVertical)
         let reverseX = profile.reverse && profile.reverseHorizontal
 
@@ -794,7 +794,8 @@ private final class MouseScrollFilter {
     }
 }
 
-private final class MouseSmoothScrollAnimator: NSObject, @unchecked Sendable {
+final class MouseSmoothScrollAnimator: NSObject, @unchecked Sendable {
+    var eventPoster: (CGEvent, pid_t) -> Void = { $0.postToPid($1) }
     private let filter = MouseScrollFilter()
     private let phaseState = MouseScrollPhaseState()
     private var displayLink: CADisplayLink?
@@ -803,6 +804,8 @@ private final class MouseSmoothScrollAnimator: NSObject, @unchecked Sendable {
     /// CGEvent、就地改写 delta/phase/marker 后投递,避免每帧 clone。仅滚动线程读写。
     private var templateEvent: CGEvent?
     private var targetPID: pid_t = 0
+    // 每段动画绑定输入时的截图会话,会话切换后绝不复用旧惯性。
+    private var captureSession: ScrollCaptureKeyTap?
 
     /// 动画器全部可变状态都 affine 到滚动线程(scroll tap 回调 + CADisplayLink
     /// 回调同在这条 runloop),因此无锁。跨线程进来的控制调用(鼠标按下叫停、
@@ -909,6 +912,9 @@ private final class MouseSmoothScrollAnimator: NSObject, @unchecked Sendable {
             MouseScrollDebugLogger.shared.log("#\(debugID) capture failed reason=missing-target-pid")
             return false
         }
+        let session = ScrollCaptureKeyTap.current
+        if captureSession !== session { resetState() }
+        captureSession = session
         templateEvent = template
         targetPID = pid
 
@@ -999,7 +1005,7 @@ private final class MouseSmoothScrollAnimator: NSObject, @unchecked Sendable {
         return isAvailable
     }
 
-    func stop(_ requestedPhase: MouseScrollPhase = .momentumEnd) {
+    fileprivate func stop(_ requestedPhase: MouseScrollPhase = .momentumEnd) {
         onScrollThread { [self] in
             let wasRunning = !(displayLink?.isPaused ?? true)
             displayLink?.isPaused = true
@@ -1041,6 +1047,7 @@ private final class MouseSmoothScrollAnimator: NSObject, @unchecked Sendable {
 
     private func resetState() {
         templateEvent = nil
+        captureSession = nil
         targetPID = 0
         current = (y: 0, x: 0)
         delta = (y: 0, x: 0)
@@ -1116,7 +1123,12 @@ private final class MouseSmoothScrollAnimator: NSObject, @unchecked Sendable {
         return 1 - exp(-dt / tau)
     }
 
-    private func processing(dt: CFTimeInterval) {
+    func processing(dt: CFTimeInterval) {
+        // 进入/退出截图、扩展选区或完成期间停止旧动画;截图内仍保留竖向平滑。
+        if captureSession !== ScrollCaptureKeyTap.current || captureSession?.scrollInputEnabled == false {
+            stop()
+            return
+        }
         var pendingStopPhase: MouseScrollPhase?
         let debugID = activeDebugID
         let phaseBefore = phaseState.phase
@@ -1244,7 +1256,12 @@ private final class MouseSmoothScrollAnimator: NSObject, @unchecked Sendable {
         event.setDoubleValueField(.scrollWheelEventPointDeltaAxis2, value: value.x)
         event.setDoubleValueField(.scrollWheelEventIsContinuous, value: 1)
         event.setIntegerValueField(.eventSourceUserData, value: MouseControlController.syntheticScrollMarker)
-        event.postToPid(targetPID)
+        // postToPid 绕过 HID tap:在这里复用同一输入锁,并通知捕获器每一帧的实际滚动。
+        guard captureSession === ScrollCaptureKeyTap.current else { return false }
+        if let captureSession, captureSession.handle(type: .scrollWheel, event: event) == nil {
+            return false
+        }
+        eventPoster(event, targetPID)
         phaseState.didDeliverFrame()
         MouseScrollDebugLogger.shared.log("#\(activeDebugID) post value=(\(mouseDebugPair(value))) phaseBefore=\(phaseBefore) phaseAfter=\(phaseState.phase) phaseOverride=\(String(describing: phaseOverride)) fallback=\(fallbackToCurrentPhase) simulateTrackpad=\(simulateTrackpad) scrollPhase=\(mouseDebugNumber(event.getDoubleValueField(.scrollWheelEventScrollPhase))) momentumPhase=\(mouseDebugNumber(event.getDoubleValueField(.scrollWheelEventMomentumPhase))) targetPID=\(targetPID)")
         return true

@@ -10,9 +10,9 @@ final class ScrollCaptureActionBar: NSPanel {
   var onSave: (() -> Void)?
   var onCancel: (() -> Void)?
 
-  private static let buttonSize: CGFloat = 36
+  private static let buttonSize: CGFloat = 32
   private static let buttonGap: CGFloat = 2
-  private static let contentInsets = NSEdgeInsets(top: 9, left: 10, bottom: 9, right: 10)
+  private static let contentInsets = NSEdgeInsets(top: 6, left: 6, bottom: 6, right: 6)
 
   private static var barSize: CGSize {
     let width = contentInsets.left + buttonSize + contentInsets.right
@@ -40,6 +40,7 @@ final class ScrollCaptureActionBar: NSPanel {
     level = .screenSaver
     hasShadow = true
     hidesOnDeactivate = false
+    acceptsMouseMovedEvents = true
     animationBehavior = .none
     collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]
     setupContent(size: size)
@@ -65,33 +66,34 @@ final class ScrollCaptureActionBar: NSPanel {
     content.spacing = Self.buttonGap
     content.edgeInsets = Self.contentInsets
 
-    let finishButton = makeButton(icon: .complete, toolTip: "完成")
+    let finishButton = makeButton(icon: .complete, title: "完成", toolTip: "完成：结束滚动，继续裁剪或标注长图")
     finishButton.tone = .confirm
     finishButton.onClick = { [weak self] in self?.onFinish?() }
     content.addArrangedSubview(finishButton)
 
-    let copyButton = makeButton(icon: .copy, toolTip: "复制")
+    let copyButton = makeButton(icon: .copy, title: "复制", toolTip: "复制：将长图放入剪贴板并退出")
     copyButton.onClick = { [weak self] in self?.onCopy?() }
     content.addArrangedSubview(copyButton)
 
-    let saveButton = makeButton(icon: .save, toolTip: "存储到本地")
+    let saveButton = makeButton(icon: .save, title: "存储到本地", toolTip: "保存：将长图存储到本地并退出")
     saveButton.onClick = { [weak self] in self?.onSave?() }
     content.addArrangedSubview(saveButton)
 
-    let cancelButton = makeButton(icon: .cancel, toolTip: "取消")
+    let cancelButton = makeButton(icon: .cancel, title: "取消", toolTip: "取消：放弃本次长截图并退出")
     cancelButton.tone = .destructive
     cancelButton.onClick = { [weak self] in self?.onCancel?() }
     content.addArrangedSubview(cancelButton)
 
-    let glass = NSGlassEffectView(frame: CGRect(origin: .zero, size: size))
-    glass.cornerRadius = 18
-    glass.contentView = content
+    let glass = ScreenshotChromeView(frame: CGRect(origin: .zero, size: size))
+    glass.cornerRadius = 12
+    glass.addSubview(content)
     contentView = glass
   }
 
-  private func makeButton(icon: AnnotationIcon, toolTip: String) -> AnnotationToolbarButton {
+  private func makeButton(icon: AnnotationIcon, title: String, toolTip: String) -> AnnotationToolbarButton {
     let button = AnnotationToolbarButton(icon: icon)
     button.toolTip = toolTip
+    button.setAccessibilityLabel(title)
     NSLayoutConstraint.activate([
       button.widthAnchor.constraint(equalToConstant: Self.buttonSize),
       button.heightAnchor.constraint(equalToConstant: Self.buttonSize),

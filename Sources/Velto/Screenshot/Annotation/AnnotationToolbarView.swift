@@ -1,446 +1,177 @@
 import AppKit
 import VeltoAnnotationCore
 
-/// 主工具栏向覆盖层回报的动作。选区/工具切换走 `selectTool`,其余是一次性命令。
+/// Shared commands for the editing row and the capture/output column.
 enum AnnotationToolbarAction {
   case selectTool(AnnotationTool?)
-  case undo
-  case redo
-  case scroll
-  case cancel
-  case save
-  case copy
-  case complete
+  case undo, redo, scroll, cancel, save, copy, complete
 }
 
-/// Xnip 风格的 Liquid Glass 主工具栏:10 个工具 + 2 个历史 + 4 个动作,共 16 个
-/// 等宽 36×36 按钮。图标全部走 `AnnotationIconLibrary` 自绘矢量,统一 2pt 描边,
-/// 不使用 SF Symbols,这样 hover/pressed/disabled 都只改背景、绝不改尺寸或缩放。
-final class AnnotationToolbarView: NSGlassEffectView {
-  static let buttonSize: CGFloat = 36
-  static let barHeight: CGFloat = 54
-
+/// Compact primary/side toolbars, adapted from CapCap's ToolbarView.
+/// The same native buttons are also used while capturing a long screenshot.
+final class AnnotationToolbarView: ScreenshotChromeView {
+  static let buttonSize: CGFloat = 32
+  static let barHeight: CGFloat = 44
   var onAction: ((AnnotationToolbarAction) -> Void)?
 
-  private let contentStack = NSStackView()
-  private let hoverLabel = AnnotationToolbarHoverLabel()
+  private let stack = NSStackView()
   private var toolButtons: [AnnotationTool: AnnotationToolbarButton] = [:]
-  private var undoButton: AnnotationToolbarButton!
-  private var redoButton: AnnotationToolbarButton!
-  private weak var hoveredButton: AnnotationToolbarButton?
+  private var undoButton: AnnotationToolbarButton?
+  private var redoButton: AnnotationToolbarButton?
+  private var scrollButton: AnnotationToolbarButton?
+  private let actionsOnly: Bool
 
-  private struct ToolItem {
-    let tool: AnnotationTool
-    let icon: AnnotationIcon
-    let hoverTitle: String
-    let toolTip: String
-  }
+  override convenience init(frame: NSRect) { self.init(frame: frame, actionsOnly: false) }
 
-  private static let toolOrder: [ToolItem] = [
-    .init(tool: .rectangle, icon: .rectangle, hoverTitle: "矩形", toolTip: "矩形"),
-    .init(tool: .ellipse, icon: .ellipse, hoverTitle: "椭圆", toolTip: "椭圆"),
-    .init(tool: .line, icon: .line, hoverTitle: "直线", toolTip: "直线"),
-    .init(tool: .arrow, icon: .arrow, hoverTitle: "箭头", toolTip: "箭头"),
-    .init(tool: .pen, icon: .pen, hoverTitle: "画笔", toolTip: "画笔"),
-    .init(tool: .mosaic, icon: .mosaic, hoverTitle: "马赛克", toolTip: "马赛克"),
-    .init(tool: .text, icon: .text, hoverTitle: "文字", toolTip: "文字"),
-    .init(tool: .highlight, icon: .highlight, hoverTitle: "荧光笔", toolTip: "荧光笔"),
-    .init(tool: .sequence, icon: .sequence, hoverTitle: "序号", toolTip: "序号"),
-    .init(tool: .crop, icon: .crop, hoverTitle: "裁剪", toolTip: "裁剪(拖拽框选保留区域,导出时生效)"),
-  ]
-
-  override init(frame frameRect: NSRect) {
-    super.init(frame: frameRect)
-    style = .regular
-    cornerRadius = 18
-    wantsLayer = true
-    layer?.masksToBounds = true
-    buildLayout()
-  }
-
-  required init?(coder: NSCoder) {
-    fatalError("not implemented")
-  }
-
-  override var isHidden: Bool {
-    didSet {
-      if isHidden {
-        dismissHoverTitle()
+  init(frame: NSRect, actionsOnly: Bool) {
+    self.actionsOnly = actionsOnly
+    super.init(frame: frame)
+    stack.orientation = actionsOnly ? .vertical : .horizontal
+    stack.alignment = actionsOnly ? .centerX : .centerY
+    stack.spacing = 4
+    stack.edgeInsets = NSEdgeInsets(top: 6, left: 6, bottom: 6, right: 6)
+    addSubview(stack)
+    if actionsOnly {
+      scrollButton = add(.scrollCapture, title: "长截图（S）", help: "长截图：锁定选区，上下滚动页面来拼接", action: .scroll)
+      add(.save, title: "保存", help: "保存：将截图存储到本地", action: .save)
+      separator()
+      add(.cancel, title: "取消（Esc）", help: "取消：放弃本次截图并退出", action: .cancel).tone = .destructive
+      add(.complete, title: "复制（空格）", help: "复制：将截图放入剪贴板并退出", action: .complete).tone = .confirm
+    } else {
+      let tools: [(AnnotationTool, AnnotationIcon, String, String)] = [
+        (.rectangle, .rectangle, "矩形", "矩形：拖动绘制方框，可调整颜色、线宽和填充"),
+        (.ellipse, .ellipse, "椭圆", "椭圆：拖动圈出内容，可调整颜色、线宽和填充"),
+        (.line, .line, "直线", "直线：拖动绘制线段"),
+        (.arrow, .arrow, "箭头", "箭头：从起点拖向需要指示的位置"),
+        (.pen, .pen, "画笔", "画笔：按住鼠标自由绘制"),
+        (.highlight, .highlight, "高亮", "高亮：用半透明笔触突出内容"),
+        (.mosaic, .mosaic, "马赛克", "马赛克：拖动框出需要模糊的区域"),
+        (.sequence, .sequence, "序号", "序号：点击添加递增的数字标记"),
+        (.text, .text, "文字", "文字标注：点击截图输入文字，可调整颜色、字号和对齐"),
+        (.crop, .crop, "裁剪", "裁剪：拖出要保留的区域，复制或保存时裁去外部")
+      ]
+      for (tool, icon, title, help) in tools {
+        toolButtons[tool] = add(icon, title: title, help: help, action: .selectTool(tool))
       }
+      separator()
+      undoButton = add(.undo, title: "撤销（⌘Z）", action: .undo)
+      redoButton = add(.redo, title: "重做（⇧⌘Z）", action: .redo)
     }
   }
 
-  /// 覆盖父覆盖层的全屏十字光标:工具栏上恢复普通箭头。
-  override func resetCursorRects() {
-    addCursorRect(bounds, cursor: .arrow)
-  }
+  required init?(coder: NSCoder) { fatalError("not implemented") }
+  override func layout() { super.layout(); stack.frame = bounds }
 
-  override func viewWillMove(toSuperview newSuperview: NSView?) {
-    if newSuperview == nil {
-      dismissHoverTitle()
-      hoverLabel.removeFromSuperview()
-    }
-    super.viewWillMove(toSuperview: newSuperview)
-  }
-
-  override func layout() {
-    super.layout()
-    if let hoveredButton {
-      positionHoverLabel(for: hoveredButton)
-    }
-  }
-
-  /// 自然尺寸:外层布局据此放置玻璃面板,内容随玻璃 bounds 自动铺满。
   var barSize: NSSize {
-    NSSize(width: contentStack.fittingSize.width, height: Self.barHeight)
+    let size = stack.fittingSize
+    return actionsOnly ? NSSize(width: Self.barHeight, height: size.height)
+      : NSSize(width: size.width, height: Self.barHeight)
   }
 
   func update(activeTool: AnnotationTool?, canUndo: Bool, canRedo: Bool) {
-    for (tool, button) in toolButtons {
-      button.isSelected = (tool == activeTool)
-    }
-    undoButton.isEnabled = canUndo
-    redoButton.isEnabled = canRedo
+    for (tool, button) in toolButtons { button.isSelected = tool == activeTool }
+    undoButton?.isEnabled = canUndo
+    redoButton?.isEnabled = canRedo
   }
 
-  // MARK: - Layout
+  func setScrollEnabled(_ enabled: Bool) { scrollButton?.isEnabled = enabled }
 
-  private func buildLayout() {
-    contentStack.orientation = .horizontal
-    contentStack.alignment = .centerY
-    contentStack.distribution = .fill
-    contentStack.spacing = 2
-    contentStack.edgeInsets = NSEdgeInsets(top: 9, left: 10, bottom: 9, right: 10)
-
-    for item in Self.toolOrder {
-      let button = makeButton(icon: item.icon, toolTip: item.toolTip, hoverTitle: item.hoverTitle)
-      button.onClick = { [weak self] in self?.onAction?(.selectTool(item.tool)) }
-      toolButtons[item.tool] = button
-      contentStack.addArrangedSubview(button)
-    }
-
-    addGroupSeparator()
-
-    undoButton = makeButton(icon: .undo, toolTip: "撤销 (⌘Z)", hoverTitle: "撤销")
-    undoButton.onClick = { [weak self] in self?.onAction?(.undo) }
-    redoButton = makeButton(icon: .redo, toolTip: "重做 (⇧⌘Z)", hoverTitle: "重做")
-    redoButton.onClick = { [weak self] in self?.onAction?(.redo) }
-    contentStack.addArrangedSubview(undoButton)
-    contentStack.addArrangedSubview(redoButton)
-
-    addGroupSeparator()
-
-    let saveButton = makeButton(icon: .save, toolTip: "保存 (⌘S)", hoverTitle: "保存")
-    saveButton.onClick = { [weak self] in self?.onAction?(.save) }
-    let copyButton = makeButton(icon: .copy, toolTip: "复制 (空格)", hoverTitle: "复制")
-    copyButton.onClick = { [weak self] in self?.onAction?(.copy) }
-    let scrollButton = makeButton(icon: .scrollCapture, toolTip: "滚动长截图 (S)", hoverTitle: "滚动截图")
-    scrollButton.onClick = { [weak self] in self?.onAction?(.scroll) }
-    let cancelButton = makeButton(icon: .cancel, toolTip: "取消 (Esc)", hoverTitle: "取消")
-    cancelButton.tone = .destructive
-    cancelButton.onClick = { [weak self] in self?.onAction?(.cancel) }
-    let completeButton = makeButton(icon: .complete, toolTip: "完成并复制 (Enter)", hoverTitle: "完成")
-    completeButton.tone = .confirm
-    completeButton.onClick = { [weak self] in self?.onAction?(.complete) }
-    contentStack.addArrangedSubview(saveButton)
-    contentStack.addArrangedSubview(copyButton)
-    contentStack.addArrangedSubview(scrollButton)
-    contentStack.addArrangedSubview(cancelButton)
-    contentStack.addArrangedSubview(completeButton)
-
-    contentView = contentStack
-  }
-
-  private func makeButton(icon: AnnotationIcon, toolTip: String, hoverTitle: String) -> AnnotationToolbarButton {
+  @discardableResult
+  private func add(_ icon: AnnotationIcon, title: String, help: String? = nil,
+                   action: AnnotationToolbarAction) -> AnnotationToolbarButton {
     let button = AnnotationToolbarButton(icon: icon)
-    button.toolTip = toolTip
-    button.onHoverChange = { [weak self, weak button] isHovering in
-      guard let self, let button else { return }
-      if isHovering {
-        self.showHoverTitle(hoverTitle, from: button)
-      } else {
-        self.hideHoverTitle(from: button)
-      }
-    }
-    NSLayoutConstraint.activate([
-      button.widthAnchor.constraint(equalToConstant: Self.buttonSize),
-      button.heightAnchor.constraint(equalToConstant: Self.buttonSize),
-    ])
+    button.toolTip = help ?? title
+    button.setAccessibilityLabel(title)
+    button.onClick = { [weak self] in self?.onAction?(action) }
+    stack.addArrangedSubview(button)
     return button
   }
 
-  private func showHoverTitle(_ title: String, from button: AnnotationToolbarButton) {
-    guard let host = superview else { return }
-    hoveredButton = button
-    hoverLabel.title = title
-    if hoverLabel.superview !== host {
-      hoverLabel.removeFromSuperview()
-      host.addSubview(hoverLabel, positioned: .above, relativeTo: self)
-    }
-    hoverLabel.isHidden = false
-    positionHoverLabel(for: button)
-  }
-
-  private func hideHoverTitle(from button: AnnotationToolbarButton) {
-    guard hoveredButton === button else { return }
-    dismissHoverTitle()
-  }
-
-  private func dismissHoverTitle() {
-    hoveredButton = nil
-    hoverLabel.isHidden = true
-  }
-
-  private func positionHoverLabel(for button: AnnotationToolbarButton) {
-    guard let host = superview, hoverLabel.superview === host else { return }
-    let anchor = button.convert(button.bounds, to: host)
-    let size = hoverLabel.intrinsicContentSize
-    let padding: CGFloat = 8
-    var origin = CGPoint(
-      x: anchor.midX - size.width / 2,
-      y: frame.maxY + 8
-    )
-    origin.x = min(max(origin.x, host.bounds.minX + padding), host.bounds.maxX - size.width - padding)
-    if origin.y + size.height > host.bounds.maxY - padding {
-      origin.y = frame.minY - size.height - 8
-    }
-    hoverLabel.frame = CGRect(origin: origin, size: size)
-  }
-
-  /// 组间细分隔线(工具|历史|动作),带 5pt 两侧留白。
-  private func addGroupSeparator() {
-    guard let previous = contentStack.arrangedSubviews.last else { return }
-    let separator = NSView()
+  private func separator() {
+    let separator = NSBox()
+    separator.boxType = .separator
     separator.translatesAutoresizingMaskIntoConstraints = false
-    separator.wantsLayer = true
-    separator.layer?.backgroundColor = NSColor.separatorColor.cgColor
     NSLayoutConstraint.activate([
-      separator.widthAnchor.constraint(equalToConstant: 1),
-      separator.heightAnchor.constraint(equalToConstant: 20),
+      separator.widthAnchor.constraint(equalToConstant: actionsOnly ? 20 : 1),
+      separator.heightAnchor.constraint(equalToConstant: actionsOnly ? 1 : 20)
     ])
-    contentStack.setCustomSpacing(6, after: previous)
-    contentStack.addArrangedSubview(separator)
-    contentStack.setCustomSpacing(6, after: separator)
+    stack.addArrangedSubview(separator)
   }
 }
 
-/// 36×36 的工具按钮:中央嵌一个固定 24×24 的图标视图。hover/pressed 只改圆角背景,
-/// 选中态用 controlAccentColor 实心底配白色图标;禁用态走 disabledControlTextColor。
-final class AnnotationToolbarButton: NSView {
-  enum Tone {
-    case standard
-    case destructive
-    case confirm
-  }
-
+/// Native NSButton provides tracking, accessibility and activation behavior.
+final class AnnotationToolbarButton: NSButton {
+  enum Tone { case standard, destructive, confirm }
   var onClick: (() -> Void)?
-  var onHoverChange: ((Bool) -> Void)?
-  var tone: Tone = .standard { didSet { refreshTint() } }
-  var isSelected = false {
-    didSet {
-      needsDisplay = true
-      refreshTint()
-    }
-  }
-  var isEnabled = true {
-    didSet {
-      if !isEnabled, isHovering {
-        isHovering = false
-        onHoverChange?(false)
-      }
-      needsDisplay = true
-      refreshTint()
-    }
-  }
-
-  private let iconView: AnnotationIconView
-  private var isHovering = false
-  private var isPressed = false
-  private var trackingArea: NSTrackingArea?
+  var tone: Tone = .standard { didSet { needsDisplay = true } }
+  var isSelected = false { didSet { needsDisplay = true } }
+  private var hovering = false
+  private var hoverArea: NSTrackingArea?
 
   init(icon: AnnotationIcon) {
-    iconView = AnnotationIconView(icon: icon)
-    super.init(frame: NSRect(x: 0, y: 0, width: 36, height: 36))
+    super.init(frame: NSRect(x: 0, y: 0, width: 32, height: 32))
     translatesAutoresizingMaskIntoConstraints = false
-    wantsLayer = true
-    iconView.translatesAutoresizingMaskIntoConstraints = false
-    addSubview(iconView)
+    isBordered = false
+    setButtonType(.momentaryPushIn)
+    imagePosition = .imageOnly
+    image = NSImage(systemSymbolName: icon.symbolName, accessibilityDescription: nil)?
+      .withSymbolConfiguration(.init(pointSize: 16, weight: .medium))
+    if icon == .text {
+      // The textformat symbol localizes to “格式” on Chinese systems.
+      image = nil
+      imagePosition = .noImage
+      title = "Aa"
+      font = .systemFont(ofSize: 16, weight: .medium)
+    }
+    target = self
+    action = #selector(invokeAction)
     NSLayoutConstraint.activate([
-      iconView.centerXAnchor.constraint(equalTo: centerXAnchor),
-      iconView.centerYAnchor.constraint(equalTo: centerYAnchor),
-      iconView.widthAnchor.constraint(equalToConstant: 24),
-      iconView.heightAnchor.constraint(equalToConstant: 24),
+      widthAnchor.constraint(equalToConstant: AnnotationToolbarView.buttonSize),
+      heightAnchor.constraint(equalToConstant: AnnotationToolbarView.buttonSize)
     ])
-    refreshTint()
   }
 
-  required init?(coder: NSCoder) {
-    fatalError("not implemented")
-  }
-
-  override var intrinsicContentSize: NSSize {
-    NSSize(width: AnnotationToolbarView.buttonSize, height: AnnotationToolbarView.buttonSize)
-  }
-
-  /// 与 iconView 同理:点到图标外的按钮边缘区会命中按钮自身,失活后(滚动截图取消回到
-  /// 框选)同样要放行首次点击,否则被系统吞去激活、要点两次。主因见 AnnotationIconView。
+  required init?(coder: NSCoder) { fatalError("not implemented") }
   override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+  override func resetCursorRects() { addCursorRect(bounds, cursor: .arrow) }
+  @objc private func invokeAction() {
+    var parent = superview
+    while let view = parent {
+      if let chrome = view as? ScreenshotChromeView { chrome.dismissHelp(); break }
+      parent = view.superview
+    }
+    onClick?()
+  }
 
   override func draw(_ dirtyRect: NSRect) {
-    let inset = bounds.insetBy(dx: 2, dy: 2)
-    let path = NSBezierPath(roundedRect: inset, xRadius: 9, yRadius: 9)
-    if isSelected {
-      NSColor.controlAccentColor.setFill()
-      path.fill()
-    } else if isEnabled && (isHovering || isPressed) {
-      NSColor.labelColor.withAlphaComponent(isPressed ? 0.18 : 0.1).setFill()
-      path.fill()
+    if isSelected || (isEnabled && (hovering || isHighlighted)) {
+      let color = isSelected ? ScreenshotChromeView.accent.withAlphaComponent(0.16)
+        : NSColor.white.withAlphaComponent(isHighlighted ? 0.15 : 0.08)
+      color.setFill()
+      NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1), xRadius: 7, yRadius: 7).fill()
     }
-  }
-
-  private func refreshTint() {
-    iconView.tint = resolvedTint
-  }
-
-  private var resolvedTint: NSColor {
-    if isSelected { return .white }
-    if !isEnabled { return .disabledControlTextColor }
-    switch tone {
-    case .standard: return .labelColor
-    case .destructive: return .systemRed
-    case .confirm: return .systemGreen
+    contentTintColor = !isEnabled ? NSColor.white.withAlphaComponent(0.25)
+      : isSelected || tone == .confirm ? ScreenshotChromeView.accent
+      : tone == .destructive ? NSColor(srgbRed: 1, green: 0.40, blue: 0.43, alpha: 1)
+      : NSColor.white.withAlphaComponent(0.9)
+    if imagePosition == .noImage {
+      let caption = NSAttributedString(string: title, attributes: [
+        .font: font ?? NSFont.systemFont(ofSize: 16),
+        .foregroundColor: contentTintColor ?? NSColor.white
+      ])
+      if !attributedTitle.isEqual(to: caption) { attributedTitle = caption }
     }
+    super.draw(dirtyRect)
   }
 
   override func updateTrackingAreas() {
     super.updateTrackingAreas()
-    if let trackingArea {
-      removeTrackingArea(trackingArea)
-    }
-    let area = NSTrackingArea(
-      rect: bounds,
-      options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
-      owner: self,
-      userInfo: nil
-    )
+    if let hoverArea { removeTrackingArea(hoverArea) }
+    let area = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+                             owner: self, userInfo: nil)
     addTrackingArea(area)
-    trackingArea = area
+    hoverArea = area
   }
-
-  override func mouseEntered(with event: NSEvent) {
-    guard isEnabled else { return }
-    isHovering = true
-    needsDisplay = true
-    onHoverChange?(true)
-  }
-
-  override func mouseExited(with event: NSEvent) {
-    isHovering = false
-    needsDisplay = true
-    onHoverChange?(false)
-  }
-
-  override func mouseDown(with event: NSEvent) {
-    guard isEnabled else { return }
-    isPressed = true
-    needsDisplay = true
-  }
-
-  override func mouseUp(with event: NSEvent) {
-    guard isEnabled else { return }
-    let wasPressed = isPressed
-    isPressed = false
-    needsDisplay = true
-    let point = convert(event.locationInWindow, from: nil)
-    if wasPressed && bounds.contains(point) {
-      onClick?()
-    }
-  }
-}
-
-/// 工具栏 hover 中文提示。作为工具栏的兄弟视图挂到覆盖层上,避免被玻璃背景裁剪;
-/// `hitTest` 返回 nil,不拦截下面按钮的点击或拖拽。
-private final class AnnotationToolbarHoverLabel: NSView {
-  var title = "" {
-    didSet {
-      invalidateIntrinsicContentSize()
-      needsDisplay = true
-    }
-  }
-
-  override init(frame frameRect: NSRect) {
-    super.init(frame: frameRect)
-    isHidden = true
-    wantsLayer = true
-  }
-
-  required init?(coder: NSCoder) {
-    fatalError("not implemented")
-  }
-
-  override var intrinsicContentSize: NSSize {
-    let size = (title as NSString).size(withAttributes: Self.textAttributes)
-    return NSSize(width: ceil(size.width) + 20, height: 24)
-  }
-
-  override func hitTest(_ point: NSPoint) -> NSView? { nil }
-
-  override func draw(_ dirtyRect: NSRect) {
-    let path = NSBezierPath(roundedRect: bounds, xRadius: 8, yRadius: 8)
-    NSColor.black.withAlphaComponent(0.78).setFill()
-    path.fill()
-
-    let textSize = (title as NSString).size(withAttributes: Self.textAttributes)
-    let textRect = NSRect(
-      x: (bounds.width - textSize.width) / 2,
-      y: (bounds.height - textSize.height) / 2,
-      width: textSize.width,
-      height: textSize.height
-    )
-    (title as NSString).draw(in: textRect, withAttributes: Self.textAttributes)
-  }
-
-  private static let textAttributes: [NSAttributedString.Key: Any] = [
-    .font: NSFont.systemFont(ofSize: 12, weight: .medium),
-    .foregroundColor: NSColor.white
-  ]
-}
-
-/// 固定 24×24 的图标视图:翻转坐标系以匹配 `AnnotationIconLibrary` 的 y-down 设计空间,
-/// 统一 2pt round cap/join 描边,颜色由按钮注入。
-final class AnnotationIconView: NSView {
-  var icon: AnnotationIcon { didSet { needsDisplay = true } }
-  var tint: NSColor = .labelColor { didSet { needsDisplay = true } }
-
-  init(icon: AnnotationIcon) {
-    self.icon = icon
-    super.init(frame: NSRect(x: 0, y: 0, width: 24, height: 24))
-  }
-
-  required init?(coder: NSCoder) {
-    fatalError("not implemented")
-  }
-
-  override var isFlipped: Bool { true }
-
-  /// 图标视图是按钮里最深的子视图,hitTest 命中的是它(不是按钮、也不是玻璃容器),AppKit 的
-  /// first-mouse 只问命中视图——它默认拒绝就会让"失活后首次点击"被系统吞去激活、不派发到按钮。
-  /// 这正是滚动截图取消回到框选后"标注栏要点两次"的根因。放行后 mouseDown 经响应链上传到按钮。
-  override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-
-  override var intrinsicContentSize: NSSize {
-    NSSize(width: 24, height: 24)
-  }
-
-  override func draw(_ dirtyRect: NSRect) {
-    guard let context = NSGraphicsContext.current?.cgContext else { return }
-    context.saveGState()
-    context.addPath(AnnotationIconLibrary.path(for: icon))
-    context.setStrokeColor(tint.cgColor)
-    context.setLineWidth(2)
-    context.setLineCap(.round)
-    context.setLineJoin(.round)
-    context.strokePath()
-    context.restoreGState()
-  }
+  override func mouseEntered(with event: NSEvent) { hovering = true; needsDisplay = true }
+  override func mouseExited(with event: NSEvent) { hovering = false; needsDisplay = true }
 }

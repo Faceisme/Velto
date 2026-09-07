@@ -2,7 +2,7 @@ import AppKit
 import VeltoAnnotationCore
 
 /// 会话内的确认动作:复制 / 保存 / 滚动长截图。
-enum ScreenshotSessionAction { case copy, save, scroll }
+enum ScreenshotSessionAction { case copy, save, scroll, editScrollResult }
 
 @MainActor
 protocol ScreenshotOverlayDelegate: AnyObject {
@@ -32,7 +32,7 @@ final class ScreenshotOverlayWindow: NSWindow {
     overlayView.snapshotImage = snap.image
     overlayView.globalFrame = snap.frame   // 本窗口在全局点坐标(左下原点)中的 frame,用于点↔全局换算
     overlayView.scale = snap.scale
-    overlayView.activeAppPID = activeAppPID
+    overlayView.initialAnnotationStyle = preferences.annotationStyle
     overlayView.delegate = delegate
     // 会话内按键 + 放大镜开关从偏好注入,保证框选/标注阶段与设置页一致。
     overlayView.showMagnifier = preferences.showMagnifier
@@ -54,6 +54,16 @@ final class ScreenshotOverlayWindow: NSWindow {
   }
 
   override var canBecomeKey: Bool { true }
+
+  override func performKeyEquivalent(with event: NSEvent) -> Bool {
+    // Save must work even while NSTextView owns first responder. Plain Space
+    // remains text input there; the canvas handles it after editing finishes.
+    if event.keyCode == overlayView.saveKeyCode,
+       ModifierFormatter.normalizedRawValue(from: event.modifierFlags) == overlayView.saveModifierFlags {
+      return overlayView.handleCaptureKey(event)
+    }
+    return super.performKeyEquivalent(with: event)
+  }
 
   /// 暴露内部覆盖层视图,供会话锁定活动屏与拆除标注 UI。
   var screenshotOverlayView: ScreenshotOverlayView { overlayView }

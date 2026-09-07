@@ -101,7 +101,7 @@ private final class EdgeHandleView: NSView {
       transform: nil
     )
     ctx.addPath(path)
-    ctx.setFillColor(NSColor.controlAccentColor.cgColor)
+    ctx.setFillColor(ScreenshotChromeView.accent.cgColor)
     ctx.fillPath()
 
     ctx.setStrokeColor(NSColor.white.cgColor)

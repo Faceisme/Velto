@@ -3,7 +3,7 @@ import VeltoAnnotationCore
 
 /// 跟随当前工具变化的属性条。每个工具只暴露自己相关的控件,改动即时回调
 /// `onStyleChange`,由覆盖层把新样式写回编辑器。crop 工具只读显示选区尺寸。
-final class AnnotationPropertyBarView: NSGlassEffectView {
+final class AnnotationPropertyBarView: ScreenshotChromeView {
   static let barHeight: CGFloat = 34
 
   var onStyleChange: ((AnnotationStyle) -> Void)?
@@ -47,8 +47,7 @@ final class AnnotationPropertyBarView: NSGlassEffectView {
 
   override init(frame frameRect: NSRect) {
     super.init(frame: frameRect)
-    style = .regular
-    cornerRadius = 16
+    cornerRadius = 10
     wantsLayer = true
     layer?.masksToBounds = true
 
@@ -57,8 +56,10 @@ final class AnnotationPropertyBarView: NSGlassEffectView {
     contentStack.distribution = .fill
     contentStack.spacing = 8
     contentStack.edgeInsets = NSEdgeInsets(top: 5, left: 10, bottom: 5, right: 10)
-    contentView = contentStack
+    addSubview(contentStack)
   }
+
+  override func layout() { super.layout(); contentStack.frame = bounds }
 
   required init?(coder: NSCoder) {
     fatalError("not implemented")
@@ -90,6 +91,7 @@ final class AnnotationPropertyBarView: NSGlassEffectView {
   // MARK: - Build
 
   private func rebuild(for tool: AnnotationTool?) {
+    dismissHelp()
     clearControls()
     for view in contentStack.arrangedSubviews {
       contentStack.removeArrangedSubview(view)
@@ -142,7 +144,8 @@ final class AnnotationPropertyBarView: NSGlassEffectView {
     // 快捷色板:一键换常用色,免开调色板。
     for preset in Self.presetColors {
       let swatch = AnnotationSwatchButton(color: preset.color)
-      swatch.toolTip = preset.name
+      swatch.toolTip = "\(preset.name)色：设置标注颜色"
+      swatch.setAccessibilityLabel("\(preset.name)色")
       swatch.onClick = { [weak self] in self?.swatchPicked(preset.color) }
       swatchButtons.append(swatch)
       contentStack.addArrangedSubview(swatch)
@@ -151,7 +154,8 @@ final class AnnotationPropertyBarView: NSGlassEffectView {
 
     let well = NSColorWell(style: .minimal)
     well.color = currentStyle.strokeColor.nsColor
-    well.toolTip = "自定义颜色"
+    well.toolTip = "自定义颜色：打开调色板选择其他颜色"
+    well.setAccessibilityLabel("自定义颜色")
     well.target = self
     well.action = #selector(controlsChanged)
     NSLayoutConstraint.activate([
@@ -164,6 +168,7 @@ final class AnnotationPropertyBarView: NSGlassEffectView {
   }
 
   private func swatchPicked(_ color: AnnotationColor) {
+    dismissHelp()
     currentStyle.strokeColor = color
     currentStyle.fillColor = color
     colorWell?.color = color.nsColor
@@ -180,7 +185,8 @@ final class AnnotationPropertyBarView: NSGlassEffectView {
   private func addLineWidth() {
     let control = makeSegmented(
       images: Self.lineWidths.map { Self.dotImage(diameter: 3 + $0 * 1.6) },
-      selected: nearestIndex(of: currentStyle.lineWidth, in: Self.lineWidths)
+      selected: nearestIndex(of: currentStyle.lineWidth, in: Self.lineWidths),
+      help: Self.lineWidths.map { "线宽：\(Int($0))，调整线条粗细" }
     )
     control.toolTip = "线宽"
     lineWidthControl = control
@@ -190,6 +196,8 @@ final class AnnotationPropertyBarView: NSGlassEffectView {
   private func addFillOpacity() {
     contentStack.addArrangedSubview(makeLabel("填充"))
     let slider = makeSlider(value: Double(currentStyle.fillOpacity))
+    slider.toolTip = "填充透明度：最左为无填充，越向右越不透明"
+    slider.setAccessibilityLabel("填充透明度")
     fillOpacitySlider = slider
     contentStack.addArrangedSubview(slider)
   }
@@ -197,8 +205,10 @@ final class AnnotationPropertyBarView: NSGlassEffectView {
   private func addMosaic() {
     let control = makeSegmented(
       labels: Self.mosaicSizes.map { "\($0)" },
-      selected: nearestIndex(of: CGFloat(currentStyle.mosaicBlockSize), in: Self.mosaicSizes.map(CGFloat.init))
+      selected: nearestIndex(of: CGFloat(currentStyle.mosaicBlockSize), in: Self.mosaicSizes.map(CGFloat.init)),
+      help: Self.mosaicSizes.map { "马赛克块大小：\($0)，数字越大块越粗" }
     )
+    control.toolTip = "马赛克块大小"
     mosaicControl = control
     contentStack.addArrangedSubview(control)
   }
@@ -206,8 +216,10 @@ final class AnnotationPropertyBarView: NSGlassEffectView {
   private func addFontSize() {
     let control = makeSegmented(
       labels: Self.fontSizes.map { "\(Int($0))" },
-      selected: nearestIndex(of: currentStyle.fontSize, in: Self.fontSizes)
+      selected: nearestIndex(of: currentStyle.fontSize, in: Self.fontSizes),
+      help: Self.fontSizes.map { "字号：\(Int($0))，数字越大文字越大" }
     )
+    control.toolTip = "字号"
     fontSizeControl = control
     contentStack.addArrangedSubview(control)
   }
@@ -217,6 +229,8 @@ final class AnnotationPropertyBarView: NSGlassEffectView {
     button.setButtonType(.pushOnPushOff)
     button.bezelStyle = .rounded
     button.font = .boldSystemFont(ofSize: 13)
+    button.toolTip = "粗体：开启或关闭文字加粗"
+    button.setAccessibilityLabel("粗体")
     button.state = currentStyle.isBold ? .on : .off
     NSLayoutConstraint.activate([
       button.widthAnchor.constraint(equalToConstant: 30),
@@ -232,7 +246,8 @@ final class AnnotationPropertyBarView: NSGlassEffectView {
     }
     let control = makeSegmented(
       images: images,
-      selected: Self.alignments.firstIndex(of: currentStyle.textAlignment) ?? 0
+      selected: Self.alignments.firstIndex(of: currentStyle.textAlignment) ?? 0,
+      help: ["左对齐：文字靠文本框左边排列", "居中：文字在文本框内居中排列", "右对齐：文字靠文本框右边排列"]
     )
     control.toolTip = "对齐"
     alignmentControl = control
@@ -242,7 +257,8 @@ final class AnnotationPropertyBarView: NSGlassEffectView {
   private func addHighlightWidth() {
     let control = makeSegmented(
       images: Self.highlightWidths.map { Self.dotImage(diameter: 2 + $0 * 0.75) },
-      selected: nearestIndex(of: currentStyle.lineWidth, in: Self.highlightWidths)
+      selected: nearestIndex(of: currentStyle.lineWidth, in: Self.highlightWidths),
+      help: Self.highlightWidths.map { "高亮笔宽：\(Int($0))，调整笔触粗细" }
     )
     control.toolTip = "笔宽"
     highlightWidthControl = control
@@ -252,6 +268,8 @@ final class AnnotationPropertyBarView: NSGlassEffectView {
   private func addHighlightOpacity() {
     contentStack.addArrangedSubview(makeLabel("浓度"))
     let slider = makeSlider(value: Double(currentStyle.highlightOpacity))
+    slider.toolTip = "高亮浓度：越向右颜色越浓，越向左越透明"
+    slider.setAccessibilityLabel("高亮浓度")
     highlightOpacitySlider = slider
     contentStack.addArrangedSubview(slider)
   }
@@ -259,14 +277,17 @@ final class AnnotationPropertyBarView: NSGlassEffectView {
   private func addSequenceDiameter() {
     let control = makeSegmented(
       labels: Self.sequenceDiameters.map { "\(Int($0))" },
-      selected: nearestIndex(of: currentStyle.sequenceDiameter, in: Self.sequenceDiameters)
+      selected: nearestIndex(of: currentStyle.sequenceDiameter, in: Self.sequenceDiameters),
+      help: Self.sequenceDiameters.map { "序号大小：\(Int($0))，调整数字圆圈的直径" }
     )
+    control.toolTip = "序号大小"
     sequenceDiameterControl = control
     contentStack.addArrangedSubview(control)
   }
 
   private func addCropReadout() {
     let label = makeLabel(cropText())
+    label.toolTip = "裁剪尺寸：拖动选择要保留的区域，复制或保存时生效"
     label.font = .systemFont(ofSize: 13, weight: .medium)
     cropLabel = label
     contentStack.addArrangedSubview(label)
@@ -283,7 +304,7 @@ final class AnnotationPropertyBarView: NSGlassEffectView {
 
   // MARK: - Control factories
 
-  private func makeSegmented(labels: [String], selected: Int) -> NSSegmentedControl {
+  private func makeSegmented(labels: [String], selected: Int, help: [String]) -> NSSegmentedControl {
     let control = NSSegmentedControl(
       labels: labels,
       trackingMode: .selectOne,
@@ -291,11 +312,13 @@ final class AnnotationPropertyBarView: NSGlassEffectView {
       action: #selector(controlsChanged)
     )
     control.segmentStyle = .rounded
+    control.segmentDistribution = .fillEqually
+    for (index, text) in help.enumerated() { control.setToolTip(text, forSegment: index) }
     control.selectedSegment = max(0, min(selected, labels.count - 1))
     return control
   }
 
-  private func makeSegmented(images: [NSImage], selected: Int) -> NSSegmentedControl {
+  private func makeSegmented(images: [NSImage], selected: Int, help: [String]) -> NSSegmentedControl {
     let control = NSSegmentedControl(
       images: images,
       trackingMode: .selectOne,
@@ -303,6 +326,8 @@ final class AnnotationPropertyBarView: NSGlassEffectView {
       action: #selector(controlsChanged)
     )
     control.segmentStyle = .rounded
+    control.segmentDistribution = .fillEqually
+    for (index, text) in help.enumerated() { control.setToolTip(text, forSegment: index) }
     control.selectedSegment = max(0, min(selected, images.count - 1))
     return control
   }
@@ -356,6 +381,7 @@ final class AnnotationPropertyBarView: NSGlassEffectView {
   // MARK: - Action
 
   @objc private func controlsChanged() {
+    dismissHelp()
     var style = currentStyle
     if let colorWell, let resolved = AnnotationColor(resolving: colorWell.color) {
       style.strokeColor = resolved

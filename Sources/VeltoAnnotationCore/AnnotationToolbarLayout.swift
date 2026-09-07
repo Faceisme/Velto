@@ -15,6 +15,29 @@ public struct AnnotationToolbarPlacement: Equatable, Sendable {
 /// and flip above when the stack would not fit; the horizontal position is centered
 /// on the selection and clamped into the screen without shrinking the controls.
 public enum AnnotationToolbarLayout {
+  /// Primary tools and output actions stay separate, as in CapCap. Try the
+  /// selection's sides first and avoid covering the editing/property rows.
+  public static func sideFrame(selection: CGRect, screenBounds: CGRect, size: CGSize,
+                               avoiding: [CGRect], gap: CGFloat = 8) -> CGRect {
+    let safe = screenBounds.insetBy(dx: gap, dy: gap)
+    func clamped(_ origin: CGPoint) -> CGRect {
+      CGRect(x: min(max(origin.x, safe.minX), max(safe.minX, safe.maxX - size.width)),
+             y: min(max(origin.y, safe.minY), max(safe.minY, safe.maxY - size.height)),
+             width: size.width, height: size.height)
+    }
+    let candidates = [
+      CGPoint(x: selection.maxX + gap, y: selection.minY),
+      CGPoint(x: selection.minX - gap - size.width, y: selection.minY),
+      CGPoint(x: selection.maxX + gap, y: selection.maxY - size.height),
+      CGPoint(x: selection.minX - gap - size.width, y: selection.maxY - size.height),
+      CGPoint(x: safe.maxX - size.width, y: safe.maxY - size.height),
+      CGPoint(x: safe.minX, y: safe.maxY - size.height)
+    ].map(clamped)
+    return candidates.first { frame in
+      !avoiding.contains { $0.insetBy(dx: -4, dy: -4).intersects(frame) }
+    } ?? candidates[0]
+  }
+
   public static func place(
     selection: CGRect,
     screenBounds: CGRect,

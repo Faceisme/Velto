@@ -16,12 +16,13 @@ final class ScreenshotSession: ScreenshotOverlayDelegate {
   private var scrollHUD: ScrollCaptureHUD?
   private var scrollActionBar: ScrollCaptureActionBar?
   private var scrollEdgeHandle: ScrollCaptureEdgeHandle?
-  private var scrollController: ScrollCaptureController?
+  var scrollController: ScrollCaptureController?
   private var scrollStartTask: Task<Void, Never>?
   private var scrollExtendTask: Task<Void, Never>?
-  /// 本次滚动捕获中底边扩展过:Esc 退回选区编辑时需按新几何重建标注画布。
-  private var scrollRegionExtended = false
+  private var scrollFinishTask: Task<Void, Never>?
+  private var hasFinished = false
   /// 输出失败后保留已定稿长图,让用户可直接重试复制/保存。
+  private var editedImage: CGImage?
   private var scrollFinalImage: CGImage?
   private var scrollRegion: CGRect?
   private var scrollSnapshot: DisplaySnapshot?
@@ -38,11 +39,13 @@ final class ScreenshotSession: ScreenshotOverlayDelegate {
   func start() {
     // present 内部 NSApp.activate() 会抢前台,先记下原前台 app 以便结束时还原。
     previousApp = NSWorkspace.shared.frontmostApplication
-    // 触发瞬间的前台 app = 用户眼中的"活动窗口"所属 app;窗口自动识别据此只认它的窗口。
+    // 保留触发前的目标 app,滚动时恢复其前台状态。
     let activeAppPID = previousApp?.processIdentifier ?? 0
+    let windowCandidates = WindowFrameDetector.snapshot()
     ScreenshotHotCornerGuard.shared.activate(displayIDs: snapshots.map(\.displayID))
     windows = ScreenshotOverlayWindow.present(
       for: snapshots, delegate: self, activeAppPID: activeAppPID, preferences: preferences)
+    windows.forEach { $0.screenshotOverlayView.windowCandidates = windowCandidates }
     ScreenshotDebugLog.log("session start: presented \(windows.count) overlay window(s), "
       + "previousApp=\(previousApp?.bundleIdentifier ?? "nil") activeAppPID=\(activeAppPID) "
       + "overlayWindowNumbers=\(windows.map { $0.windowNumber })")
@@ -80,19 +83,21 @@ final class ScreenshotSession: ScreenshotOverlayDelegate {
       + "\(Int(globalRect.minX)),\(Int(globalRect.minY)) \(Int(globalRect.width))x\(Int(globalRect.height)) "
       + "annotations=\(document?.elements.count ?? 0)")
     switch action {
+    case .editScrollResult: return
     case .scroll:
       beginScrollCapture(globalRect: globalRect)
       return
     case .copy, .save:
       guard let snap = snapshots.first(where: { $0.frame.intersects(globalRect) }),
-            let base = ScreenshotCapturer.crop(snap, toPointRect: globalRect) else {
+            let base = editedImage ?? ScreenshotCapturer.crop(snap, toPointRect: globalRect) else {
         presentOutputFailure("无法裁剪选区", screenFrame: nil, near: globalRect)
         return
       }
-      // 有标注:用与编辑预览同一台渲染器合成,保证导出像素 == 屏上所见;无标注直接用裁剪原图。
+      // 同一渲染器处理标注和裁剪;空元素列表也可能有有效裁剪。
       let image: CGImage
-      if let document, !document.elements.isEmpty {
-        switch AnnotationRenderer.render(baseImage: base, document: document, scale: snap.scale) {
+      if let document {
+        switch AnnotationRenderer.render(baseImage: base, document: document,
+          scale: CGFloat(base.width) / document.canvasSize.width) {
         case .success(let composited):
           image = composited
         case .failure(let error):
@@ -113,7 +118,7 @@ final class ScreenshotSession: ScreenshotOverlayDelegate {
           format: preferences.imageFormat,
           alsoCopy: preferences.saveAlsoCopiesToClipboard
         ).map { _ in () }
-      case .scroll:
+      case .scroll, .editScrollResult:
         return  // 不可达:scroll 已在上面分支处理。
       }
       switch outcome {
@@ -142,28 +147,24 @@ final class ScreenshotSession: ScreenshotOverlayDelegate {
     scrollRegion = globalRect
     scrollSnapshot = snapshot
     scrollFinalImage = nil
-    scrollRegionExtended = false
     scrollActivity = ProcessInfo.processInfo.beginActivity(
       options: [.userInitiated, .latencyCritical],
       reason: "滚动长截图捕获")
 
-    // 捕获期间让覆盖层透传输入、隐藏标注 UI,由用户直接操作下面的目标窗口。
+    // 覆盖层透传;会话级 tap 只允许选区内的竖向滚动及截图控件操作。
     overlayWindow.ignoresMouseEvents = true
     overlay.scrollCaptureActive = true
     overlay.setAnnotationUIHidden(true)
 
-    let hud = ScrollCaptureHUD(onScreen: snapshot.frame)
+    let hud = ScrollCaptureHUD(onScreen: snapshot.frame, selection: globalRect)
     hud.configureShortcuts(using: preferences)
-    hud.onCopy = { [weak self] in self?.finishScrollCapture(.copy) }
-    hud.onSave = { [weak self] in self?.finishScrollCapture(.save) }
-    hud.onCancel = { [weak self] in self?.cancelScrollCapture() }
     hud.orderFrontRegardless()
     hud.update(thumbnail: nil, heightPx: 0,
-               hint: "请手动向下滚动,滚到底可下拽底边手柄补内容\nEnter 完成 · 保存 · Esc 取消")
+               hint: "正在准备稳定首帧,请稍候…")
     scrollHUD = hud
 
     let actionBar = ScrollCaptureActionBar(selectionRect: globalRect, screenFrame: snapshot.frame)
-    actionBar.onFinish = { [weak self] in self?.finishScrollCapture(.copy) }
+    actionBar.onFinish = { [weak self] in self?.finishScrollCapture(.editScrollResult) }
     actionBar.onCopy = { [weak self] in self?.finishScrollCapture(.copy) }
     actionBar.onSave = { [weak self] in self?.finishScrollCapture(.save) }
     actionBar.onCancel = { [weak self] in self?.cancelScrollCapture() }
@@ -177,6 +178,7 @@ final class ScreenshotSession: ScreenshotOverlayDelegate {
       self.activeOverlay?.setSelectionGlobalRect(CGRect(
         x: region.minX, y: region.minY - delta,
         width: region.width, height: region.height + delta))
+      self.updateScrollInputLock()
     }
     edgeHandle.onCommit = { [weak self] delta in
       self?.commitScrollRegionExtension(byPoints: delta)
@@ -191,25 +193,33 @@ final class ScreenshotSession: ScreenshotOverlayDelegate {
       self.scrollHUD?.update(
         thumbnail: thumbnail,
         heightPx: height,
-        hint: "请手动向下滚动 · \(height)px  Enter 完成 · 保存 · Esc 取消"
+        hint: self.scrollHint(for: controller)
       )
     }
+    controller.onIssue = { [weak self, weak controller] _ in
+      guard let self, let controller, self.scrollController === controller else { return }
+      self.scrollHUD?.update(thumbnail: nil, heightPx: Int(controller.stitchedPixelSize.height),
+                            hint: self.scrollHint(for: controller))
+      self.updateScrollInputLock()
+    }
 
-    let keyTap = ScrollCaptureKeyTap(preferences: preferences)
+    let keyTap = ScrollCaptureKeyTap(preferences: preferences, captureRect: scrollEventRect(globalRect))
     keyTap.onCopy = { [weak self] in self?.finishScrollCapture(.copy) }     // Enter/空格/双击 = 完成
     keyTap.onSave = { [weak self] in self?.finishScrollCapture(.save) }     // ⌘S = 保存
-    keyTap.onCancel = { [weak self] in self?.cancelScrollCapture() }        // Esc = 退回选区
-    keyTap.onExit = { [weak self] in self?.exitScrollSession() }            // 右键 = 退出整个截图
+    keyTap.onCancel = { [weak self] in self?.cancelScrollCapture() }        // Esc = 结束整个截图
+    keyTap.onExit = { [weak self] in self?.cancelScrollCapture() }            // 右键 = 退出整个截图
     keyTap.onScrollActivity = { [weak controller] in controller?.noteManualScroll() }
     scrollKeyTap = keyTap
+    updateScrollInputLock()
     if keyTap.start() {
       previousApp?.activate(from: .current)
       ScreenshotDebugLog.log("滚动截图快捷键接管成功:已激活目标 App")
     } else {
-      scrollKeyTap = nil
-      ScreenshotDebugLog.log("滚动截图快捷键接管失败:退化为 HUD 键盘输入")
+      ScreenshotDebugLog.log("滚动截图输入锁定失败,结束会话")
       NSSound.beep()
-      hud.makeKey()
+      cancelScrollCapture()
+      showFailureToast("无法锁定滚动输入,请检查辅助功能权限", near: globalRect, within: snapshot.frame)
+      return
     }
 
     ScreenshotDebugLog.log("滚动截图开始(手动滚动): displayID=\(snapshot.displayID) region="
@@ -231,7 +241,32 @@ final class ScreenshotSession: ScreenshotOverlayDelegate {
         self.cancelScrollCapture()
         return
       }
-      ScreenshotDebugLog.log("滚动截图控制器已启动: source=SCScreenshotManager core=macshot manual=true")
+      self.updateScrollInputLock()
+      self.scrollHUD?.update(thumbnail: nil, heightPx: Int(controller.stitchedPixelSize.height),
+                            hint: self.scrollHint(for: controller))
+      ScreenshotDebugLog.log("滚动截图控制器已启动: source=SCScreenshotManager core=pixel-overlap manual=true")
+    }
+  }
+
+  private func scrollEventRect(_ rect: CGRect) -> CGRect {
+    ScrollCaptureKeyTap.eventRect(from: rect, primaryScreenHeight: NSScreen.screens.first?.frame.height ?? 0)
+  }
+
+  private func updateScrollInputLock() {
+    guard let region = scrollRegion else { return }
+    scrollKeyTap?.update(captureRect: scrollEventRect(region),
+      controlRects: [scrollActionBar?.frame, scrollEdgeHandle?.frame, scrollHUD?.frame].compactMap { $0 }.map(scrollEventRect),
+      allowsScrolling: scrollController?.isActive == true && scrollStartTask == nil
+        && scrollExtendTask == nil && scrollFinishTask == nil && scrollFinalImage == nil
+        && scrollController?.issue != .limit)
+  }
+
+  private func scrollHint(for controller: ScrollCaptureController) -> String {
+    switch controller.issue {
+    case .alignment: return "未接上,可向上回滚后继续\n完成将输出预览中已接好的内容"
+    case .capture: return "画面尚未稳定,可停稳后继续\n完成将输出预览中已接好的内容"
+    case .limit: return "已达长图大小上限,可完成或保存"
+    case nil: return "范围已锁定,仅可上下滚动\n\(scrollHUD?.configuredHint ?? "空格复制 · Esc 取消")"
     }
   }
 
@@ -243,6 +278,7 @@ final class ScreenshotSession: ScreenshotOverlayDelegate {
           let snapshot = scrollSnapshot,
           scrollFinalImage == nil,
           scrollExtendTask == nil,
+          scrollFinishTask == nil,
           delta >= 1 else {
       if let region = scrollRegion {
         activeOverlay?.setSelectionGlobalRect(region)
@@ -251,7 +287,10 @@ final class ScreenshotSession: ScreenshotOverlayDelegate {
       return
     }
     scrollExtendTask = Task { @MainActor [weak self, weak controller] in
-      defer { self?.scrollExtendTask = nil }
+      defer {
+        self?.scrollExtendTask = nil
+        self?.updateScrollInputLock()
+      }
       guard let controller else { return }
       let extended = await controller.extendBottom(byPoints: delta)
       guard let self, self.scrollController === controller else { return }
@@ -261,7 +300,6 @@ final class ScreenshotSession: ScreenshotOverlayDelegate {
         : region
       if extended {
         self.scrollRegion = newRegion
-        self.scrollRegionExtended = true
         self.scrollActionBar?.reposition(selectionRect: newRegion, screenFrame: snapshot.frame)
         ScreenshotDebugLog.log("滚动截图:底边扩展 +\(Int(delta))pt region="
           + "\(Int(newRegion.minX)),\(Int(newRegion.minY)) "
@@ -273,18 +311,33 @@ final class ScreenshotSession: ScreenshotOverlayDelegate {
       self.activeOverlay?.setSelectionGlobalRect(newRegion)
       self.scrollEdgeHandle?.position(selectionRect: newRegion)
     }
+    updateScrollInputLock()
   }
 
-  private func finishScrollCapture(_ action: ScreenshotSessionAction) {
+  func finishScrollCapture(_ action: ScreenshotSessionAction) {
+    guard scrollFinishTask == nil else { return }
+    scrollFinishTask = Task { @MainActor [weak self] in
+      guard let self else { return }
+      defer {
+        self.scrollFinishTask = nil
+        self.updateScrollInputLock()
+      }
+      await self.scrollStartTask?.value
+      await self.scrollExtendTask?.value
+      guard !Task.isCancelled else { return }
+      await self.finalizeScrollCapture(action)
+    }
+    updateScrollInputLock()
+  }
+
+  private func finalizeScrollCapture(_ action: ScreenshotSessionAction) async {
     ScreenshotDebugLog.log("滚动截图:完成键 action=\(action)")
     let image: CGImage?
     if let scrollFinalImage {
       image = scrollFinalImage
     } else if let controller = scrollController {
-      scrollStartTask?.cancel()
-      scrollStartTask = nil
-      scrollController = nil
-      image = controller.stopSession()
+      image = await controller.finishSession()
+      guard !Task.isCancelled, self.scrollController === controller else { return }
       scrollFinalImage = image
     } else {
       image = nil
@@ -292,7 +345,18 @@ final class ScreenshotSession: ScreenshotOverlayDelegate {
     guard let image else {
       ScreenshotDebugLog.log("滚动截图完成失败:没有可输出的长图")
       NSSound.beep()
-      cancelScrollCapture()
+      if let controller = scrollController {
+        scrollHUD?.update(thumbnail: nil, heightPx: Int(controller.stitchedPixelSize.height),
+                          hint: scrollHint(for: controller))
+      }
+      return
+    }
+    if action == .editScrollResult {
+      editedImage = image
+      teardownScrollUI()
+      activeOverlay?.presentImageForEditing(image)
+      NSApp.activate()
+      activeOverlay?.window?.makeKeyAndOrderFront(nil)
       return
     }
     let outcome: Result<Void, ScreenshotWriteError>
@@ -306,14 +370,13 @@ final class ScreenshotSession: ScreenshotOverlayDelegate {
         format: preferences.imageFormat,
         alsoCopy: preferences.saveAlsoCopiesToClipboard
       ).map { _ in () }
-    case .scroll:
+    case .scroll, .editScrollResult:
       return
     }
     switch outcome {
     case .success:
       ScreenshotDebugLog.log("滚动截图输出成功: action=\(action) image="
         + "\(image.width)x\(image.height)")
-      teardownScrollUI()
       teardown()
     case .failure(let error):
       ScreenshotDebugLog.log("滚动截图输出失败: action=\(action) error=\(describe(error))")
@@ -321,27 +384,10 @@ final class ScreenshotSession: ScreenshotOverlayDelegate {
     }
   }
 
-  /// 右键退出:丢弃长截图,直接结束整个截图会话(不回退到选区)。
-  private func exitScrollSession() {
-    ScreenshotDebugLog.log("滚动截图:右键退出整个会话")
+  /// Esc、取消按钮和右键都结束整个截图会话。
+  func cancelScrollCapture() {
+    ScreenshotDebugLog.log("滚动截图取消:结束整个会话")
     teardown()
-  }
-
-  private func cancelScrollCapture() {
-    let regionWasExtended = scrollRegionExtended
-    teardownScrollUI()
-    NSApp.activate()
-    if let overlay = activeOverlay, let overlayWindow = overlay.window {
-      overlayWindow.ignoresMouseEvents = false
-      overlay.scrollCaptureActive = false
-      overlay.setAnnotationUIHidden(false)
-      overlayWindow.orderFrontRegardless()
-      overlayWindow.makeKey()
-      // 底边扩展过:选区几何已变,按新选区重建标注画布(重新裁切冻结底图)。
-      if regionWasExtended { overlay.remountAnnotationUIAfterGeometryChange() }
-      overlay.needsDisplay = true
-    }
-    ScreenshotDebugLog.log("滚动截图取消:已返回选区编辑")
   }
 
   private func teardownScrollUI() {
@@ -349,15 +395,14 @@ final class ScreenshotSession: ScreenshotOverlayDelegate {
     scrollStartTask = nil
     scrollExtendTask?.cancel()
     scrollExtendTask = nil
+    scrollFinishTask?.cancel()
+    scrollFinishTask = nil
     scrollController?.cancelSession()
     scrollController = nil
     scrollFinalImage = nil
     scrollKeyTap?.stop()
     scrollKeyTap = nil
     scrollHUD?.orderOut(nil)
-    scrollHUD?.onCopy = nil
-    scrollHUD?.onSave = nil
-    scrollHUD?.onCancel = nil
     scrollHUD = nil
     scrollActionBar?.orderOut(nil)
     scrollActionBar?.onFinish = nil
@@ -371,7 +416,6 @@ final class ScreenshotSession: ScreenshotOverlayDelegate {
     scrollEdgeHandle = nil
     scrollSnapshot = nil
     scrollRegion = nil
-    scrollRegionExtended = false
     activeOverlay?.window?.ignoresMouseEvents = false
     activeOverlay?.scrollCaptureActive = false
     if let scrollActivity {
@@ -452,6 +496,9 @@ final class ScreenshotSession: ScreenshotOverlayDelegate {
   }
 
   private func teardown() {
+    guard !hasFinished else { return }
+    hasFinished = true
+    editedImage = nil
     teardownScrollUI()
     failureToast?.orderOut(nil)
     failureToast = nil

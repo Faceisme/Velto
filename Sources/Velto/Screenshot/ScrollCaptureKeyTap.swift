@@ -1,8 +1,15 @@
 import Cocoa
+import Synchronization
 @preconcurrency import CoreFoundation
 
 /// 滚动截图期间全局接管完成快捷键,目标 App 保持前台时仍可结束会话。
 final class ScrollCaptureKeyTap: @unchecked Sendable {
+  static let active = Mutex<ScrollCaptureKeyTap?>(nil)
+  static var current: ScrollCaptureKeyTap? { active.withLock { $0 } }
+  static var isCapturing: Bool { current != nil }
+  static func eventRect(from rect: CGRect, primaryScreenHeight: CGFloat) -> CGRect {
+    CGRect(x: rect.minX, y: primaryScreenHeight - rect.maxY, width: rect.width, height: rect.height)
+  }
   private enum Action: Sendable { case copy, save, cancel, exit, scroll }
 
   var onCopy: (() -> Void)?
@@ -18,6 +25,14 @@ final class ScrollCaptureKeyTap: @unchecked Sendable {
   private let saveModifierFlags: UInt64
 
   private let lifecycleLock = NSLock()
+  /// 坐标使用 CGEvent 的主屏左上原点,由主线程在选区/手柄变化时更新。
+  private var captureRect: CGRect
+  private var controlRects: [CGRect] = []
+  private var allowsScrolling = false
+  private var draggingControl = false
+  private var verticalGesture = false
+  private var callbackGeneration = 0
+  private var hasStopped = false
   private var tap: CFMachPort?
   private var runLoopSource: CFRunLoopSource?
   private var tapRunLoop: CFRunLoop?
@@ -25,13 +40,28 @@ final class ScrollCaptureKeyTap: @unchecked Sendable {
   private weak var tapThread: Thread?
   private var threadStopped: DispatchSemaphore?
 
-  init(preferences: ScreenshotPreferences) {
+  init(preferences: ScreenshotPreferences, captureRect: CGRect) {
+    self.captureRect = captureRect
     copyKeyCode = preferences.copyKeyCode
     cancelKeyCode = preferences.cancelKeyCode
     saveKeyCode = preferences.saveShortcut.keyCode
     saveModifierFlags = ModifierFormatter.normalizedRawValue(
       from: CGEventFlags(rawValue: preferences.saveShortcut.modifierFlags)
     )
+  }
+
+  func update(captureRect: CGRect, controlRects: [CGRect], allowsScrolling: Bool) {
+    lifecycleLock.lock()
+    self.captureRect = captureRect
+    self.controlRects = controlRects
+    self.allowsScrolling = allowsScrolling
+    lifecycleLock.unlock()
+  }
+
+  var scrollInputEnabled: Bool {
+    lifecycleLock.lock()
+    defer { lifecycleLock.unlock() }
+    return allowsScrolling && !draggingControl
   }
 
   /// 创建会话级 event tap。失败通常表示辅助功能权限或系统资源不可用。
@@ -42,14 +72,14 @@ final class ScrollCaptureKeyTap: @unchecked Sendable {
     guard !alreadyStarted else { return true }
 
     // 监听完成快捷键、鼠标完成/退出,并观察滚轮活动以便只在滚动静止后接纳稳定帧。
-    let mask = CGEventMask(
-      (1 << CGEventType.keyDown.rawValue)
-        | (1 << CGEventType.leftMouseDown.rawValue)
-        | (1 << CGEventType.rightMouseDown.rawValue)
-        | (1 << CGEventType.scrollWheel.rawValue))
+    let types: [CGEventType] = [.keyDown, .keyUp, .scrollWheel,
+      .leftMouseDown, .leftMouseDragged, .leftMouseUp,
+      .rightMouseDown, .rightMouseDragged, .rightMouseUp,
+      .otherMouseDown, .otherMouseDragged, .otherMouseUp]
+    let mask = types.reduce(CGEventMask(0)) { $0 | (CGEventMask(1) << $1.rawValue) }
     let refcon = Unmanaged.passUnretained(self).toOpaque()
     guard let tap = CGEvent.tapCreate(
-      tap: .cgSessionEventTap,
+      tap: .cghidEventTap,
       place: .headInsertEventTap,
       options: .defaultTap,
       eventsOfInterest: mask,
@@ -86,6 +116,7 @@ final class ScrollCaptureKeyTap: @unchecked Sendable {
     thread.qualityOfService = .userInteractive
 
     lifecycleLock.lock()
+    hasStopped = false
     self.tap = tap
     runLoopSource = source
     tapThread = thread
@@ -102,6 +133,7 @@ final class ScrollCaptureKeyTap: @unchecked Sendable {
       return false
     }
     CGEvent.tapEnable(tap: tap, enable: true)
+    Self.active.withLock { $0 = self }
     return true
   }
 
@@ -113,6 +145,11 @@ final class ScrollCaptureKeyTap: @unchecked Sendable {
     let runLoop = tapRunLoop
     let thread = tapThread
     let stopped = threadStopped
+    callbackGeneration &+= 1
+    hasStopped = true
+    allowsScrolling = false
+    draggingControl = false
+    verticalGesture = false
     self.tap = nil
     runLoopSource = nil
     tapRunLoop = nil
@@ -120,6 +157,7 @@ final class ScrollCaptureKeyTap: @unchecked Sendable {
     threadStopped = nil
     lifecycleLock.unlock()
 
+    Self.active.withLock { if $0 === self { $0 = nil } }
     if let tap {
       CGEvent.tapEnable(tap: tap, enable: false)
       CFMachPortInvalidate(tap)
@@ -159,7 +197,7 @@ final class ScrollCaptureKeyTap: @unchecked Sendable {
     return keyTap.handle(type: type, event: event)
   }
 
-  private func handle(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
+  func handle(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
     if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
       lifecycleLock.lock()
       let tap = tap
@@ -167,7 +205,34 @@ final class ScrollCaptureKeyTap: @unchecked Sendable {
       if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
       return Unmanaged.passUnretained(event)
     }
+    lifecycleLock.lock()
+    defer { lifecycleLock.unlock() }
+    guard !hasStopped else { return nil }
     if type == .scrollWheel {
+      // The preview owns its own scrolling; it never drives the page or capture activity.
+      if controlRects.contains(where: { $0.contains(event.location) }) {
+        return Unmanaged.passUnretained(event)
+      }
+      let allowed = allowsScrolling && !draggingControl && captureRect.contains(event.location)
+        && !controlRects.contains(where: { $0.contains(event.location) })
+      guard allowed else { return nil }
+      // 三套单位必须一起清除,否则触控板精细滚动和惯性仍会横移。
+      for field in [CGEventField.scrollWheelEventDeltaAxis2, .scrollWheelEventPointDeltaAxis2,
+                    .scrollWheelEventFixedPtDeltaAxis2, .scrollWheelEventDeltaAxis3,
+                    .scrollWheelEventPointDeltaAxis3, .scrollWheelEventFixedPtDeltaAxis3] {
+        event.setDoubleValueField(field, value: 0)
+      }
+      // Shift+滚轮在浏览器里会再次映射为横向;其余修饰组合可能触发缩放。
+      event.flags.remove(.maskShift)
+      guard ModifierFormatter.normalizedRawValue(from: event.flags) == 0 else { return nil }
+      let hasVertical = [CGEventField.scrollWheelEventDeltaAxis1, .scrollWheelEventPointDeltaAxis1,
+                         .scrollWheelEventFixedPtDeltaAxis1].contains {
+        event.getDoubleValueField($0) != 0
+      }
+      let hasPhase = event.getIntegerValueField(.scrollWheelEventScrollPhase) != 0
+        || event.getIntegerValueField(.scrollWheelEventMomentumPhase) != 0
+      guard hasVertical || (verticalGesture && hasPhase) else { return nil }
+      verticalGesture = hasVertical
       dispatchToMain(.scroll)
       return Unmanaged.passUnretained(event)
     }
@@ -177,18 +242,36 @@ final class ScrollCaptureKeyTap: @unchecked Sendable {
       return nil
     }
     if type == .leftMouseDown {
-      // 双击:完成长截图;单击/拖拽放行(供拖目标窗口滚动条等)。
+      draggingControl = controlRects.contains { $0.contains(event.location) }
+      if draggingControl { return Unmanaged.passUnretained(event) }
+      // 目标页面不接受点击/拖拽,防止链接跳转、窗口移动或横向滚动条拖动。
       if event.getIntegerValueField(.mouseEventClickState) >= 2 {
         dispatchToMain(.copy)
         return nil
       }
-      return Unmanaged.passUnretained(event)
+      return nil
     }
-    guard type == .keyDown else { return Unmanaged.passUnretained(event) }
+    if type == .leftMouseDragged || type == .leftMouseUp {
+      let allowed = draggingControl
+      if type == .leftMouseUp { draggingControl = false }
+      return allowed ? Unmanaged.passUnretained(event) : nil
+    }
+    if [.rightMouseUp, .rightMouseDragged, .otherMouseDown, .otherMouseUp, .otherMouseDragged].contains(type) {
+      return nil
+    }
+    guard type == .keyDown || type == .keyUp else { return Unmanaged.passUnretained(event) }
 
     let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
     let modifiers = ModifierFormatter.normalizedRawValue(from: event.flags)
     let isAutorepeat = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
+    // 键盘只放行无修饰的上下箭头。左右/Home/End/翻页和编辑键都会改变捕获内容。
+    if modifiers == 0, keyCode == 125 || keyCode == 126 {
+      let allowed = allowsScrolling && captureRect.contains(event.location)
+      guard allowed else { return nil }
+      if type == .keyDown { dispatchToMain(.scroll) }
+      return Unmanaged.passUnretained(event)
+    }
+    guard type == .keyDown else { return nil }
     let action: Action
     if keyCode == saveKeyCode, modifiers == saveModifierFlags {
       action = .save
@@ -197,7 +280,7 @@ final class ScrollCaptureKeyTap: @unchecked Sendable {
     } else if modifiers == 0, keyCode == cancelKeyCode {
       action = .cancel
     } else {
-      return Unmanaged.passUnretained(event)
+      return nil
     }
     if !isAutorepeat {
       dispatchToMain(action)
@@ -205,14 +288,21 @@ final class ScrollCaptureKeyTap: @unchecked Sendable {
     return nil
   }
 
+  // 调用方持有 lifecycleLock;stop 使已入队的旧会话动作失效。
   private func dispatchToMain(_ action: Action) {
+    let generation = callbackGeneration
     DispatchQueue.main.async { [weak self] in
+      guard let self else { return }
+      self.lifecycleLock.lock()
+      let running = self.callbackGeneration == generation
+      self.lifecycleLock.unlock()
+      guard running else { return }
       switch action {
-      case .copy: self?.onCopy?()
-      case .save: self?.onSave?()
-      case .cancel: self?.onCancel?()
-      case .exit: self?.onExit?()
-      case .scroll: self?.onScrollActivity?()
+      case .copy: self.onCopy?()
+      case .save: self.onSave?()
+      case .cancel: self.onCancel?()
+      case .exit: self.onExit?()
+      case .scroll: self.onScrollActivity?()
       }
     }
   }

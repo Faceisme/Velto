@@ -16,6 +16,7 @@ final class AnnotationCanvasView: NSView {
 
   var onDocumentChange: ((AnnotationDocument) -> Void)?
   var onRequestCancelSession: (() -> Void)?
+  var onCaptureKey: ((NSEvent) -> Bool)?
   /// 选择模式下双击空白请求完成截图(复制并退出),与 Xnip 一致。
   var onRequestComplete: (() -> Void)?
   /// 通知覆盖层开始原位文字编辑:frame 为标注坐标矩形,existing 为双击重开的对象。
@@ -161,6 +162,7 @@ final class AnnotationCanvasView: NSView {
   // MARK: - Keyboard
 
   override func keyDown(with event: NSEvent) {
+    if onCaptureKey?(event) == true { return }
     let flags = event.modifierFlags
 
     if flags.contains(.command), event.charactersIgnoringModifiers?.lowercased() == "z" {
@@ -175,8 +177,8 @@ final class AnnotationCanvasView: NSView {
     switch event.keyCode {
     case 51, 117: // delete / forward delete
       applyChange { $0.deleteSelection() }
-    case 53: // escape
-      cancelLayer()
+    case 53: // escape always closes the capture session
+      onRequestCancelSession?()
     case 123: // left
       nudge(dx: -1, dy: 0, accelerated: flags.contains(.shift))
     case 124: // right

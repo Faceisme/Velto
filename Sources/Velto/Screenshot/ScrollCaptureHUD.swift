@@ -1,122 +1,81 @@
 import AppKit
 
-/// 滚动捕获浮窗:展示长图缩略与提示;作为 key 窗口接收完成、保存和取消操作。
-/// 滚轮事件落在光标下的窗口,因此浮窗接键盘不会影响用户滚动目标 App。
+/// A readable, fixed-width preview, following CapCap's scrolling preview.
+/// Long images retain their width; the viewport follows newly appended rows.
 @MainActor
-final class ScrollCaptureHUD: NSWindow {
-  var onCopy: (() -> Void)?
-  var onSave: (() -> Void)?
-  var onCancel: (() -> Void)?
-
+final class ScrollCaptureHUD: NSPanel {
   private let imageView = NSImageView()
-  private let hintLabel = NSTextField(labelWithString: "")
-  private var copyKeyCode = ScreenshotPreferences.defaults.copyKeyCode
-  private var cancelKeyCode = ScreenshotPreferences.defaults.cancelKeyCode
-  private var saveShortcut = ScreenshotPreferences.defaults.saveShortcut
+  private let preview = NSScrollView()
+  private let hintLabel = NSTextField(wrappingLabelWithString: "")
+  private let heightLabel = NSTextField(labelWithString: "准备中")
+  private var preferences = ScreenshotPreferences.defaults
 
-  init(onScreen screenFrame: CGRect) {
-    let size = NSSize(width: 240, height: 340)
-    let origin = NSPoint(
-      x: screenFrame.maxX - size.width - 24,
-      y: screenFrame.minY + 24
-    )
-    super.init(
-      contentRect: CGRect(origin: origin, size: size),
-      styleMask: [.borderless],
-      backing: .buffered,
-      defer: false
-    )
+  init(onScreen screenFrame: CGRect, selection: CGRect? = nil) {
+    let size = NSSize(width: 224, height: 350)
+    let selection = selection ?? screenFrame
+    var x = selection.maxX + 60
+    if x + size.width > screenFrame.maxX - 12 { x = selection.minX - size.width - 60 }
+    x = max(screenFrame.minX + 12, min(x, screenFrame.maxX - size.width - 12))
+    let y = max(screenFrame.minY + 12, min(selection.maxY - size.height, screenFrame.maxY - size.height - 12))
+    super.init(contentRect: CGRect(origin: CGPoint(x: x, y: y), size: size),
+               styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
     isOpaque = false
     backgroundColor = .clear
     level = .screenSaver
     hasShadow = true
+    hidesOnDeactivate = false
     animationBehavior = .none
-    ignoresMouseEvents = true
     collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]
-    setupContent(size: size)
-    configureShortcuts(using: GestureStore.shared.preferences.screenshot)
-  }
 
-  override var canBecomeKey: Bool { true }
+    let content = ScreenshotChromeView(frame: CGRect(origin: .zero, size: size))
+    let title = NSTextField(labelWithString: "长截图")
+    title.font = .systemFont(ofSize: 12, weight: .semibold)
+    title.textColor = .white
+    title.frame = CGRect(x: 12, y: 320, width: 90, height: 18)
+    content.addSubview(title)
+    heightLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+    heightLabel.textColor = ScreenshotChromeView.accent
+    heightLabel.alignment = .right
+    heightLabel.frame = CGRect(x: 102, y: 320, width: 110, height: 18)
+    content.addSubview(heightLabel)
 
-  private func setupContent(size: NSSize) {
-    let content = NSView(frame: CGRect(origin: .zero, size: size))
+    preview.frame = CGRect(x: 12, y: 76, width: 200, height: 234)
+    preview.hasVerticalScroller = true
+    preview.autohidesScrollers = true
+    preview.drawsBackground = true
+    preview.backgroundColor = NSColor(white: 0.06, alpha: 1)
+    preview.documentView = imageView
+    imageView.imageScaling = .scaleAxesIndependently
+    content.addSubview(preview)
 
-    imageView.frame = CGRect(
-      x: 12,
-      y: 60,
-      width: size.width - 24,
-      height: size.height - 72
-    )
-    imageView.imageScaling = .scaleProportionallyUpOrDown
-    imageView.wantsLayer = true
-    imageView.layer?.cornerRadius = 8
-    imageView.layer?.masksToBounds = true
-    content.addSubview(imageView)
-
-    hintLabel.frame = CGRect(x: 12, y: 8, width: size.width - 24, height: 44)
-    hintLabel.font = .systemFont(ofSize: 11, weight: .medium)
-    hintLabel.textColor = .labelColor   // 自适应明暗,保证液态玻璃上可读
-    hintLabel.alignment = .center
-    hintLabel.maximumNumberOfLines = 3
-    hintLabel.lineBreakMode = .byWordWrapping
-    hintLabel.stringValue = configuredHint
+    hintLabel.frame = CGRect(x: 12, y: 12, width: 200, height: 54)
+    hintLabel.font = .systemFont(ofSize: 11)
+    hintLabel.textColor = NSColor.white.withAlphaComponent(0.65)
+    hintLabel.maximumNumberOfLines = 4
     content.addSubview(hintLabel)
-
-    // 统一液态玻璃特效(与标注工具栏一致),取代原黑色背景。
-    let glass = NSGlassEffectView(frame: CGRect(origin: .zero, size: size))
-    glass.cornerRadius = 18
-    glass.contentView = content
-    contentView = glass
+    contentView = content
   }
 
-  /// 复用本次截图会话的快捷键配置,并同步更新浮窗提示。
+  override var canBecomeKey: Bool { false }
   func configureShortcuts(using preferences: ScreenshotPreferences) {
-    copyKeyCode = preferences.copyKeyCode
-    cancelKeyCode = preferences.cancelKeyCode
-    saveShortcut = preferences.saveShortcut
+    self.preferences = preferences
     hintLabel.stringValue = configuredHint
   }
 
   func update(thumbnail: CGImage?, heightPx: Int, hint: String?) {
+    heightLabel.stringValue = heightPx > 0 ? "\(heightPx) px" : "准备中"
     if let thumbnail {
-      imageView.image = NSImage(cgImage: thumbnail, size: .zero)
+      let followTail = preview.contentView.bounds.minY <= 8
+      let height = 200 * CGFloat(thumbnail.height) / CGFloat(thumbnail.width)
+      imageView.frame = CGRect(x: 0, y: 0, width: 200, height: height)
+      imageView.image = NSImage(cgImage: thumbnail, size: imageView.frame.size)
+      if followTail { preview.contentView.scroll(to: .zero) }
+      preview.reflectScrolledClipView(preview.contentView)
     }
     hintLabel.stringValue = hint ?? configuredHint
   }
 
-  override func keyDown(with event: NSEvent) {
-    let normalizedModifiers = ModifierFormatter.normalizedRawValue(from: event.modifierFlags)
-    if event.keyCode == saveShortcut.keyCode,
-       normalizedModifiers == saveShortcut.modifierFlags {
-      onSave?()
-    } else if normalizedModifiers == 0, event.keyCode == copyKeyCode {
-      onCopy?()
-    } else if normalizedModifiers == 0, event.keyCode == cancelKeyCode {
-      onCancel?()
-    } else if normalizedModifiers == 0, event.keyCode == 36 {
-      onCopy?()
-    } else {
-      super.keyDown(with: event)
-    }
-  }
-
-  private var configuredHint: String {
-    let copyName = Self.keyName(for: copyKeyCode)
-    let finishKeys = copyKeyCode == 36 ? "Enter" : "Enter/\(copyName)"
-    return "匀速向下滚动目标窗口\n"
-      + "\(finishKeys) 完成 · \(saveShortcut.displayName) 保存 · "
-      + "\(Self.keyName(for: cancelKeyCode)) 取消"
-  }
-
-  private static func keyName(for keyCode: UInt16) -> String {
-    switch keyCode {
-    case 36: return "Enter"
-    case 48: return "Tab"
-    case 49: return "空格"
-    case 51: return "删除"
-    case 53: return "Esc"
-    default: return "keyCode \(keyCode)"
-    }
+  var configuredHint: String {
+    "完成后编辑 · 空格复制\n\(preferences.saveShortcut.displayName) 保存 · Esc 取消"
   }
 }

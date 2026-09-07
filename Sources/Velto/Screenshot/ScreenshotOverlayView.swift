@@ -8,7 +8,7 @@ import VeltoAnnotationCore
 final class ScreenshotOverlayView: NSView {
   weak var delegate: ScreenshotOverlayDelegate?
   var snapshotImage: CGImage? { didSet { needsDisplay = true } }
-  var dimAlpha: CGFloat = 0.35
+  var dimAlpha: CGFloat = 0.45
 
   /// 取色放大镜开关(由偏好驱动,默认开)。
   var showMagnifier: Bool = true
@@ -16,8 +16,7 @@ final class ScreenshotOverlayView: NSView {
   var globalFrame: CGRect = .zero
   /// 快照像素相对点的缩放(backingScaleFactor)。
   var scale: CGFloat = 2.0
-  /// 触发截图时的前台 app PID:窗口自动识别只认它的窗口,忽略后台窗口(0=未知,退化为光标下窗口)。
-  var activeAppPID: pid_t = 0
+  var initialAnnotationStyle: AnnotationStyle = .defaults
 
   /// 会话内按键(由偏好注入,替代写死的 keyCode);与滚动阶段的 keytap/HUD 用同一份配置,
   /// 保证用户自定义的保存快捷键在框选/标注阶段同样生效。saveModifierFlags 已是归一化值。
@@ -53,13 +52,16 @@ final class ScreenshotOverlayView: NSView {
   /// 选区一旦激活就置 true:此后不再画自带选区 chrome / 放大镜,交给画布与工具栏。
   private var hasActivated = false
   private var canvasView: AnnotationCanvasView?
+  private var imageScrollView: NSScrollView?
+  private var editingImage: CGImage?
   private var toolbar: AnnotationToolbarView?
+  private var actionToolbar: AnnotationToolbarView?
   private var propertyBar: AnnotationPropertyBarView?
   private var textEditor: AnnotationTextEditor?
 
   /// 还没画任何标注前,选区仍可用手柄缩放并重建画布。
   private var canEditSelectionGeometry: Bool {
-    !hasActivated || (canvasView?.editor.document.elements.isEmpty ?? true)
+    editingImage == nil && (!hasActivated || (canvasView?.editor.document.elements.isEmpty ?? true))
   }
 
   /// 缩放/平移选区是否可用:还没画标注、且当前没有激活的标注工具(处于选择/移动模式)。
@@ -81,12 +83,12 @@ final class ScreenshotOverlayView: NSView {
   private var selection: CGRect?
   /// 拖拽起点 / 移动锚点(视图局部点)。
   private var dragOrigin: CGPoint = .zero
+  private var dragOriginalSelection: CGRect = .zero
+  var windowCandidates: [[String: Any]] = []
   /// 悬停窗口高亮区域(视图局部点坐标)。
   private var hoverWindowRectLocal: CGRect?
   /// 最近一次鼠标位置(视图局部点),供放大镜定位。
   private var lastMouseLocal: CGPoint?
-  /// 选窗高亮的窗口列表查询较重,用时间戳限频。
-  private var lastHoverQueryTime: TimeInterval = 0
 
   private let handleSize: CGFloat = 8
   /// 命中手柄的判定半径放大,便于点中。
@@ -180,6 +182,9 @@ final class ScreenshotOverlayView: NSView {
     let p = ScreenshotGeometry.snapPointToBoundsEdges(
       convert(event.locationInWindow, from: nil), bounds: bounds)
     lastMouseLocal = p
+    if selection == nil { updateWindowHover(at: p) }
+    dragOriginalSelection = selection ?? .zero
+    dragOrigin = p
 
     // 选区成形且未开始标注:双击选区内部 = 完成并复制(与画布选择模式一致)。
     if event.clickCount == 2, let s = selection, s.contains(p), canAdjustSelectionGeometry {
@@ -198,10 +203,14 @@ final class ScreenshotOverlayView: NSView {
       beginGeometryEdit()
       mode = .moving
       dragOrigin = p
-    } else if hasActivated {
-      // 选区已锁定:画布外的点击(压暗区/手柄)不再新建或移动选区。
+    } else if hasActivated && !canEditSelectionGeometry {
       return
     } else {
+      // 没有标注时,在选区外重新拖拽即可重新框选。
+      if hasActivated {
+        tearDownAnnotationUI()
+        hasActivated = false
+      }
       dragOrigin = p
       selection = CGRect(origin: p, size: .zero)
       mode = .dragging
@@ -221,19 +230,11 @@ final class ScreenshotOverlayView: NSView {
       selection = ScreenshotGeometry.clamp(
         ScreenshotGeometry.normalizedRect(from: dragOrigin, to: p), to: bounds)
     case .dragHandle(let h):
-      if let s = selection {
-        selection = ScreenshotGeometry.clamp(
-          ScreenshotGeometry.resized(s, handle: h, to: p), to: bounds)
-      }
+      selection = ScreenshotGeometry.clamp(
+        ScreenshotGeometry.resized(dragOriginalSelection, handle: h, to: p), to: bounds)
     case .moving:
-      if let s = selection {
-        selection = ScreenshotGeometry.moved(
-          s,
-          by: CGPoint(x: p.x - dragOrigin.x, y: p.y - dragOrigin.y),
-          within: bounds
-        )
-        dragOrigin = p
-      }
+      selection = ScreenshotGeometry.moved(dragOriginalSelection,
+        by: CGPoint(x: p.x - dragOrigin.x, y: p.y - dragOrigin.y), within: bounds)
     case .idle:
       return
     }
@@ -256,7 +257,7 @@ final class ScreenshotOverlayView: NSView {
       }
     }
     // 单击未拖(尺寸≈0)且有悬停窗口 → 采纳整窗为选区。
-    if case .dragging = mode, let s = selection, s.width < 3, s.height < 3, let w = hoverWindowRectLocal {
+    if case .dragging = mode, let s = selection, s.width < 4, s.height < 4, let w = hoverWindowRectLocal {
       selection = ScreenshotGeometry.clamp(w, to: bounds)
       hoverWindowRectLocal = nil
       ScreenshotDebugLog.log("window-snap adopted localRect="
@@ -307,53 +308,32 @@ final class ScreenshotOverlayView: NSView {
       }
       return
     }
-    // 窗口列表查询较重,限频 ~20Hz;两次查询之间沿用上次高亮结果。
-    let now = ProcessInfo.processInfo.systemUptime
-    if now - lastHoverQueryTime >= 0.05 {
-      lastHoverQueryTime = now
-      let topLeft = appKitGlobalToTopLeft(localToAppKitGlobal(local))
-      // 仅排除本截图覆盖层窗口,保留对 Velto 其它普通窗口(如设置窗)的识别能力。
-      let excluded = Set([window?.windowNumber].compactMap { $0 })
-      if ScreenshotDebugLog.isEnabled {
-        let primaryHeight = NSScreen.screens.first?.frame.height ?? bounds.height
-        ScreenshotDebugLog.log(
-          "[hover] local=\(Int(local.x)),\(Int(local.y)) globalFrame=\(Int(globalFrame.minX)),\(Int(globalFrame.minY)) "
-          + "primaryH=\(Int(primaryHeight)) excluded=\(excluded.sorted()) topLeft=\(Int(topLeft.x)),\(Int(topLeft.y))\n"
-          + WindowFrameDetector.diagnostics(
-            atGlobalPoint: topLeft, excludingWindowNumbers: excluded, activeAppPID: activeAppPID))
-      }
-      let previousHover = hoverWindowRectLocal
-      if let g = WindowFrameDetector.windowFrame(
-        atGlobalPoint: topLeft,
-        excludingWindowNumbers: excluded,
-        activeAppPID: activeAppPID
-      ) {
-        hoverWindowRectLocal = appKitGlobalRectToLocal(topLeftRectToAppKitGlobal(g))
-      } else {
-        hoverWindowRectLocal = nil
-      }
-      if previousHover != hoverWindowRectLocal {
-        if let previousHover { setNeedsDisplay(previousHover.insetBy(dx: -4, dy: -4)) }
-        if let hover = hoverWindowRectLocal { setNeedsDisplay(hover.insetBy(dx: -4, dy: -4)) }
-      }
-    }
+    updateWindowHover(at: local)
   }
 
-  // MARK: - 脏矩形
-
-  /// 放大镜(方框 + 下方信息标签)以光标为中心的保守外包区域。
-  private func magnifierInvalidRect(around p: CGPoint) -> CGRect {
-    CGRect(x: p.x - 160, y: p.y - 168, width: 320, height: 336)
+  private func updateWindowHover(at point: CGPoint) {
+    let previous = hoverWindowRectLocal
+    let topLeft = appKitGlobalToTopLeft(localToAppKitGlobal(point))
+    hoverWindowRectLocal = WindowFrameDetector.hitWindowBounds(in: windowCandidates,
+      atGlobalPoint: topLeft, excludingWindowNumbers: [], activeAppPID: 0)
+      .map { appKitGlobalRectToLocal(topLeftRectToAppKitGlobal($0)) }
+    if let previous { setNeedsDisplay(selectionInvalidRect(previous)) }
+    if let hoverWindowRectLocal { setNeedsDisplay(selectionInvalidRect(hoverWindowRectLocal)) }
   }
 
-  /// 选区 chrome(3pt 边框、手柄、上/下方的尺寸标签)的保守外包区域。
-  private func selectionInvalidRect(_ s: CGRect) -> CGRect {
-    s.insetBy(dx: -110, dy: -42)
+  private func magnifierInvalidRect(around point: CGPoint) -> CGRect {
+    CGRect(x: point.x - 160, y: point.y - 168, width: 320, height: 336)
   }
 
-  // MARK: - 键盘
+  private func selectionInvalidRect(_ rect: CGRect) -> CGRect {
+    rect.insetBy(dx: -110, dy: -42)
+  }
 
   override func keyDown(with event: NSEvent) {
+    if !handleCaptureKey(event) { super.keyDown(with: event) }
+  }
+
+  func handleCaptureKey(_ event: NSEvent) -> Bool {
     let keyCode = event.keyCode
     let modifiers = ModifierFormatter.normalizedRawValue(from: event.modifierFlags)
     // 保存键带修饰,先于无修饰的复制/滚动判断,避免 ⌘S 被当成 S(滚动)。
@@ -368,12 +348,24 @@ final class ScreenshotOverlayView: NSView {
     } else if modifiers == 0, keyCode == scrollKeyCode {
       confirm(.scroll)                                // 滚动长截图(默认 S)
     } else {
-      super.keyDown(with: event)
+      return false
     }
+    return true
   }
 
   private func confirm(_ action: ScreenshotSessionAction) {
-    guard let g = currentSelectionGlobal, g.width > 1, g.height > 1 else { return }
+    textEditor?.commit()
+    if action == .scroll && (editingImage != nil || canvasView?.editor.document.elements.isEmpty == false) {
+      NSSound.beep()
+      return
+    }
+    guard var g = currentSelectionGlobal, g.width > 1, g.height > 1 else { return }
+    if action == .scroll, let crop = canvasView?.editor.document.cropRect {
+      // A crop made before capture defines the live region as well as exports.
+      g = CGRect(x: g.minX + crop.minX, y: g.maxY - crop.maxY,
+                 width: crop.width, height: crop.height)
+      setSelectionGlobalRect(g)
+    }
     delegate?.overlayDidRequest(action, globalRect: g, document: canvasView?.editor.document)
   }
 
@@ -434,13 +426,13 @@ final class ScreenshotOverlayView: NSView {
   }
 
   private func drawSelectionBorder(_ s: CGRect, ctx: CGContext) {
-    ctx.setStrokeColor(NSColor.controlAccentColor.cgColor)
-    ctx.setLineWidth(3)
-    ctx.stroke(s.insetBy(dx: 1.5, dy: 1.5))
+    ctx.setStrokeColor(ScreenshotChromeView.accent.cgColor)
+    ctx.setLineWidth(1.5)
+    ctx.stroke(s.insetBy(dx: 0.75, dy: 0.75))
   }
 
   private func drawHoverBorder(_ r: CGRect, ctx: CGContext) {
-    ctx.setStrokeColor(NSColor.controlAccentColor.withAlphaComponent(0.9).cgColor)
+    ctx.setStrokeColor(ScreenshotChromeView.accent.cgColor)
     ctx.setLineWidth(2)
     ctx.stroke(r.insetBy(dx: 1, dy: 1))
   }
@@ -448,7 +440,7 @@ final class ScreenshotOverlayView: NSView {
   private func drawHandles(for s: CGRect, ctx: CGContext) {
     let rects = ScreenshotGeometry.handleRects(for: s, handleSize: handleSize)
     ctx.setFillColor(NSColor.white.cgColor)
-    ctx.setStrokeColor(NSColor.controlAccentColor.cgColor)
+    ctx.setStrokeColor(ScreenshotChromeView.accent.cgColor)
     ctx.setLineWidth(1.5)
     for handle in ScreenshotHandle.allCases {
       guard let r = rects[handle] else { continue }
@@ -655,15 +647,16 @@ final class ScreenshotOverlayView: NSView {
 
   private func mountAnnotationUI(selection s: CGRect) {
     tearDownAnnotationUI()
-    guard let snapshot = snapshotImage,
-          let baseImage = croppedSelectionImage(snapshot: snapshot, selection: s) else {
+    guard let baseImage = editingImage ?? snapshotImage.flatMap({ croppedSelectionImage(snapshot: $0, selection: s) }) else {
       return
     }
 
-    let editor = AnnotationEditor(canvasSize: s.size)
+    let imageSize = CGSize(width: CGFloat(baseImage.width) / scale, height: CGFloat(baseImage.height) / scale)
+    let editor = AnnotationEditor(canvasSize: editingImage == nil ? s.size : imageSize, style: initialAnnotationStyle)
     let canvas = AnnotationCanvasView(editor: editor, baseImage: baseImage, scale: scale)
     canvas.frame = s
     canvas.onDocumentChange = { [weak self] _ in self?.syncAnnotationChrome() }
+    canvas.onCaptureKey = { [weak self] event in self?.handleCaptureKey(event) ?? false }
     canvas.onRequestCancelSession = { [weak self] in self?.delegate?.overlayDidCancel() }
     canvas.onRequestComplete = { [weak self] in self?.confirm(.copy) }
     canvas.onBeginTextEditing = { [weak self] frame, existing in
@@ -671,13 +664,36 @@ final class ScreenshotOverlayView: NSView {
     }
     canvas.onRequestCancelTextEditing = { [weak self] in self?.cancelActiveTextEditing() ?? false }
     canvas.isTextEditing = { [weak self] in self?.textEditor != nil }
-    addSubview(canvas)
+    if editingImage != nil {
+      let scroll = NSScrollView(frame: s)
+      scroll.hasVerticalScroller = true
+      scroll.hasHorizontalScroller = true
+      scroll.autohidesScrollers = true
+      scroll.drawsBackground = true
+      scroll.backgroundColor = NSColor(white: 0.12, alpha: 1)
+      scroll.allowsMagnification = true
+      scroll.minMagnification = 0.1
+      scroll.maxMagnification = 4
+      canvas.frame = CGRect(origin: .zero, size: imageSize)
+      scroll.documentView = canvas
+      addSubview(scroll)
+      scroll.magnification = min(1, s.width / imageSize.width)
+      scroll.contentView.scroll(to: CGPoint(x: 0, y: max(0, imageSize.height - scroll.contentView.bounds.height)))
+      scroll.reflectScrolledClipView(scroll.contentView)
+      imageScrollView = scroll
+    } else {
+      addSubview(canvas)
+    }
     canvasView = canvas
 
     let bar = AnnotationToolbarView(frame: .zero)
     bar.onAction = { [weak self] action in self?.handleToolbarAction(action) }
     addSubview(bar)
     toolbar = bar
+    let actions = AnnotationToolbarView(frame: .zero, actionsOnly: true)
+    actions.onAction = { [weak self] action in self?.handleToolbarAction(action) }
+    addSubview(actions)
+    actionToolbar = actions
 
     let property = AnnotationPropertyBarView(frame: .zero)
     property.onStyleChange = { [weak self] style in self?.applyAnnotationStyle(style) }
@@ -690,6 +706,21 @@ final class ScreenshotOverlayView: NSView {
     window?.invalidateCursorRects(for: bar)
     window?.invalidateCursorRects(for: property)
     window?.makeFirstResponder(canvas)
+  }
+
+  /// Long captures enter the same editor in a scrollable viewport. Annotation
+  /// coordinates still describe the full-resolution image, never its preview.
+  func presentImageForEditing(_ image: CGImage) {
+    editingImage = image
+    scrollCaptureActive = false
+    hasActivated = true
+    let width = min(CGFloat(image.width) / scale, bounds.width - 160)
+    let height = min(CGFloat(image.height) / scale, bounds.height - 180)
+    let rect = CGRect(x: bounds.midX - width / 2, y: bounds.midY - height / 2 + 20,
+                      width: width, height: height)
+    selection = rect
+    mountAnnotationUI(selection: rect)
+    needsDisplay = true
   }
 
   /// 选区(视图局部、左下原点)→ 快照像素图(左上原点),作为画布底图。
@@ -705,7 +736,7 @@ final class ScreenshotOverlayView: NSView {
   }
 
   private func layoutAnnotationBars() {
-    guard let s = selection, let toolbar, let propertyBar else { return }
+    guard let s = selection, let toolbar, let propertyBar, let actionToolbar else { return }
     let placement = AnnotationToolbarLayout.place(
       selection: s,
       screenBounds: bounds,
@@ -713,6 +744,8 @@ final class ScreenshotOverlayView: NSView {
       propertySize: propertyBar.barSize
     )
     toolbar.frame = placement.mainFrame
+    actionToolbar.frame = AnnotationToolbarLayout.sideFrame(selection: s, screenBounds: bounds,
+      size: actionToolbar.barSize, avoiding: [placement.mainFrame, placement.propertyFrame])
     propertyBar.frame = placement.propertyFrame
     propertyBar.isHidden = (canvasView?.editor.document.activeTool == nil)
   }
@@ -730,6 +763,7 @@ final class ScreenshotOverlayView: NSView {
       style: editor.style,
       cropRect: editor.document.cropRect
     )
+    actionToolbar?.setScrollEnabled(editingImage == nil && editor.document.elements.isEmpty)
     layoutAnnotationBars()
   }
 
@@ -786,6 +820,7 @@ final class ScreenshotOverlayView: NSView {
       self?.window?.makeFirstResponder(canvas)
       self?.syncAnnotationChrome()
     }
+    editor.onCancelSession = { [weak self] in self?.delegate?.overlayDidCancel() }
     editor.onCancel = { [weak self, weak canvas] in
       canvas?.cancelTextEditing()
       self?.textEditor = nil
@@ -801,6 +836,7 @@ final class ScreenshotOverlayView: NSView {
   /// 工具栏在透传后又点不动。隐藏后露出底下真实滚动内容;取消滚动时再恢复。
   func setAnnotationUIHidden(_ hidden: Bool) {
     canvasView?.isHidden = hidden
+    actionToolbar?.isHidden = hidden
     toolbar?.isHidden = hidden
     if hidden {
       propertyBar?.isHidden = true
@@ -812,8 +848,13 @@ final class ScreenshotOverlayView: NSView {
   func tearDownAnnotationUI() {
     textEditor?.cancel()
     textEditor = nil
+    imageScrollView?.documentView = nil
+    imageScrollView?.removeFromSuperview()
+    imageScrollView = nil
     canvasView?.removeFromSuperview()
     canvasView = nil
+    actionToolbar?.removeFromSuperview()
+    actionToolbar = nil
     toolbar?.removeFromSuperview()
     toolbar = nil
     propertyBar?.removeFromSuperview()

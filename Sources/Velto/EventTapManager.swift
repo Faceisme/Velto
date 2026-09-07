@@ -715,6 +715,12 @@ final class EventTapManager: @unchecked Sendable {
             return Unmanaged.passUnretained(event)
         }
 
+        // 截图保留鼠标的竖向平滑和速度设置,跳过缩放及横向手势。
+        if ScrollCaptureKeyTap.isCapturing {
+            return mouseControlController.handleScrollWheel(event: event, captureLocked: true)
+                ? nil : Unmanaged.passUnretained(event)
+        }
+
         if event.getIntegerValueField(.eventSourceUserData) == MouseControlController.syntheticScrollMarker {
             return Unmanaged.passUnretained(event)
         }

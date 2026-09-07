@@ -119,7 +119,7 @@ final class WindowDragController: @unchecked Sendable {
         queue.async { [weak self] in
             guard let self, self.lookupAllowed() else { return }
             if self.beginDrag(mode: mode, at: location) == nil {
-                self.noteLookupFailure()
+                self.noteLookupFailure(source: "prewarm")
             }
         }
     }
@@ -171,8 +171,22 @@ final class WindowDragController: @unchecked Sendable {
         CFAbsoluteTimeGetCurrent() >= lookupBackoffUntil
     }
 
-    private func noteLookupFailure() {
+    private func noteLookupFailure(source: String) {
         lookupBackoffUntil = CFAbsoluteTimeGetCurrent() + Self.lookupBackoff
+        // 冷却本身是静默的:期间每个 mouseMoved 都在 applyUpdate 里被 guard 掉,
+        // 不留任何痕迹。用户侧的观感是"按了没反应,过会儿才动",而日志里只有上面
+        // 那行"放弃"、然后一段空白 —— 分不清是冷却在丢事件还是压根没收到事件。
+        // 这行把冷却起点钉在时间轴上:和下一行 beginDrag 成功的时间戳一减,就知道
+        // 静默了多久、连着冷却了几轮。
+        //
+        // `source` 区分两条失败来源,两者含义完全不同:
+        //   - prewarm:按下修饰键那一刻的**投机**定位,那时用户还没开始拖,光标在
+        //     窗口缝隙 / 桌面上失败纯属正常 —— 但它设的冷却会连坐随后的真实拖动。
+        //     日志里频繁出现这条 = 冷却是自己人打的,该考虑让 prewarm 别设冷却。
+        //   - drag:用户真的在拖却定位不到,那是目标 app 的 AX 问题(哑巴 app /
+        //     假超时),冷却是对的,该往 AxDeadPids / 超时预算那边查。
+        WindowManagementDebugLog.log(
+            "  ↑ [\(source)] 进入 \(Self.lookupBackoff)s 定位冷却,期间所有 move/resize 都被丢弃")
     }
 
     private func applyUpdate(mode: DragMode, at location: CGPoint) -> Bool {
@@ -180,7 +194,7 @@ final class WindowDragController: @unchecked Sendable {
             guard lookupAllowed() else { return false }
             session = beginDrag(mode: mode, at: location)
             if session == nil {
-                noteLookupFailure()
+                noteLookupFailure(source: "drag")
                 return false
             }
         }

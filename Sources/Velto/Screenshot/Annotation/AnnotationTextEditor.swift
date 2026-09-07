@@ -4,12 +4,13 @@ import VeltoAnnotationCore
 /// 原位文字编辑器:无背景的 NSTextView,字体/颜色/对齐取自当前样式。编辑时显示一圈高亮边框
 /// 与极淡填充,让用户看清输入框的位置与范围;框随输入内容自适应宽高(不自动换行,横向生长,
 /// 仅 Shift-Enter 显式换行),因此"所见尺寸 == 导出尺寸"。
-/// 失焦或按 Enter 提交,按 Esc 或右键取消。frame 用所在父视图(画布)坐标回传,空文本由
+/// 失焦或按 Enter 提交,Esc 退出截图,右键取消文字。frame 用所在父视图(画布)坐标回传,空文本由
 /// 编辑器侧 commit 后交 `AnnotationEditor` 丢弃。
 @MainActor
 final class AnnotationTextEditor: NSView, NSTextViewDelegate {
   var onCommit: ((String, CGRect) -> Void)?
   var onCancel: (() -> Void)?
+  var onCancelSession: (() -> Void)?
 
   private let scrollView = NSScrollView()
   private let textView = NSTextView()
@@ -153,7 +154,7 @@ final class AnnotationTextEditor: NSView, NSTextViewDelegate {
   func textView(_ textView: NSTextView, doCommandBy selector: Selector) -> Bool {
     switch selector {
     case #selector(NSResponder.cancelOperation(_:)):
-      cancel()
+      if let onCancelSession { onCancelSession() } else { cancel() }
       return true
     case #selector(NSResponder.insertNewline(_:)):
       // Enter 提交;Shift-Enter 换行。

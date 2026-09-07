@@ -81,6 +81,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 文件 — ⌘W 关闭窗口
         let fileMenuItem = NSMenuItem()
         let fileMenu = NSMenu(title: "文件")
+        let captureItem = NSMenuItem(title: "截图", action: #selector(beginScreenshot), keyEquivalent: "")
+        captureItem.target = self
+        fileMenu.addItem(captureItem)
+        fileMenu.addItem(.separator())
         fileMenu.addItem(
             NSMenuItem(title: "关闭窗口", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
         )
@@ -182,6 +186,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    @objc private func beginScreenshot() {
+        // 等菜单关闭后捕获,避免把菜单本身收进冻结快照。
+        DispatchQueue.main.async { ScreenshotController.shared.beginSession() }
+    }
+
     private func rebuildStatusMenu() {
         guard let statusItem else { return }
 
@@ -197,6 +206,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(.separator())
 
+        menu.addItem(NSMenuItem(title: "截图", action: #selector(beginScreenshot), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "偏好设置", action: #selector(openSettings), keyEquivalent: ","))
         menu.addItem(NSMenuItem(title: "重启监听", action: #selector(restartListener), keyEquivalent: "r"))
 
