@@ -310,7 +310,7 @@ enum GestureTargetController {
         }
     }
 
-    /// 同 `topmostWindowIsSelf` 的语义(不卡尺寸阈值),作用在缓存条目上。
+    /// 普通窗口缓存中的 self 判定(不卡尺寸阈值);此路径不做全局 AX 命中测试。
     private static func topmostEntryIsSelf(in entries: [CachedWindowEntry], at point: CGPoint) -> Bool {
         guard let top = entries.first(where: { $0.bounds.contains(point) }) else { return false }
         return top.pid == selfPid
@@ -656,14 +656,11 @@ enum GestureTargetController {
         return nil
     }
 
-    /// 鼠标位置最上层的可见窗口是否属于 Velto 自己。最上层 = windowList 第一个
-    /// layer==0 / onscreen / alpha>0 / 包含 point 的条目;尺寸阈值不卡,
-    /// 这里只关心"是不是我们"而不是"是不是可拖"。
-    private static func topmostWindowIsSelf(in windowList: [[String: Any]], at point: CGPoint) -> Bool {
+    /// 鼠标位置最上层的可见窗口是否属于 Velto 自己。不能按层级或可拖尺寸过滤:
+    /// 截图遮罩等高层窗口也会被全局 AX 查询同步命中,从后台进入其 UI 会触发 SIGTRAP。
+    static func topmostWindowIsSelf(in windowList: [[String: Any]], at point: CGPoint) -> Bool {
         for info in windowList {
-            guard let layer = (info[kCGWindowLayer as String] as? NSNumber)?.intValue,
-                  layer == 0,
-                  let onscreen = info[kCGWindowIsOnscreen as String] as? Bool,
+            guard let onscreen = info[kCGWindowIsOnscreen as String] as? Bool,
                   onscreen,
                   let alpha = (info[kCGWindowAlpha as String] as? NSNumber)?.doubleValue,
                   alpha > 0.01,
