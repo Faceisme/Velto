@@ -121,7 +121,7 @@ sign_with_cert() {
 # ============ 0. 工具链护栏 ============
 # macOS 26+ SDK 把 SwiftUI 的 @State/@Binding 变成宏(SwiftUIMacros 插件)。裸 Command Line
 # Tools 不带这个插件,会在第一个 @State 上直接编译失败、根本走不到业务代码。这里确保生效的
-# 工具链是一个完整 Xcode;若不是,就自动探测 /Applications 下的 Xcode(-beta) 临时顶上,
+# 工具链是一个完整 Xcode;若不是,就临时改用 /Applications/Xcode.app,
 # 都没有再给出明确指引后中止 —— 免得又对着 "SwiftUIMacros not found" 的报错排查半天。
 ensure_full_xcode_toolchain() {
     local plugin_rel="Platforms/MacOSX.platform/Developer/usr/lib/swift/host/plugins/libSwiftUIMacros.dylib"
@@ -129,7 +129,7 @@ ensure_full_xcode_toolchain() {
         return 0
     fi
     local candidate
-    for candidate in /Applications/Xcode.app /Applications/Xcode-beta.app; do
+    for candidate in /Applications/Xcode.app; do
         if [ -f "$candidate/Contents/Developer/$plugin_rel" ]; then
             export DEVELOPER_DIR="$candidate/Contents/Developer"
             echo "提示:当前 xcode-select 工具链缺少 SwiftUIMacros 插件,已临时改用 $candidate 编译(仅本次)。" >&2
