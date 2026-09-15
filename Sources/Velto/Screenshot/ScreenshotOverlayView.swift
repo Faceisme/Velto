@@ -355,6 +355,17 @@ final class ScreenshotOverlayView: NSView {
 
   private func confirm(_ action: ScreenshotSessionAction) {
     textEditor?.commit()
+    // 缩放/平移还没松手就确认(触控板三指拖移抬指后 mouseUp 会延迟到达):先按实时选区重建画布,
+    // 否则 document 仍是旧选区尺寸,导出时新底图会被拉伸成旧宽高比。
+    if hasActivated {
+      switch mode {
+      case .dragHandle, .moving:
+        mode = .idle
+        ScreenshotDebugLog.log("confirm before geometry mouseUp: remount canvas for live selection")
+        remountAnnotationUIAfterGeometryChange()
+      default: break
+      }
+    }
     if action == .scroll && (editingImage != nil || canvasView?.editor.document.elements.isEmpty == false) {
       NSSound.beep()
       return
