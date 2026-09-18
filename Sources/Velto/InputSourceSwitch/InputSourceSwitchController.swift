@@ -94,6 +94,16 @@ final class InputSourceSwitchController {
     // 忽略 Velto 自身:对自己的设置窗口自动切输入法没意义;更关键的是临时窗口策略
     // 会让 Velto 短暂抢焦点成为前台,若不忽略就会误触发一次切换、把刚扶正的 IME 冲掉。
     guard ctx.bundleID != Bundle.main.bundleIdentifier else { return }
+    // 锁屏 / 解锁 / 系统授权弹窗:在这里切输入法没有意义,更糟的是锁屏那一刻会把「会话待恢复
+    // 的输入法」写成英文,解锁后系统恢复它、正好盖掉刚给前台 App 切好的 CJKV 输入法
+    // (2026-09-18 实测:解锁进微信,豆包激活 77ms 后被打回英文)。
+    // lastContext 必须清空:解锁回到原 App 要被当成「进入新上下文」重新决策一次,
+    // 否则会被下面的 isSameContext 拦掉,永远停在锁屏时的英文上。
+    if Self.isSystemAuthenticationContext(ctx.bundleID) {
+      InputSourceSwitchDebugLog.log("context=\(ctx.contextID) → 忽略(锁屏/系统授权界面)")
+      lastContext = nil
+      return
+    }
     let isSameContext = (lastContext?.contextID == ctx.contextID)
     lastContext = ctx
     let prefs = GestureStore.shared.preferences.inputSourceSwitch
@@ -140,6 +150,14 @@ final class InputSourceSwitchController {
       guard let self, self.programmaticSwitchGeneration == generation else { return }
       self.isApplyingProgrammaticSwitch = false
     }
+  }
+
+  /// 锁屏界面 / 解锁授权 / 屏保。SecurityAgentHelper 带架构后缀(.arm64/.x86_64),用前缀匹配。
+  static func isSystemAuthenticationContext(_ bundleID: String) -> Bool {
+    bundleID == "com.apple.loginwindow"
+      || bundleID.hasPrefix("com.apple.SecurityAgent")
+      || bundleID.hasPrefix("com.apple.ScreenSaver")
+      || bundleID == "com.apple.screensaver"
   }
 
   /// 决策算法。对齐 InputSourcePro:

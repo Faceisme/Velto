@@ -79,7 +79,9 @@ enum InputSourceSwitchSelector {
     // 豆包等 CJKV 顶进英文子模式(菜单栏显示豆包、实际打英文的半切换),且 TIS 读不到中/英子模式
     // 无从校验。豆包等重型 IME 激活早期的"假成功"由 CJKV 修复里的 0.2s 校验兜底处理,不靠延时。
     guard cjkFixEnabled, isCJKV else {
-      return plainSelect(target, id: persistentID)
+      let ok = plainSelect(target, id: persistentID)
+      if ok { scheduleLandingVerification(targetID: persistentID) }
+      return ok
     }
 
     switch cjkFixStrategy {
@@ -100,6 +102,34 @@ enum InputSourceSwitchSelector {
     }
     InputSourceSwitchDebugLog.log("select OK id=\(id)")
     return true
+  }
+
+  // MARK: - 落地校验
+
+  /// 切换「发起成功」≠ 真的停在目标上。TISSelectInputSource 返回 noErr 只代表发起成功,
+  /// 解锁后系统恢复会话输入法、IME 自身激活抖动都可能在 1 秒内把输入源改回去。
+  /// (2026-09-18 实测:锁屏 7 分钟后解锁进微信,豆包激活 77ms 后被打回英文,之后 15 秒
+  /// 全是英文直到用户手动切回 —— 全天 402 次切换里中招 1 次。无校验 = 无恢复。)
+  private static let landingVerifyDelay: TimeInterval = 1.2
+
+  /// 切完延时回看一眼,没停在目标上就补一次。
+  ///
+  /// **只在当前确实不是目标时才重选** —— 无条件二次重选会把豆包等 CJKV 顶进英文子模式
+  /// (菜单栏显示中文、实际打英文),这是铁律,别改成无脑重选。
+  /// 上下文一变 Controller 就会 cancelPending(),排队中的校验不会在新 App 里乱切。
+  @MainActor
+  private static func scheduleLandingVerification(targetID: String, retriesLeft: Int = 1) {
+    scheduleWorkItem(after: landingVerifyDelay) {
+      guard InputSourceCatalog.current()?.id != targetID,
+            let again = InputSourceCatalog.tisInputSource(forID: targetID)
+      else { return }
+      InputSourceSwitchDebugLog.log("落地校验:当前不是 \(targetID),重选")
+      _ = TISSelectInputSource(again)
+      // 已经被抢过一次,说明这一轮确实有东西在改;再回看一次确认补的这下站住了。
+      // 平时(一次就对)不会排第二次 —— 校验窗口越短,越不会跟用户的手动切换抢。
+      guard retriesLeft > 0 else { return }
+      scheduleLandingVerification(targetID: targetID, retriesLeft: retriesLeft - 1)
+    }
   }
 
   // MARK: - CJKV 修复:bounce + 选上一个 + Command 轻点 + 兜底重选
