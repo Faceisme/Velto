@@ -61,7 +61,11 @@ class ScreenshotChromeView: NSView {
   }
 
   private func updateHelp(with event: NSEvent) {
-    let point = convert(event.locationInWindow, from: nil)
+    // hitTest 收的是「父视图坐标系」的点,不是自己的 bounds 坐标。之前传 bounds 坐标,
+    // 工具条只要不落在父视图原点(实际布局永远不在),命中就整体偏移一个 frame.origin ——
+    // 要么落空(不弹提示),要么命中隔壁控件(弹错文案)。
+    let point = superview?.convert(event.locationInWindow, from: nil)
+      ?? convert(event.locationInWindow, from: nil)
     var target = hitTest(point)
     while let view = target, view !== self, view.toolTip == nil { target = view.superview }
     guard let target, target !== self, var text = target.toolTip, !text.isEmpty else {
