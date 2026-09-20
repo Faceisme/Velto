@@ -74,35 +74,21 @@ struct VeltoGlassSurface: ViewModifier {
     var fill: Color = .mgCard
     var shadow: Bool = true
 
-    @ViewBuilder
     func body(content: Content) -> some View {
         let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
-        if #available(macOS 26.0, *) {
-            content
-                .glassEffect(.regular.tint(fill.opacity(0.08)), in: shape)
-                .shadow(color: shadow ? Color.mgShadow.opacity(0.08) : .clear, radius: 10, x: 0, y: 4)
-        } else {
-            content
-                .background(fill, in: shape)
-                .shadow(color: shadow ? Color.mgShadow.opacity(0.04) : .clear, radius: 3, x: 0, y: 1)
-        }
+        return content
+            .glassEffect(.regular.tint(fill.opacity(0.08)), in: shape)
+            .shadow(color: shadow ? Color.mgShadow.opacity(0.08) : .clear, radius: 10, x: 0, y: 4)
     }
 }
 
 struct VeltoGlassWindow: ViewModifier {
-    @ViewBuilder
     func body(content: Content) -> some View {
         let shape = RoundedRectangle(cornerRadius: MGRadius.window, style: .continuous)
-        if #available(macOS 26.0, *) {
-            content
-                .background(Color.mgBg, in: shape)
-                .glassEffect(.regular, in: shape)
-                .clipShape(shape)
-        } else {
-            content
-                .background(Color.mgBg, in: shape)
-                .clipShape(shape)
-        }
+        return content
+            .background(Color.mgBg, in: shape)
+            .glassEffect(.regular, in: shape)
+            .clipShape(shape)
     }
 }
 
@@ -133,13 +119,8 @@ struct MGCardBackground: ViewModifier {
 }
 
 extension View {
-    @ViewBuilder
     func veltoNativeGlass<S: Shape>(in shape: S) -> some View {
-        if #available(macOS 26.0, *) {
-            self.glassEffect(.regular, in: shape)
-        } else {
-            self
-        }
+        glassEffect(.regular, in: shape)
     }
 
     func veltoGlassSurface(radius: CGFloat = MGRadius.cardLg, fill: Color = .mgCard, shadow: Bool = true) -> some View {
