@@ -17,9 +17,12 @@ set -euo pipefail
 #   ./scripts/build-app.sh              # 构建 + 部署 + 同步 /Applications/
 #   SKIP_INSTALL=1 ./scripts/build-app.sh   # 只构建,不动 /Applications/
 #   ./scripts/build-app.sh --run        # 构建完直接启动
+#   CONFIGURATION=debug ./scripts/build-app.sh   # 用 debug 构建(默认 release)
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-CONFIGURATION="${CONFIGURATION:-debug}"
+# 部署到 /Applications 的是日常在用的 app,默认 release:滚动截图的逐像素匹配在 debug 下
+# 慢 20~50 倍(1495x1540 半像素帧 0.65s vs 0.03s),帧率掉到接不上。调试时 CONFIGURATION=debug。
+CONFIGURATION="${CONFIGURATION:-release}"
 
 # 构建缓存(.build:scratch / clang+swiftpm module cache / 隔离 HOME / codesign.err)
 # 全部放到 Dropbox 外面。否则 Dropbox 会同步这些在构建过程中频繁增删的临时缓存,

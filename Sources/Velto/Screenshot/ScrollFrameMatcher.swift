@@ -14,11 +14,14 @@ enum ScrollFrameMatcher {
     let footer: Int
   }
 
-  static func match(current: CGImage, previous: CGImage) -> Match? {
-    match(current: current, previous: previous, allowSmoothing: true)
+  /// `rescue` 打开 Vision 配准兜底,只留给停下后的稳定帧。平滑重匹始终开着:Chrome 触控板
+  /// 滚动几乎每帧都停在半个设备像素上,只有它接得上(用真实帧复盘,关掉后半像素全军覆没)。
+  static func match(current: CGImage, previous: CGImage, rescue: Bool = true) -> Match? {
+    match(current: current, previous: previous, allowSmoothing: true, rescue: rescue)
   }
 
-  private static func match(current: CGImage, previous: CGImage, allowSmoothing: Bool) -> Match? {
+  private static func match(current: CGImage, previous: CGImage, allowSmoothing: Bool,
+                            rescue: Bool = true) -> Match? {
     guard current.width == previous.width, current.height == previous.height,
           current.bitsPerPixel == 32, previous.bitsPerPixel == 32,
           current.width >= 16, current.height >= 32,
@@ -116,7 +119,7 @@ enum ScrollFrameMatcher {
       // CapCap's 2D registration recovers candidates missed by sparse samples.
       // Keep it off the normal-frame path: full-resolution Vision is substantially
       // more expensive than a verified pixel match. Never override ambiguity.
-      if matches.isEmpty, let registration = registeredOffset(current: current, previous: previous,
+      if matches.isEmpty, rescue, let registration = registeredOffset(current: current, previous: previous,
         rect: CGRect(x: left, y: top, width: right - left, height: bodyHeight)), abs(registration) <= maxShift {
         for offset in (registration - 2)...(registration + 2) where abs(offset) <= maxShift {
           let fraction = allowSmoothing ? 0 : verticalPhase(offset: offset, top: top, bottom: bottom,

@@ -30,6 +30,9 @@ final class ScrollCaptureController {
   private var settlementTask: Task<Void, Never>?
   private var isCapturing = false
   private var isFinishing = false
+  private var didReportAlignment = false
+  private var loopFrames = 0
+  private var loopMerges = 0
 
   init(snapshot: DisplaySnapshot, captureRect: CGRect,
        frameCapture: (@MainActor (CGRect) async -> CGImage?)? = nil) {
@@ -41,7 +44,10 @@ final class ScrollCaptureController {
   func startSession() async -> Bool {
     guard !isActive else { return true }
     let token = generation
-    guard let first = await captureSettledFrame(), !Task.isCancelled, token == generation,
+    // 首帧抓一次就走,不等"稳定帧":页面只要有动画就永远等不到,开场能卡 5 秒。
+    // 注意首帧必须和后续帧同源(都走 captureFrame):用触发瞬间的快照裁剪过,
+    // 两条路径尺寸差几像素,匹配器要求等宽,结果每一帧都被无声拒掉,全程拼不上。
+    guard let first = await captureFrame(), !Task.isCancelled, token == generation,
           first.width >= 16, first.height >= 32,
           first.height <= min(maxPixelHeight, maxPixelCount / first.width) else { return false }
     isActive = true
@@ -67,6 +73,7 @@ final class ScrollCaptureController {
     settlementTask?.cancel()
     if issue != .limit { await settledCapture() }
     guard isActive, !Task.isCancelled else { return nil }
+    ScreenshotDebugLog.log("滚动采样汇总:循环处理 \(loopFrames) 帧,接上 \(loopMerges) 次")
     // 用户随时可完成已确认的连续内容;异常末帧不追加,也不吞掉完成操作。
     let result = mergedImage
     stopWork()
@@ -125,6 +132,21 @@ final class ScrollCaptureController {
     return normalizeFrame(image)
   }
 
+  /// 调试日志开着时把第一对对不上的帧原样存盘,供离线复盘匹配器(每次会话覆盖)。
+  private func dumpFrames(_ previous: CGImage, _ current: CGImage) {
+    guard let dir = ScreenshotDebugLog.logFileURL?.deletingLastPathComponent()
+      .appendingPathComponent("scroll-debug", isDirectory: true) else { return }
+    // PNG 编码要半秒,放后台,别卡住采样循环。
+    Task.detached(priority: .utility) {
+      try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+      for (name, image) in [("previous", previous), ("current", current)] {
+        let data = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])
+        try? data?.write(to: dir.appendingPathComponent("\(name).png"))
+      }
+      ScreenshotDebugLog.log("对不上的两帧已存:\(dir.path)")
+    }
+  }
+
   /// SCScreenshotManager 可能返回不同像素格式或行 padding;统一为紧凑 BGRA。
   private func normalizeFrame(_ image: CGImage) -> CGImage? {
     let width = image.width
@@ -145,26 +167,77 @@ final class ScrollCaptureController {
     return context.makeImage()
   }
 
+  /// 尽力等画面静止,最多约 0.8 秒。超时不算失败,直接拿最近一帧——接不接得上由像素重叠
+  /// 校验说了算。早先这里死等 30 次(约 5 秒)并占着抓帧锁,页面只要有动画就永远等不到,
+  /// 整条管线被饿死,滚动期间一帧都接不上。
   private func captureSettledFrame(rect: CGRect? = nil) async -> CGImage? {
     var previous: CGImage?
-    for _ in 0..<30 {
+    for _ in 0..<6 {
       guard !Task.isCancelled else { return nil }
       if let frame = await captureFrame(rect: rect) {
-        if let previous, framesPixelEqual(previous, frame) { return frame }
+        if let previous {
+          let tolerance = settleTolerance(width: frame.width, height: frame.height)
+          if (changedPixels(previous, frame, stopAbove: tolerance) ?? Int.max) <= tolerance { return frame }
+        }
         previous = frame
       }
       try? await Task.sleep(for: .milliseconds(50))
     }
-    // 超时仍在动画中的画面不是稳定帧,不能当作最终截图。
-    return nil
+    return previous
   }
 
-  private func framesPixelEqual(_ a: CGImage, _ b: CGImage) -> Bool {
+  /// 一次性诊断:画面到底哪里在动、动多大。只在等不到稳定帧时跑一次。
+  private func diffReport(_ a: CGImage, _ b: CGImage) -> String {
+    guard a.width == b.width, a.height == b.height, a.bytesPerRow == b.bytesPerRow,
+          let ad = a.dataProvider?.data, let bd = b.dataProvider?.data,
+          let ap = CFDataGetBytePtr(ad), let bp = CFDataGetBytePtr(bd) else { return "尺寸不一致" }
+    return withExtendedLifetime((ad, bd)) {
+      var changed = 0, maxDelta = 0
+      var minX = a.width, maxX = -1, minY = a.height, maxY = -1
+      for y in 0..<a.height {
+        for x in 0..<a.width {
+          let i = y * a.bytesPerRow + x * 4
+          let delta = max(abs(Int(ap[i]) - Int(bp[i])), abs(Int(ap[i + 1]) - Int(bp[i + 1])),
+                          abs(Int(ap[i + 2]) - Int(bp[i + 2])))
+          guard delta > 0 else { continue }
+          maxDelta = max(maxDelta, delta)
+          if delta > 3 {
+            changed += 1
+            minX = min(minX, x); maxX = max(maxX, x)
+            minY = min(minY, y); maxY = max(maxY, y)
+          }
+        }
+      }
+      let total = a.width * a.height
+      let box = maxX < 0 ? "无" : "\(minX),\(minY) \(maxX - minX + 1)x\(maxY - minY + 1)"
+      return "\(a.width)x\(a.height) 明显变化 \(changed)/\(total) 像素,最大通道差 \(maxDelta),变化区域 \(box)"
+    }
+  }
+
+  /// 画面"没在动"的容差:千分之一的像素。真在滚动时差异远超这个量。
+  private func settleTolerance(width: Int, height: Int) -> Int {
+    max(64, width * height / 1000)
+  }
+
+  /// 逐字节相等太苛刻:色彩管理/HDR 的逐帧噪声、文本插入点和时钟闪一下,就永远等不到两帧全等。
+  /// 只数"明显变了"的像素,超过容差立刻停。
+  private func changedPixels(_ a: CGImage, _ b: CGImage, stopAbove limit: Int) -> Int? {
     guard a.width == b.width, a.height == b.height, a.bytesPerRow == b.bytesPerRow,
           let ad = a.dataProvider?.data, let bd = b.dataProvider?.data,
           CFDataGetLength(ad) == CFDataGetLength(bd),
-          let ap = CFDataGetBytePtr(ad), let bp = CFDataGetBytePtr(bd) else { return false }
-    return withExtendedLifetime((ad, bd)) { memcmp(ap, bp, CFDataGetLength(ad)) == 0 }
+          let ap = CFDataGetBytePtr(ad), let bp = CFDataGetBytePtr(bd) else { return nil }
+    return withExtendedLifetime((ad, bd)) {
+      let length = CFDataGetLength(ad)
+      if memcmp(ap, bp, length) == 0 { return 0 }
+      var changed = 0
+      for i in stride(from: 0, to: length - 3, by: 4) where
+        abs(Int(ap[i]) - Int(bp[i])) > 3 || abs(Int(ap[i + 1]) - Int(bp[i + 1])) > 3
+          || abs(Int(ap[i + 2]) - Int(bp[i + 2])) > 3 {
+        changed += 1
+        if changed > limit { return changed }
+      }
+      return changed
+    }
   }
 
   private func grabAndProcess() async {
@@ -172,7 +245,8 @@ final class ScrollCaptureController {
     isCapturing = true
     defer { isCapturing = false }
     guard let frame = await captureFrame(), isActive, !Task.isCancelled else { return }
-    _ = await process(currentFrame: frame, isSettled: false)
+    loopFrames += 1
+    if await process(currentFrame: frame, isSettled: false) { loopMerges += 1 }
   }
 
   private func settledCapture() async {
@@ -193,12 +267,22 @@ final class ScrollCaptureController {
   func process(currentFrame: CGImage, isSettled: Bool) async -> Bool {
     guard isActive, issue != .limit, let previous = shotA else { return false }
     let match = await Task.detached(priority: .userInitiated) {
-      ScrollFrameMatcher.match(current: currentFrame, previous: previous)
+      ScrollFrameMatcher.match(current: currentFrame, previous: previous, rescue: isSettled)
     }.value
     guard isActive, !Task.isCancelled, shotA === previous else { return false }
     guard let match else {
-      if isSettled { issue = .alignment }
-      if isSettled { ScreenshotDebugLog.log("滚动拼接:重叠不可信,保留原基准") }
+      if isSettled {
+        issue = .alignment
+        ScreenshotDebugLog.log("滚动拼接:重叠不可信,保留原基准")
+      }
+      // 只存像滚动的那对(一成以上像素在变);页面上的动图原地变化也会对不上,但那不是要查的。
+      if !didReportAlignment, ScreenshotDebugLog.isEnabled,
+         let changed = changedPixels(previous, currentFrame, stopAbove: currentFrame.width * currentFrame.height / 10),
+         changed > currentFrame.width * currentFrame.height / 10 {
+        didReportAlignment = true
+        ScreenshotDebugLog.log("对不上的两帧(\(isSettled ? "稳定帧" : "采样帧")):" + diffReport(previous, currentFrame))
+        dumpFrames(previous, currentFrame)
+      }
       return false
     }
     // 向上回看不改变最远位置的基准;再次向下越过该位置才追加。
