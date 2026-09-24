@@ -52,6 +52,12 @@ final class WindowDragController: @unchecked Sendable {
     private var pendingUpdate: PendingUpdate?
     private var updateScheduled = false
 
+    /// 本次按住修饰键时的光标位置(window-drag 队列独占)。目标窗口只按这个点定位,
+    /// 冷却后的重试也不改查光标当前位置:用户边按边拖,光标早出了原窗口,改查当前
+    /// 位置就绑到了下面的窗口 —— 刚启动的终端 AX 定位失败,0.5s 后重试命中底下的
+    /// DBeaver,resize "穿透"。
+    private var dragAnchor: CGPoint?
+
     /// 目标定位失败后的冷却截止时间(window-drag 队列独占,无需加锁)。
     ///
     /// `beginDrag` 失败时 `session` 保持 nil,原先会让**每一个** mouseMoved 重跑
@@ -90,10 +96,11 @@ final class WindowDragController: @unchecked Sendable {
     // MARK: - Event handlers (tap thread)
 
     func handleFlagsChanged(event: CGEvent, normalizedFlags raw: UInt64) {
+        // 每次修饰键变化都从头来:松开可能漏掉(tap 被禁用期间),不清旧会话的话,
+        // 下一次按住会接着拖上一次的窗口。
+        resetSession()
         if let mode = dragMode(forNormalizedFlags: raw) {
-            prewarmDragLookup(mode: mode, at: event.location)
-        } else {
-            resetSession()
+            beginSession(mode: mode, at: event.location)
         }
     }
 
@@ -109,17 +116,22 @@ final class WindowDragController: @unchecked Sendable {
 
         queue.async { [weak self] in
             self?.session = nil
+            self?.dragAnchor = nil
             self?.lookupBackoffUntil = 0
         }
     }
 
-    // MARK: - Lookup pre-warm
+    // MARK: - Session start
 
-    private func prewarmDragLookup(mode: DragMode, at location: CGPoint) {
+    /// 按下修饰键那一刻就定位光标下的窗口并建立会话,整个按住期间只拖这一个窗口。
+    private func beginSession(mode: DragMode, at location: CGPoint) {
         queue.async { [weak self] in
-            guard let self, self.lookupAllowed() else { return }
-            if self.beginDrag(mode: mode, at: location) == nil {
-                self.noteLookupFailure(source: "prewarm")
+            guard let self else { return }
+            self.dragAnchor = location
+            guard self.lookupAllowed() else { return }
+            self.session = self.beginDrag(mode: mode, at: location)
+            if self.session == nil {
+                self.noteLookupFailure(source: "press")
             }
         }
     }
@@ -179,12 +191,11 @@ final class WindowDragController: @unchecked Sendable {
         // 这行把冷却起点钉在时间轴上:和下一行 beginDrag 成功的时间戳一减,就知道
         // 静默了多久、连着冷却了几轮。
         //
-        // `source` 区分两条失败来源,两者含义完全不同:
-        //   - prewarm:按下修饰键那一刻的**投机**定位,那时用户还没开始拖,光标在
-        //     窗口缝隙 / 桌面上失败纯属正常 —— 但它设的冷却会连坐随后的真实拖动。
-        //     日志里频繁出现这条 = 冷却是自己人打的,该考虑让 prewarm 别设冷却。
-        //   - drag:用户真的在拖却定位不到,那是目标 app 的 AX 问题(哑巴 app /
-        //     假超时),冷却是对的,该往 AxDeadPids / 超时预算那边查。
+        // `source` 区分两条失败来源:
+        //   - press:按下修饰键那一刻的定位。光标在窗口缝隙 / 桌面上失败纯属正常,
+        //     这次按住就不拖任何窗口(重试也只查按下的那个点)。
+        //   - drag:冷却后按同一点重试仍失败,那是目标 app 的 AX 问题(哑巴 app /
+        //     假超时),该往 AxDeadPids / 超时预算那边查。
         WindowManagementDebugLog.log(
             "  ↑ [\(source)] 进入 \(Self.lookupBackoff)s 定位冷却,期间所有 move/resize 都被丢弃")
     }
@@ -192,7 +203,10 @@ final class WindowDragController: @unchecked Sendable {
     private func applyUpdate(mode: DragMode, at location: CGPoint) -> Bool {
         if session?.mode != mode {
             guard lookupAllowed() else { return false }
-            session = beginDrag(mode: mode, at: location)
+            // 没见到按下事件(tap 被禁用等)才会缺锚点,拿这次按住的第一个点补上。
+            let anchor = dragAnchor ?? location
+            dragAnchor = anchor
+            session = beginDrag(mode: mode, at: anchor)
             if session == nil {
                 noteLookupFailure(source: "drag")
                 return false
