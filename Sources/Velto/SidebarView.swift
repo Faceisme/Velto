@@ -82,6 +82,13 @@ struct SidebarView: View {
                         badge: nil,
                         active: page == .screenshot
                     ) { page = .screenshot }
+
+                    SidebarItem(
+                        icon: MGPage.networkMonitor.icon,
+                        label: MGPage.networkMonitor.label,
+                        badge: nil,
+                        active: page == .networkMonitor
+                    ) { page = .networkMonitor }
                 }
 
                 Spacer().frame(height: 14)

@@ -25,6 +25,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
 
         configureStatusItem()
+        NetworkMonitorController.shared.setEnabled(store.preferences.networkMonitorEnabled)
 
         // 启动切换器:WindowList 后台维护 + KeyTap 接管 Cmd+Tab + Panel UI。
         // 失败一般是 CGEvent tap 权限缺失,需要用户开"输入监控"权限。
@@ -220,6 +221,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // tap 常驻,不再随手势开关启停。各功能开关的生效由 EventTapManager 自己的
         // storeObserver 推快照到分发处处理;这里只刷新菜单栏图标。
         configureStatusItem()
+        NetworkMonitorController.shared.setEnabled(store.preferences.networkMonitorEnabled)
     }
 
     @objc private func openSettings() {

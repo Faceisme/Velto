@@ -66,6 +66,8 @@ struct AppPreferences: Codable, Equatable {
     var trackpadGesturesEnabled: Bool = false
     /// 触控板手势调试日志开关。默认关,关闭时日志路径零文件开销。
     var trackpadGestureDebugLoggingEnabled: Bool = false
+    /// 网络监控(菜单栏网速 + 进程/连接面板)开关。默认开。
+    var networkMonitorEnabled: Bool = true
     var showTrail: Bool
     var showMenuBarIcon: Bool
     var recognitionThreshold: Double
@@ -133,6 +135,7 @@ struct AppPreferences: Codable, Equatable {
         windowManagementDebugLoggingEnabled = try container.decodeIfPresent(Bool.self, forKey: .windowManagementDebugLoggingEnabled) ?? Self.defaults.windowManagementDebugLoggingEnabled
         trackpadGesturesEnabled = try container.decodeIfPresent(Bool.self, forKey: .trackpadGesturesEnabled) ?? Self.defaults.trackpadGesturesEnabled
         trackpadGestureDebugLoggingEnabled = try container.decodeIfPresent(Bool.self, forKey: .trackpadGestureDebugLoggingEnabled) ?? Self.defaults.trackpadGestureDebugLoggingEnabled
+        networkMonitorEnabled = try container.decodeIfPresent(Bool.self, forKey: .networkMonitorEnabled) ?? Self.defaults.networkMonitorEnabled
         showTrail = try container.decodeIfPresent(Bool.self, forKey: .showTrail) ?? Self.defaults.showTrail
         showMenuBarIcon = try container.decodeIfPresent(Bool.self, forKey: .showMenuBarIcon) ?? Self.defaults.showMenuBarIcon
         recognitionThreshold = try container.decodeIfPresent(Double.self, forKey: .recognitionThreshold) ?? Self.defaults.recognitionThreshold

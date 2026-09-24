@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 enum MGPage: String, CaseIterable, Identifiable, Hashable {
-    case gestures, mouseControl, window, trackpadGesture, switcher, inputSourceSwitch, keyRemap, betterFinder, screenshot, general
+    case gestures, mouseControl, window, trackpadGesture, switcher, inputSourceSwitch, keyRemap, betterFinder, screenshot, networkMonitor, general
 
     var id: String { rawValue }
 
@@ -17,6 +17,7 @@ enum MGPage: String, CaseIterable, Identifiable, Hashable {
         case .keyRemap: "按键映射"
         case .betterFinder: "增强Finder"
         case .screenshot: "截图"
+        case .networkMonitor: "网络监控"
         case .general:  "通用设置"
         }
     }
@@ -32,6 +33,7 @@ enum MGPage: String, CaseIterable, Identifiable, Hashable {
         case .keyRemap: "keyboard"
         case .betterFinder: "folder.badge.gearshape"
         case .screenshot: "camera.viewfinder"
+        case .networkMonitor: "network"
         case .general:  "gearshape"
         }
     }
@@ -155,6 +157,8 @@ private final class SettingsPageHostController: NSViewController {
             AnyView(BetterFinderPage())
         case .screenshot:
             AnyView(ScreenshotPage())
+        case .networkMonitor:
+            AnyView(NetworkMonitorPage())
         case .general:
             AnyView(GeneralSettingsPage())
         }
