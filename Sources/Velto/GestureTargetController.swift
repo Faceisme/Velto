@@ -656,8 +656,12 @@ enum GestureTargetController {
         return nil
     }
 
-    /// 鼠标位置最上层的可见窗口是否属于 Velto 自己。不能按层级或可拖尺寸过滤:
-    /// 截图遮罩等高层窗口也会被全局 AX 查询同步命中,从后台进入其 UI 会触发 SIGTRAP。
+    /// 全局 AX 命中测试会不会落到 Velto 自己。自己的窗口不分层级都算:截图遮罩等
+    /// 高层窗口也会被全局 AX 查询同步命中,从后台进入其 UI 会触发 SIGTRAP。
+    /// 别家的非 layer 0 窗口一律跳过:CGWindowList 看不出谁鼠标穿透,macOS 27 程序坞
+    /// 有张 layer 20 铺满全屏的透明窗口压在所有普通窗口上,按「最上层那张」判定就
+    /// 永远是程序坞,守护形同虚设(2026-09-29 在设置窗口上画手势闪退)。
+    /// 只有别家 layer 0 普通窗口才算真挡住。
     static func topmostWindowIsSelf(in windowList: [[String: Any]], at point: CGPoint) -> Bool {
         for info in windowList {
             guard let onscreen = info[kCGWindowIsOnscreen as String] as? Bool,
@@ -670,7 +674,8 @@ enum GestureTargetController {
                   let pidNumber = info[kCGWindowOwnerPID as String] as? NSNumber
             else { continue }
 
-            return pid_t(pidNumber.intValue) == selfPid
+            if pid_t(pidNumber.intValue) == selfPid { return true }
+            if (info[kCGWindowLayer as String] as? NSNumber)?.intValue == 0 { return false }
         }
         return false
     }
