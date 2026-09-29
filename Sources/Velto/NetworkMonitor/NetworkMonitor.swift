@@ -39,6 +39,8 @@ final class NetworkMonitor {
     var down: Double
     let totalUp: UInt64
     let totalDown: UInt64
+    /// 面板按进程合并显示时的各条连接(见 NetworkDashboardView.grouped)。
+    var children: [Connection]?
   }
 
   private(set) var upload = 0.0

@@ -18,7 +18,7 @@ struct NetworkMenuHeader: View {
       TrafficChart(history: monitor.history)
         .frame(height: 64)
       Text(monitor.interfaceLabel)
-        .font(.system(size: 11))
+        .font(.system(size: 12))
         .foregroundStyle(.secondary)
 
       Divider()
@@ -38,24 +38,24 @@ struct NetworkMenuHeader: View {
               Spacer(minLength: 8)
               Group {
                 Text("↑ " + NetFormat.bytes(app.up) + "/s")
-                  .frame(width: 70, alignment: .trailing)
+                  .frame(width: 76, alignment: .trailing)
                 Text("↓ " + NetFormat.bytes(app.down) + "/s")
-                  .frame(width: 70, alignment: .trailing)
+                  .frame(width: 76, alignment: .trailing)
               }
-              .font(.system(size: 11))
+              .font(.system(size: 12))
               .monospacedDigit()
               .foregroundStyle(.secondary)
             }
           }
-          .font(.system(size: 12))
-          .frame(height: 18)
+          .font(.system(size: 13))
+          .frame(height: 20)
         }
       }
     }
     .padding(.horizontal, 14)
     .padding(.top, 8)
     .padding(.bottom, 4)
-    .frame(width: 320)
+    .frame(width: 340)
   }
 }
 
@@ -68,10 +68,10 @@ private struct SpeedReadout: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 2) {
       Label(title, systemImage: symbol)
-        .font(.system(size: 11, weight: .medium))
+        .font(.system(size: 12, weight: .medium))
         .foregroundStyle(color)
       Text(NetFormat.speed(value))
-        .font(.system(size: 20, weight: .semibold))
+        .font(.system(size: 22, weight: .semibold))
         .monospacedDigit()
     }
     .frame(maxWidth: .infinity, alignment: .leading)
@@ -163,10 +163,10 @@ struct NetworkDashboardView: View {
   }
 
   private var connectionTable: some View {
-    let rows = monitor.connections
-      .filter { visible($0.appID, $0.appName, $0.remote) }
-      .sorted(using: connectionOrder)
-    return Table(rows, sortOrder: $connectionOrder) {
+    let rows = monitor.connections.filter { visible($0.appID, $0.appName, $0.remote) }
+    // 总览时同一进程合成一行;侧栏选了进程或在搜索时平铺,方便逐条看。
+    let overview = (filter == nil || filter == "*") && search.isEmpty
+    return Table((overview ? grouped(rows) : rows).sorted(using: connectionOrder), children: \.children, sortOrder: $connectionOrder) {
       TableColumn("进程", value: \.appName) { row in
         AppCell(icon: row.icon, name: row.appName, active: row.up + row.down > 0)
       }
@@ -182,20 +182,23 @@ struct NetworkDashboardView: View {
       }
       .width(min: 130, ideal: 150)
       TableColumn("协议", value: \.proto) { row in
-        ProtocolPill(proto: row.proto, remote: row.remote)
+        if row.children == nil { ProtocolPill(proto: row.proto, remote: row.remote) }
       }
       .width(64)
       TableColumn("远端地址", value: \.remote) { row in
-        Text(row.remote).truncationMode(.middle)
+        Text(row.remote)
+          .truncationMode(.middle)
+          .foregroundStyle(row.children == nil ? .primary : .secondary)
       }
       .width(min: 160, ideal: 260)
       TableColumn("状态", value: \.state) { row in
-        Text(Self.stateLabel(row.state)).foregroundStyle(.secondary)
+        if row.children == nil { Text(Self.stateLabel(row.state)).foregroundStyle(.secondary) }
       }
       .width(64)
     }
     .tableStyle(.inset)
     .alternatingRowBackgrounds()
+    .font(.system(size: 14))
   }
 
   private var appTable: some View {
@@ -224,6 +227,7 @@ struct NetworkDashboardView: View {
     }
     .tableStyle(.inset)
     .alternatingRowBackgrounds()
+    .font(.system(size: 14))
   }
 
   private var footer: some View {
@@ -251,6 +255,24 @@ struct NetworkDashboardView: View {
     .padding(.horizontal, 10)
     .frame(height: 28)
     .background(.bar)
+  }
+
+  /// 同一进程的多条连接合成一行(速率、流量相加),点三角展开看每一条;只有一条的照常显示。
+  /// 按 apps 的顺序(名字)出行,速率相同时不会每秒乱跳。
+  private func grouped(_ rows: [NetworkMonitor.Connection]) -> [NetworkMonitor.Connection] {
+    let byApp = Dictionary(grouping: rows, by: \.appID)
+    return monitor.apps.compactMap { app in
+      guard let list = byApp[app.id] else { return nil }
+      guard list.count > 1 else { return list[0] }
+      var row = NetworkMonitor.Connection(
+        id: app.id, appID: app.id, appName: app.name, icon: app.icon,
+        proto: "", remote: "\(list.count) 个连接", state: "",
+        up: list.reduce(0) { $0 + $1.up }, down: list.reduce(0) { $0 + $1.down },
+        totalUp: list.reduce(0) { $0 + $1.totalUp }, totalDown: list.reduce(0) { $0 + $1.totalDown }
+      )
+      row.children = list.sorted(using: connectionOrder)
+      return row
+    }
   }
 
   private func visible(_ appID: String, _ texts: String...) -> Bool {
@@ -315,9 +337,9 @@ private struct ProtocolPill: View {
   var body: some View {
     let (title, color) = style
     Text(title)
-      .font(.system(size: 10, weight: .bold))
+      .font(.system(size: 11, weight: .bold))
       .foregroundStyle(.white)
-      .frame(width: 44, height: 16)
+      .frame(width: 48, height: 18)
       .background(color.gradient, in: RoundedRectangle(cornerRadius: 4, style: .continuous))
   }
 
