@@ -244,7 +244,7 @@ final class ScreenshotSession: ScreenshotOverlayDelegate {
       self.updateScrollInputLock()
       self.scrollHUD?.update(thumbnail: nil, heightPx: Int(controller.stitchedPixelSize.height),
                             hint: self.scrollHint(for: controller))
-      ScreenshotDebugLog.log("滚动截图控制器已启动: source=SCScreenshotManager core=pixel-overlap manual=true")
+      ScreenshotDebugLog.log("滚动截图控制器已启动: core=pixel-overlap manual=true")
     }
   }
 

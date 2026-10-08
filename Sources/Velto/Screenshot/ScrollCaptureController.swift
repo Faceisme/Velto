@@ -33,6 +33,8 @@ final class ScrollCaptureController {
   private var didReportAlignment = false
   private var loopFrames = 0
   private var loopMerges = 0
+  private var frameStream: RegionFrameStream?
+  private var lastStreamSequence = 0
 
   init(snapshot: DisplaySnapshot, captureRect: CGRect,
        frameCapture: (@MainActor (CGRect) async -> CGImage?)? = nil) {
@@ -44,12 +46,22 @@ final class ScrollCaptureController {
   func startSession() async -> Bool {
     guard !isActive else { return true }
     let token = generation
+    if frameCapture == nil {
+      let stream = await RegionFrameStream.start(in: snapshot, globalRect: captureRect)
+      guard token == generation, !Task.isCancelled else { stream?.stop(); return false }
+      frameStream = stream
+      ScreenshotDebugLog.log("滚动截图取帧:\(stream == nil ? "常驻流启动失败,逐帧截图" : "常驻采集流")")
+    }
     // 首帧抓一次就走,不等"稳定帧":页面只要有动画就永远等不到,开场能卡 5 秒。
     // 注意首帧必须和后续帧同源(都走 captureFrame):用触发瞬间的快照裁剪过,
     // 两条路径尺寸差几像素,匹配器要求等宽,结果每一帧都被无声拒掉,全程拼不上。
     guard let first = await captureFrame(), !Task.isCancelled, token == generation,
           first.width >= 16, first.height >= 32,
-          first.height <= min(maxPixelHeight, maxPixelCount / first.width) else { return false }
+          first.height <= min(maxPixelHeight, maxPixelCount / first.width) else {
+      frameStream?.stop()
+      frameStream = nil
+      return false
+    }
     isActive = true
     isFinishing = false
     shotA = first
@@ -89,6 +101,8 @@ final class ScrollCaptureController {
     captureLoopTask = nil
     settlementTask?.cancel()
     settlementTask = nil
+    frameStream?.stop()
+    frameStream = nil
     // 在飞的任务仍持有抓帧锁,由它自己的 defer 释放。
   }
 
@@ -125,6 +139,8 @@ final class ScrollCaptureController {
     let image: CGImage?
     if let frameCapture {
       image = await frameCapture(rect ?? captureRect)
+    } else if rect == nil, let streamed = frameStream?.latestImage() {
+      image = streamed
     } else {
       image = try? await ScreenshotCapturer.captureRegion(in: snapshot, globalRect: rect ?? captureRect)
     }
@@ -242,6 +258,12 @@ final class ScrollCaptureController {
 
   private func grabAndProcess() async {
     guard isActive, !isCapturing, !isFinishing else { return }
+    // 常驻流没出新帧 = 画面没变,不必重抓重配。
+    if let frameStream {
+      let sequence = frameStream.sequence
+      guard sequence != lastStreamSequence else { return }
+      lastStreamSequence = sequence
+    }
     isCapturing = true
     defer { isCapturing = false }
     guard let frame = await captureFrame(), isActive, !Task.isCancelled else { return }
@@ -336,6 +358,11 @@ final class ScrollCaptureController {
     }
     guard mergeNewContent(currentFrame: expanded, offsetPx: expanded.height - previous.height) else { return false }
     captureRect = expandedRect
+    if let oldStream = frameStream {
+      oldStream.stop()
+      frameStream = await RegionFrameStream.start(in: snapshot, globalRect: expandedRect)
+      guard isActive, !Task.isCancelled else { frameStream?.stop(); frameStream = nil; return false }
+    }
     // 新区完整首帧已在手中,不能置空基准后漏掉下一次短滚动。
     shotA = expanded
     issue = nil
