@@ -16,12 +16,15 @@ enum ScrollFrameMatcher {
 
   /// `rescue` 打开 Vision 配准兜底,只留给停下后的稳定帧。平滑重匹始终开着:Chrome 触控板
   /// 滚动几乎每帧都停在半个设备像素上,只有它接得上(用真实帧复盘,关掉后半像素全军覆没)。
+  /// 严格匹配失败再容忍局部动画(聊天里的动图表情、页面里的视频):重叠区里动图换了一帧,
+  /// 严格校验必然整帧拒掉,滚动截图就一次都接不上。
   static func match(current: CGImage, previous: CGImage, rescue: Bool = true) -> Match? {
     match(current: current, previous: previous, allowSmoothing: true, rescue: rescue)
+      ?? match(current: current, previous: previous, allowSmoothing: true, rescue: false, tolerateMotion: true)
   }
 
   private static func match(current: CGImage, previous: CGImage, allowSmoothing: Bool,
-                            rescue: Bool = true) -> Match? {
+                            rescue: Bool = true, tolerateMotion: Bool = false) -> Match? {
     guard current.width == previous.width, current.height == previous.height,
           current.bitsPerPixel == 32, previous.bitsPerPixel == 32,
           current.width >= 16, current.height >= 32,
@@ -56,6 +59,11 @@ enum ScrollFrameMatcher {
         requireTexture: false) != nil {
         return Match(offset: 0, header: 0, footer: 0)
       }
+      // 没滚、只有动图在动:按整帧容忍校验认成静止,别把它当成对不上。
+      if tolerateMotion, verify(offset: 0, top: 0, bottom: height, left: left, right: right,
+        a: ap, b: bp, aStride: aStride, bStride: bStride, requireTexture: true, tolerateMotion: true) != nil {
+        return Match(offset: 0, header: 0, footer: 0)
+      }
 
       // Thin content can fall entirely between the coarse columns. A failed
       // dense stationary check must still reach registration in that case.
@@ -73,7 +81,7 @@ enum ScrollFrameMatcher {
       offsets: for offset in -maxShift...maxShift {
         let start = max(top, top - offset)
         let end = min(bottom, bottom - offset)
-        var error = 0, evidence = 0
+        var error = 0, evidence = 0, inliers = 0
         for sample in 0..<24 {
           let row = start + sample * (end - start - 1) / 23
           let ai = row * 32, bi = (row + offset) * 32
@@ -83,12 +91,19 @@ enum ScrollFrameMatcher {
             let ay = rowsA[min(height - 1, row + 1) * 32 + x]
             let by = rowsB[min(height - 1, row + offset + 1) * 32 + x]
             if max(abs(av - ax), abs(bv - bx), abs(av - ay), abs(bv - by)) > 18 {
-              error += abs(av - bv)
+              let delta = abs(av - bv)
+              error += delta
               evidence += 1
+              if delta <= 24 { inliers += 1 }
             }
           }
           // 即便剩余所有采样都精确相等也过不了阈值,立即跳过该位移。
-          if error > 24 * (evidence + (23 - sample) * 32) { continue offsets }
+          if !tolerateMotion, error > 24 * (evidence + (23 - sample) * 32) { continue offsets }
+        }
+        // 动图那几列误差再大也不该拖垮均值:改按"吻合的采样数"投票,真实位移得票最多。
+        if tolerateMotion {
+          if inliers >= 24 { candidates.append((offset, -Double(inliers))) }
+          continue
         }
         guard evidence >= 24 else { continue }
         let score = Double(error) / Double(evidence)
@@ -103,7 +118,7 @@ enum ScrollFrameMatcher {
           left: left, right: right, a: ap, b: bp, aStride: aStride, bStride: bStride)
         if let score = verify(offset: candidate.offset, top: top, bottom: bottom,
           left: left, right: right, a: ap, b: bp, aStride: aStride, bStride: bStride,
-          requireTexture: true, fraction: fraction) {
+          requireTexture: true, fraction: fraction, tolerateMotion: tolerateMotion) {
           matches.append((candidate.offset, score, fraction))
         }
       }
@@ -113,7 +128,7 @@ enum ScrollFrameMatcher {
       if matches.isEmpty, allowSmoothing,
          let a = verticallySmoothed(current, top: top, bottom: bottom),
          let b = verticallySmoothed(previous, top: top, bottom: bottom),
-         let match = match(current: a, previous: b, allowSmoothing: false) {
+         let match = match(current: a, previous: b, allowSmoothing: false, tolerateMotion: tolerateMotion) {
         return Match(offset: match.offset, fraction: match.fraction, header: top, footer: height - bottom)
       }
       // CapCap's 2D registration recovers candidates missed by sparse samples.
@@ -203,16 +218,20 @@ enum ScrollFrameMatcher {
   }
 
   /// 比较整个有效重叠区,同时检查文字/图像边缘,避免大片白底稀释错位误差。
+  /// `tolerateMotion`:按竖条分别校验,允许不到一半的竖条(动图所在列)对不上;
+  /// 其余竖条照旧严格且要有足够纹理。整行横贯的变化(内容插入/替换)仍会拒掉。
   private static func verify(offset: Int, top: Int, bottom: Int, left: Int, right: Int,
     a: UnsafePointer<UInt8>, b: UnsafePointer<UInt8>, aStride: Int, bStride: Int,
-    requireTexture: Bool, fraction: Double = 0) -> Double? {
+    requireTexture: Bool, fraction: Double = 0, tolerateMotion: Bool = false) -> Double? {
     let start = max(top, top - offset), end = min(bottom, bottom - offset)
     guard end > start else { return nil }
-    var error = 0.0, edgeError = 0.0
-    var samples = 0, edges = 0, badEdges = 0, texturedRows = 0
+    let stripCount = tolerateMotion ? 12 : 1
+    var strips = [Tally](repeating: Tally(), count: stripCount)
+    var rowTexture = [Bool](repeating: false, count: stripCount)
     for y in stride(from: start, to: end, by: max(1, (end - start) / 180)) {
-      var rowHasTexture = false
+      for i in 0..<stripCount { rowTexture[i] = false }
       for x in stride(from: left, to: right, by: max(1, (right - left) / 180)) {
+        let strip = (x - left) * stripCount / (right - left)
         let ai = y * aStride + x * 4, bi = (y + offset) * bStride + x * 4
         let dx = x + 1 < right ? 4 : -4
         let aNext = min(end - 1, y + 1) * aStride + x * 4
@@ -227,21 +246,38 @@ enum ScrollFrameMatcher {
             + abs(Int(a[ai + c]) - Int(a[aNext + c]))
             + abs(Int(b[bi + c]) - Int(b[bNext + c]))
         }
-        error += difference
-        samples += 1
+        strips[strip].error += difference
+        strips[strip].samples += 1
         if texture > 18 {
-          edges += 1
-          edgeError += difference
-          if difference > 30 { badEdges += 1 }
-          rowHasTexture = true
+          strips[strip].edges += 1
+          strips[strip].edgeError += difference
+          if difference > 30 { strips[strip].badEdges += 1 }
+          rowTexture[strip] = true
         }
       }
-      if rowHasTexture { texturedRows += 1 }
+      for i in 0..<stripCount where rowTexture[i] { strips[i].texturedRows += 1 }
     }
-    guard samples > 0, error / Double(samples) <= 6 else { return nil }
-    if requireTexture && (edges < 48 || texturedRows < 3) { return nil }
-    guard edges == 0 || (edgeError / Double(edges) <= 10
-      && Double(badEdges) / Double(edges) <= 0.04) else { return nil }
-    return (error + edgeError) / Double(samples + edges)
+    let used = strips.filter { $0.samples > 0 }
+    let passed = used.filter(\.passes)
+    guard !passed.isEmpty, passed.count * 2 >= used.count else { return nil }
+    let total = passed.reduce(into: Tally()) { $0.add($1) }
+    if requireTexture && (total.edges < 48 || total.texturedRows < 3) { return nil }
+    return (total.error + total.edgeError) / Double(total.samples + total.edges)
+  }
+
+  private struct Tally {
+    var error = 0.0, edgeError = 0.0
+    var samples = 0, edges = 0, badEdges = 0, texturedRows = 0
+
+    var passes: Bool {
+      samples > 0 && error / Double(samples) <= 6
+        && (edges == 0 || (edgeError / Double(edges) <= 10 && Double(badEdges) / Double(edges) <= 0.04))
+    }
+
+    mutating func add(_ other: Tally) {
+      error += other.error; edgeError += other.edgeError
+      samples += other.samples; edges += other.edges
+      badEdges += other.badEdges; texturedRows += other.texturedRows
+    }
   }
 }
