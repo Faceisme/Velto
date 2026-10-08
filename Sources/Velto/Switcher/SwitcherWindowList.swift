@@ -216,6 +216,10 @@ final class SwitcherWindowList {
     @objc private func workspaceDidActivateApp(_ note: Notification) {
         guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
         frontmostPid = app.processIdentifier
+        // AX 激活通知不可靠:iPhone 镜像这类没有 AX 服务的 app、观察者注册失败的
+        // app 根本收不到 —— 这里补一次焦点读取,读不到时 applyFocusedWindow 按
+        // app 粒度兜底提升(同 key 节流,AX 通知那路先到时这次只是空跑)。
+        updateFocusedWindowMRU(pid: app.processIdentifier)
         syncWindowsForApp(pid: app.processIdentifier)
     }
 
@@ -479,9 +483,9 @@ final class SwitcherWindowList {
                     size: probe.size,
                     isCgOnly: probe.isCgOnly
                 )
-                // 新窗口排在末尾,等真实 focus 通知再上调;短期内删又加的
-                // (AX 抖动误删)恢复被删前的 MRU 位
-                win.lastFocusOrder = initialFocusOrder(forNew: probe.wid)
+                // 初始 MRU 位见 initialFocusOrder:焦点先到的补位、删又加的恢复
+                // 原位、前台 app 的第一个窗口排首位,其余排末尾等 focus 通知上调
+                win.lastFocusOrder = initialFocusOrder(forNew: probe.wid, pid: pid)
                 windows[probe.wid] = win
                 // 订阅窗口级 AX 通知(destroy / minimize / title)
                 subscribeWindowNotifications(win)
@@ -587,19 +591,44 @@ final class SwitcherWindowList {
         recentlyRemovedOrders[window.cgWindowId] = (window.lastFocusOrder, now)
     }
 
-    /// 新窗口入列时的初始 MRU 位:短期内删又加的恢复原位,否则排末尾。
-    private func initialFocusOrder(forNew wid: CGWindowID) -> Int {
-        guard let memory = recentlyRemovedOrders.removeValue(forKey: wid),
-              CFAbsoluteTimeGetCurrent() - memory.removedAt <= Self.removedOrderTTL
-        else {
+    /// 焦点先于入列落地的欠账:wid → (pid, 焦点发生时的 MRU 首位, 时间)。
+    /// app 刚启动 / 刚开新窗口时,focus 读(一次 AX 调用)几乎总比 sync(枚举 +
+    /// 逐窗口读属性)先回来 —— 以前这次提升直接丢掉,窗口永远沉在 MRU 末尾,
+    /// ⌘Tab 首选落到别的 app 上(2026-10 App Store 事故,alt-tab #5785 同款)。
+    private var pendingFocus: [CGWindowID: (pid: pid_t, anchor: CGWindowID?, at: TimeInterval)] = [:]
+    private static let pendingFocusTTL: TimeInterval = 10
+
+    /// 新窗口入列时的初始 MRU 位,优先级:
+    ///   1. 焦点先于入列落地的 → 补到焦点发生那一刻的位置。比 2 新鲜:欠账只在
+    ///      wid 不在清单时才记,两份都有说明焦点发生在误删之后
+    ///   2. 短期内删又加的(AX 抖动误删)→ 恢复原位
+    ///   3. 前台 app 的第一个窗口(刚启动 / 窗口全关后新开)→ 首位;焦点通知
+    ///      没赶上(观察者还没注册完、熔断期)也不至于沉底
+    ///   4. 其余 → 末尾,等真实 focus 通知再上调
+    private func initialFocusOrder(forNew wid: CGWindowID, pid: pid_t) -> Int {
+        let now = CFAbsoluteTimeGetCurrent()
+        let pending = pendingFocus.removeValue(forKey: wid)
+        let memory = recentlyRemovedOrders.removeValue(forKey: wid)
+        let order: Int
+        if let pending, pending.pid == pid, now - pending.at <= Self.pendingFocusTTL {
+            // 焦点之后被聚焦过的窗口都已排到 anchor 前面 —— 插在 anchor 现在的
+            // 位置上,正好落在它们之后、anchor 之前。anchor 已不在就当最近处理
+            order = pending.anchor.flatMap { windows[$0]?.lastFocusOrder } ?? 0
+            SwitcherDebugLog.log("index wid=\(wid) 补上入列前丢的焦点提升 → MRU 位 \(order)")
+        } else if let memory, now - memory.removedAt <= Self.removedOrderTTL {
+            SwitcherDebugLog.log("re-add wid=\(wid) 恢复原 MRU 位 \(memory.order)(短期删又加,判为 AX 抖动误删)")
+            order = memory.order
+        } else if pid == frontmostPid, !windows.values.contains(where: { $0.application.pid == pid }) {
+            SwitcherDebugLog.log("index wid=\(wid) 前台 app 的第一个窗口 → MRU 首位")
+            order = 0
+        } else {
             return windows.count
         }
-        SwitcherDebugLog.log("re-add wid=\(wid) 恢复原 MRU 位 \(memory.order)(短期删又加,判为 AX 抖动误删)")
-        // 给它腾出原来的位置,后面的整体后移一格;compact 随后会压实
-        for (_, w) in windows where w.lastFocusOrder >= memory.order {
+        // 给它腾出位置,后面的整体后移一格;compact 随后会压实
+        for (_, w) in windows where w.lastFocusOrder >= order {
             w.lastFocusOrder += 1
         }
-        return memory.order
+        return order
     }
 
     @discardableResult
@@ -674,7 +703,7 @@ final class SwitcherWindowList {
         case kAXFocusedWindowChangedNotification, kAXApplicationActivatedNotification:
             // MRU 更新也用事件来源的 pid —— frontmostPid 靠 NSWorkspace 通知更新,
             // AX 激活通知先到时它还是旧 app,拿它去读焦点窗口会把旧窗口再提升
-            // 一次,新前台窗口反而漏掉提升(workspaceDidActivateApp 不做提升)。
+            // 一次,新前台窗口反而漏掉提升。
             if let pid = pidOfElement(element) ?? frontmostPid {
                 updateFocusedWindowMRU(pid: pid)
                 syncWindowsForApp(pid: pid)
@@ -861,13 +890,37 @@ final class SwitcherWindowList {
         let axBox = SwitcherAxRefBox(element: app.axUiElement)
         AXCallQueue.shared.schedule("focus-\(pid)") { [weak self] in
             var value: CFTypeRef?
-            let result = AXUIElementCopyAttributeValue(axBox.element, kAXFocusedWindowAttribute as CFString, &value)
-            guard result == .success, let v = value, CFGetTypeID(v) == AXUIElementGetTypeID() else { return }
-            let axWindow = v as! AXUIElement
-            guard let wid = SwitcherAxRead.cgWindowId(of: axWindow) else { return }
-            Task { @MainActor [weak self] in
-                self?.promoteToMostRecent(wid: wid)
+            var wid: CGWindowID?
+            if AXUIElementCopyAttributeValue(axBox.element, kAXFocusedWindowAttribute as CFString, &value) == .success,
+               let v = value, CFGetTypeID(v) == AXUIElementGetTypeID()
+            {
+                wid = SwitcherAxRead.cgWindowId(of: v as! AXUIElement)
             }
+            Task { @MainActor [weak self, wid] in
+                self?.applyFocusedWindow(wid, pid: pid)
+            }
+        }
+    }
+
+    /// 焦点读数落地。以前只有"wid 已入列"这一条路,另外两种情况提升直接丢掉:
+    ///   - wid 还没入列 → 记欠账,入列时由 initialFocusOrder 补位。顺手再排一次
+    ///     sync:正在跑的那轮可能在窗口出现前就枚举完了
+    ///   - 读不到焦点窗口(没有 AX 服务 / 零 AX 窗口 / CG 兜底的 app)→ 它若真
+    ///     是前台就按 app 粒度提升,否则点击切过去的这类 app 永远沉在后面
+    private func applyFocusedWindow(_ wid: CGWindowID?, pid: pid_t) {
+        if let wid {
+            if windows[wid] != nil {
+                promoteToMostRecent(wid: wid)
+                return
+            }
+            let now = CFAbsoluteTimeGetCurrent()
+            pendingFocus = pendingFocus.filter { now - $0.value.at <= Self.pendingFocusTTL }
+            let anchor = windows.values.min(by: { $0.lastFocusOrder < $1.lastFocusOrder })?.cgWindowId
+            pendingFocus[wid] = (pid, anchor, now)
+            SwitcherDebugLog.log("focus before index wid=\(wid) pid=\(pid) — 记欠账,入列时补位")
+            syncWindowsForApp(pid: pid)
+        } else if pid == NSWorkspace.shared.frontmostApplication?.processIdentifier {
+            promoteAppToTop(pid: pid, reason: "focus unreadable")
         }
     }
 
@@ -910,15 +963,20 @@ final class SwitcherWindowList {
     /// 相对序不影响 initialSelection 落在下一个 app 上)。
     func reconcileFrontmostWithSystem() {
         guard let front = NSWorkspace.shared.frontmostApplication else { return }
-        let pid = front.processIdentifier
-        frontmostPid = pid
+        frontmostPid = front.processIdentifier
+        promoteAppToTop(pid: front.processIdentifier, reason: "reconcile front")
+    }
+
+    /// 把 pid 最靠前的窗口顶到 MRU 首位 —— 仅当首位还不是这个 app 的窗口;
+    /// app 内部的相对序不动(那归窗口级焦点通知管)。
+    private func promoteAppToTop(pid: pid_t, reason: String) {
         guard let top = windows.values.min(by: { $0.lastFocusOrder < $1.lastFocusOrder }),
               top.application.pid != pid,
               let candidate = windows.values
                   .filter({ $0.application.pid == pid })
                   .min(by: { $0.lastFocusOrder < $1.lastFocusOrder })
         else { return }
-        SwitcherDebugLog.log("reconcile front pid=\(pid) app=\(front.localizedName ?? "?") promote wid=\(candidate.cgWindowId) (MRU top was \(top.application.localizedName ?? "?"))")
+        SwitcherDebugLog.log("\(reason) pid=\(pid) app=\(candidate.application.localizedName ?? "?") promote wid=\(candidate.cgWindowId) (MRU top was \(top.application.localizedName ?? "?"))")
         promoteToMostRecent(wid: candidate.cgWindowId)
     }
 
