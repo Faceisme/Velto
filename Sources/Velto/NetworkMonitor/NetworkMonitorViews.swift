@@ -4,24 +4,35 @@ import SwiftUI
 
 // MARK: - 菜单栏下拉
 
+/// 上传 / 下载的配色:暖色上传、冷色下载,图表、卡片、进程行共用。
+private enum NetPalette {
+  static let up = [Color.orange, Color.pink]
+  static let down = [Color.cyan, Color.blue]
+}
+
 /// 下拉菜单顶部的自定义视图(下面是原生菜单项「打开网络面板…」)。
 /// 菜单打开后不会跟着内容重新布局,所以高度必须恒定:进程固定 8 行,不够就留空行。
 struct NetworkMenuHeader: View {
   private let monitor = NetworkMonitor.shared
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 10) {
-      HStack(spacing: 0) {
-        SpeedReadout(title: "上传", symbol: "arrow.up", value: monitor.upload, color: .orange)
-        SpeedReadout(title: "下载", symbol: "arrow.down", value: monitor.download, color: .blue)
+    VStack(alignment: .leading, spacing: 12) {
+      HStack(spacing: 10) {
+        SpeedReadout(title: "上传", symbol: "arrow.up", value: monitor.upload, colors: NetPalette.up)
+        SpeedReadout(title: "下载", symbol: "arrow.down", value: monitor.download, colors: NetPalette.down)
       }
-      TrafficChart(history: monitor.history)
-        .frame(height: 64)
-      Text(monitor.interfaceLabel)
-        .font(.system(size: 12))
-        .foregroundStyle(.secondary)
+      VStack(alignment: .leading, spacing: 6) {
+        TrafficChart(history: monitor.history)
+          .frame(height: 72)
+        Label(monitor.interfaceLabel, systemImage: monitor.interfaceLabel.hasPrefix("Wi-Fi") ? "wifi" : "network")
+          .font(.system(size: 12))
+          .foregroundStyle(.secondary)
+      }
 
-      Divider()
+      Text("进程")
+        .font(.system(size: 12, weight: .semibold))
+        .foregroundStyle(.secondary)
+        .padding(.bottom, -6)
 
       // 网速从高到低;没流量的按累计流量排(apps 本身按名字排好,sorted 稳定),不会每秒乱跳。
       let top = Array(monitor.apps.sorted {
@@ -36,15 +47,8 @@ struct NetworkMenuHeader: View {
               Text(app.name)
                 .lineLimit(1)
               Spacer(minLength: 8)
-              Group {
-                Text("↑ " + NetFormat.bytes(app.up) + "/s")
-                  .frame(width: 76, alignment: .trailing)
-                Text("↓ " + NetFormat.bytes(app.down) + "/s")
-                  .frame(width: 76, alignment: .trailing)
-              }
-              .font(.system(size: 12))
-              .monospacedDigit()
-              .foregroundStyle(.secondary)
+              RowSpeed(arrow: "↑", value: app.up, color: NetPalette.up[0])
+              RowSpeed(arrow: "↓", value: app.down, color: NetPalette.down[1])
             }
           }
           .font(.system(size: 13))
@@ -53,51 +57,94 @@ struct NetworkMenuHeader: View {
       }
     }
     .padding(.horizontal, 14)
-    .padding(.top, 8)
+    .padding(.top, 10)
     .padding(.bottom, 4)
     .frame(width: 340)
   }
 }
 
-private struct SpeedReadout: View {
-  let title: String
-  let symbol: String
+/// 进程行的单向速率:有流量着色,没流量淡掉。
+private struct RowSpeed: View {
+  let arrow: String
   let value: Double
   let color: Color
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 2) {
-      Label(title, systemImage: symbol)
-        .font(.system(size: 12, weight: .medium))
-        .foregroundStyle(color)
-      Text(NetFormat.speed(value))
-        .font(.system(size: 22, weight: .semibold))
-        .monospacedDigit()
-    }
-    .frame(maxWidth: .infinity, alignment: .leading)
+    Text(arrow + " " + NetFormat.bytes(value) + "/s")
+      .font(.system(size: 12, weight: value > 0 ? .medium : .regular))
+      .monospacedDigit()
+      .foregroundStyle(value > 0 ? AnyShapeStyle(color) : AnyShapeStyle(.tertiary))
+      .frame(width: 76, alignment: .trailing)
   }
 }
 
-/// 最近 60 秒速率曲线:下载蓝、上传橙,两块面积叠着画(不堆叠)。
+/// 总速率卡片:液态玻璃底 + 渐变圆标,数字大、单位小。
+private struct SpeedReadout: View {
+  let title: String
+  let symbol: String
+  let value: Double
+  let colors: [Color]
+
+  var body: some View {
+    let parts = NetFormat.speed(value).split(separator: " ", maxSplits: 1)
+    VStack(alignment: .leading, spacing: 6) {
+      HStack(spacing: 6) {
+        Image(systemName: symbol)
+          .font(.system(size: 10, weight: .heavy))
+          .foregroundStyle(.white)
+          .frame(width: 18, height: 18)
+          .background(LinearGradient(colors: colors, startPoint: .topLeading, endPoint: .bottomTrailing), in: Circle())
+        Text(title)
+          .font(.system(size: 12, weight: .medium))
+          .foregroundStyle(.secondary)
+      }
+      HStack(alignment: .firstTextBaseline, spacing: 3) {
+        Text(parts[0])
+          .font(.system(size: 26, weight: .semibold, design: .rounded))
+        Text(parts[1])
+          .font(.system(size: 13, weight: .medium, design: .rounded))
+          .foregroundStyle(.secondary)
+      }
+      .monospacedDigit()
+      .lineLimit(1)
+    }
+    .padding(.horizontal, 12)
+    .padding(.vertical, 10)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .glassEffect(.regular.tint(colors[0].opacity(0.1)), in: .rect(cornerRadius: 16))
+  }
+}
+
+/// 镜像面积图:下载在基线上、上传在基线下,两块不重叠就不会叠出脏色。
 private struct TrafficChart: View {
   let history: [NetworkMonitor.Sample]
 
   var body: some View {
-    let peak = history.map { max($0.up, $0.down) }.max() ?? 0
+    let peak = max(history.map { max($0.up, $0.down) }.max() ?? 0, 10 * 1024)
     Chart(history) { sample in
-      AreaMark(x: .value("时间", sample.id), y: .value("速率", sample.down), stacking: .unstacked)
-        .foregroundStyle(by: .value("方向", "下载"))
+      AreaMark(x: .value("时间", sample.id), yStart: .value("速率", 0), yEnd: .value("速率", sample.down), series: .value("方向", "下载"))
+        .foregroundStyle(LinearGradient(colors: [NetPalette.down[1].opacity(0.55), NetPalette.down[0].opacity(0.08)], startPoint: .top, endPoint: .bottom))
         .interpolationMethod(.monotone)
-      AreaMark(x: .value("时间", sample.id), y: .value("速率", sample.up), stacking: .unstacked)
-        .foregroundStyle(by: .value("方向", "上传"))
+      LineMark(x: .value("时间", sample.id), y: .value("速率", sample.down), series: .value("方向", "下载线"))
+        .foregroundStyle(NetPalette.down[1])
+        .lineStyle(StrokeStyle(lineWidth: 1.5))
+        .interpolationMethod(.monotone)
+      AreaMark(x: .value("时间", sample.id), yStart: .value("速率", 0), yEnd: .value("速率", -sample.up), series: .value("方向", "上传"))
+        .foregroundStyle(LinearGradient(colors: [NetPalette.up[0].opacity(0.08), NetPalette.up[1].opacity(0.5)], startPoint: .top, endPoint: .bottom))
+        .interpolationMethod(.monotone)
+      LineMark(x: .value("时间", sample.id), y: .value("速率", -sample.up), series: .value("方向", "上传线"))
+        .foregroundStyle(NetPalette.up[0])
+        .lineStyle(StrokeStyle(lineWidth: 1.5))
         .interpolationMethod(.monotone)
     }
-    .chartForegroundStyleScale(["下载": Color.blue.opacity(0.5), "上传": Color.orange.opacity(0.5)])
     .chartLegend(.hidden)
     .chartXAxis(.hidden)
     .chartYAxis(.hidden)
     .chartXScale(domain: history[0].id...history[history.count - 1].id)
-    .chartYScale(domain: 0...max(peak, 10 * 1024))
+    .chartYScale(domain: -peak...peak)
+    .chartPlotStyle { plot in
+      plot.overlay { Rectangle().fill(.separator).frame(height: 0.5) }
+    }
   }
 }
 
