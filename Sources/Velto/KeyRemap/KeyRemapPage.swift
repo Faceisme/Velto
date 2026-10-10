@@ -13,8 +13,7 @@ struct KeyRemapPage: View {
     ScrollView {
       VStack(alignment: .leading, spacing: 22) {
         PageHeader(
-          tag: "Key Remap",
-          title: "按键映射",
+          page: .keyRemap,
           subtitle: "手动添加简单映射，或导入 Karabiner 社区规则文件。"
         )
 
@@ -44,7 +43,7 @@ struct KeyRemapPage: View {
   // MARK: - 功能总开关
 
   private var masterToggleSection: some View {
-    GroupCard(radius: MGRadius.cardLg) {
+    GroupCard {
       HStack(spacing: 12) {
         Image(systemName: "power")
           .font(.system(size: 15))
@@ -77,7 +76,7 @@ struct KeyRemapPage: View {
   private var debugSection: some View {
     VStack(alignment: .leading, spacing: 10) {
       MGSectionLabel(text: "调试")
-      GroupCard(radius: MGRadius.cardLg) {
+      GroupCard {
         VStack(spacing: 0) {
           HStack(spacing: 12) {
             Image(systemName: "ladybug")
@@ -121,7 +120,7 @@ struct KeyRemapPage: View {
             }
             Spacer()
             Button("打开") { openLogsFolder() }
-              .buttonStyle(MGSecondaryButtonStyle())
+              .buttonStyle(.bordered)
           }
           .padding(16)
         }
@@ -141,7 +140,7 @@ struct KeyRemapPage: View {
     let manualManipulators = store.rules.first(where: { $0.isManual })?.manipulators ?? []
     return VStack(alignment: .leading, spacing: 10) {
       MGSectionLabel(text: "简单映射")
-      GroupCard(radius: MGRadius.cardLg) {
+      GroupCard {
         VStack(spacing: 0) {
           // 添加行固定在顶部,新映射往下追加
           AddRemapRow { from, to in
@@ -171,11 +170,11 @@ struct KeyRemapPage: View {
         } label: {
           Label("导入 JSON 规则文件", systemImage: "square.and.arrow.down")
         }
-        .buttonStyle(MGSecondaryButtonStyle(foreground: .mgAccent))
+        .buttonStyle(.bordered)
       }
 
       if imported.isEmpty {
-        GroupCard(radius: MGRadius.cardLg) {
+        GroupCard {
           Text("还没有导入的规则。从 ke-complex-modifications.pqrs.org 下载 JSON 文件后点右上角导入。")
             .font(.mgBody)
             .foregroundStyle(Color.mgText3)
@@ -267,7 +266,7 @@ private struct AddRemapRow: View {
       } label: {
         Label("添加", systemImage: "plus")
       }
-      .buttonStyle(MGSecondaryButtonStyle(foreground: .mgAccent))
+      .buttonStyle(.bordered)
     }
     .padding(.horizontal, 16)
     .padding(.vertical, 10)
@@ -314,7 +313,7 @@ private struct ImportedRuleCard: View {
   private let store = KeyRemapStore.shared
 
   var body: some View {
-    GroupCard(radius: MGRadius.cardLg) {
+    GroupCard {
       VStack(alignment: .leading, spacing: 0) {
         // 标题行
         HStack {

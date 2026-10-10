@@ -17,8 +17,7 @@ struct BetterFinderPage: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 PageHeader(
-                    tag: "Better Finder",
-                    title: "增强Finder",
+                    page: .betterFinder,
                     subtitle: "在 Finder 工具栏和右键菜单中打开终端、编辑器或拷贝路径。"
                 )
 
@@ -67,9 +66,9 @@ struct BetterFinderPage: View {
                     ) {
                         HStack(spacing: 8) {
                             Button("打开文件夹", action: openDebugLogFolder)
-                                .buttonStyle(MGSecondaryButtonStyle())
+                                .buttonStyle(.bordered)
                             Button("清空", action: clearDebugLog)
-                                .buttonStyle(MGSecondaryButtonStyle())
+                                .buttonStyle(.bordered)
                         }
                     }
                 }
@@ -104,11 +103,11 @@ struct BetterFinderPage: View {
                     ) {
                         HStack(spacing: 8) {
                             Button("注册并启用", action: registerFinderExtension)
-                                .buttonStyle(MGSecondaryButtonStyle(foreground: .mgAccent))
+                                .buttonStyle(.borderedProminent)
                             Button("打开系统扩展设置", action: openExtensionSettings)
-                                .buttonStyle(MGSecondaryButtonStyle())
+                                .buttonStyle(.bordered)
                             Button("重启 Finder", action: restartFinder)
-                                .buttonStyle(MGSecondaryButtonStyle())
+                                .buttonStyle(.bordered)
                         }
                     }
                 }
@@ -180,9 +179,8 @@ struct BetterFinderPage: View {
                         } label: {
                             Image(systemName: "minus")
                         }
-                        .buttonStyle(MGSecondaryButtonStyle(height: 30, hPad: 10))
+                        .buttonStyle(.bordered)
                         .disabled(preferences.customMenuApps.isEmpty)
-                        .opacity(preferences.customMenuApps.isEmpty ? 0.45 : 1)
                     }
 
                     VStack(spacing: 0) {
@@ -240,7 +238,7 @@ struct BetterFinderPage: View {
                             )
                         }
                     }
-                    .veltoGlassPanel(radius: MGRadius.card)
+                    .mgCard()
                 }
             }
         }
@@ -294,7 +292,8 @@ struct BetterFinderPage: View {
                             Button("移除") {
                                 removeCustomApp(app)
                             }
-                            .buttonStyle(MGPlainButtonStyle(foreground: .mgText3))
+                            .buttonStyle(.borderless)
+                            .foregroundStyle(Color.mgText3)
                         }
                         .padding(.horizontal, 12)
                         .padding(.vertical, 9)
@@ -306,11 +305,7 @@ struct BetterFinderPage: View {
                     }
                 }
             }
-            .background(
-                RoundedRectangle(cornerRadius: MGRadius.control, style: .continuous)
-                    .fill(Color.mgCardAlt.opacity(0.35))
-            )
-            .veltoNativeGlass(in: RoundedRectangle(cornerRadius: MGRadius.control, style: .continuous))
+            .mgCard(radius: MGRadius.control)
         }
     }
 
@@ -336,7 +331,7 @@ struct BetterFinderPage: View {
             }
         }
         .menuStyle(.button)
-        .buttonStyle(MGSecondaryButtonStyle(height: 30))
+        .buttonStyle(.bordered)
     }
 
     private var shortcutSection: some View {
@@ -557,7 +552,8 @@ private struct ShortcutRow: View {
                     ShortcutRecorderField(shortcut: $shortcut, placeholder: "点击录制")
                 }
                 Button("清除") { shortcut = nil }
-                    .buttonStyle(MGPlainButtonStyle(foreground: .mgText3))
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(Color.mgText3)
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 16)

@@ -1,249 +1,46 @@
 import SwiftUI
 
-// MARK: - WindowManagementPage (v2)
-//
-// PageHeader + 单卡 (4 行) + 底部 BottomToolbar。
-// 每行:40×40 ActionIcon + 标题/描述 + KeyCapSlot + 清除 按钮。
-// 行间分隔线:0.5px, margin-left 78 (对齐文字开头, 不切到图标)。
-
+// 页头总开关 +「快捷操作」4 行 + 调试。改动即时保存,没有草稿和保存栏。
 struct WindowManagementPage: View {
-    private let store = GestureStore.shared
+  private let store = GestureStore.shared
 
-    @State private var draftMove: UInt64 = 0
-    @State private var draftResize: UInt64 = 0
-    @State private var draftZoom: UInt64 = 0
-    @State private var draftMaximize: Shortcut?
-    @State private var didLoad = false
-    @State private var statusMessage = ""
+  var body: some View {
+    SettingsPage {
+      PageHeader(
+        page: .window,
+        subtitle: "按住修饰键 + 拖动鼠标即可移动或缩放当前窗口。",
+        isOn: pref(\.windowManagementEnabled)
+      )
+      .help("关闭后,移动/缩放窗口、滚轮缩放、窗口快捷键全部停用,不影响手势与鼠标控制。")
 
-    private var hasUnsavedChanges: Bool {
-        draftMove != store.preferences.windowMoveModifierFlags
-            || draftResize != store.preferences.windowResizeModifierFlags
-            || draftZoom != store.preferences.contentZoomModifierFlags
-            || draftMaximize != store.preferences.windowMaximizeShortcut
-    }
-
-    var body: some View {
-        VStack(spacing: 0) {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 22) {
-                    PageHeader(
-                        tag: "Window Management",
-                        title: "窗口管理",
-                        subtitle: "按住修饰键 + 拖动鼠标即可移动或缩放当前窗口。"
-                    )
-
-                    // 模块总开关:即时生效,不走下面的"保存"。关掉则移动/缩放/滚轮缩放/
-                    // 窗口快捷键全部停用,但不影响手势与鼠标控制(各模块开关已解耦)。
-                    GroupCard(radius: MGRadius.cardLg) {
-                        HStack(spacing: 10) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("启用窗口管理")
-                                    .font(.mgLabelStrong)
-                                    .foregroundStyle(Color.mgText1)
-                                Text("关闭后,移动/缩放窗口、滚轮缩放、窗口快捷键全部停用,不影响手势与鼠标控制。")
-                                    .font(.mgMeta)
-                                    .foregroundStyle(Color.mgText2)
-                            }
-                            Spacer(minLength: 12)
-                            Toggle("", isOn: Binding(
-                                get: { store.preferences.windowManagementEnabled },
-                                set: { v in store.updatePreferences { $0.windowManagementEnabled = v } }
-                            ))
-                            .labelsHidden()
-                            .toggleStyle(.switch)
-                            .controlSize(.small)
-                            .tint(.mgAccent)
-                        }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 14)
-                    }
-
-                    GroupCard(radius: MGRadius.cardLg) {
-                        VStack(spacing: 0) {
-                            WindowRow(
-                                icon: "arrow.up.and.down.and.arrow.left.and.right",
-                                title: "移动窗口",
-                                desc: "按住此键 + 移动鼠标 → 拖动当前窗口",
-                                control: {
-                                    AnyView(
-                                        KeyCapSlot(minWidth: 80) {
-                                            ModifierRecorderField(modifierFlagsRawValue: $draftMove)
-                                        }
-                                    )
-                                },
-                                onClear: { draftMove = 0 },
-                                showDivider: false
-                            )
-                            WindowRow(
-                                icon: "arrow.up.left.and.arrow.down.right",
-                                title: "缩放窗口",
-                                desc: "按住此键 + 移动鼠标 → 按光标所在边角缩放",
-                                control: {
-                                    AnyView(
-                                        KeyCapSlot(minWidth: 80) {
-                                            ModifierRecorderField(modifierFlagsRawValue: $draftResize)
-                                        }
-                                    )
-                                },
-                                onClear: { draftResize = 0 },
-                                showDivider: true
-                            )
-                            WindowRow(
-                                icon: "plus.magnifyingglass",
-                                title: "滚轮缩放修饰键",
-                                desc: "按住此键 + 滚动滚轮 → 缩放页面内容",
-                                control: {
-                                    AnyView(
-                                        KeyCapSlot(minWidth: 80) {
-                                            ModifierRecorderField(modifierFlagsRawValue: $draftZoom)
-                                        }
-                                    )
-                                },
-                                onClear: { draftZoom = 0 },
-                                showDivider: true
-                            )
-                            WindowRow(
-                                icon: "rectangle.expand.vertical",
-                                title: "最大化快捷键",
-                                desc: "按下此快捷键 → 光标下的窗口最大化",
-                                control: {
-                                    AnyView(
-                                        KeyCapSlot(minWidth: 110) {
-                                            ShortcutRecorderField(
-                                                shortcut: $draftMaximize,
-                                                placeholder: "点击录制"
-                                            )
-                                        }
-                                    )
-                                },
-                                onClear: { draftMaximize = nil },
-                                showDivider: true
-                            )
-                        }
-                    }
-
-                    // 调试日志开关:即时生效。开启后把 move/resize 的窗口识别决策写入
-                    // ~/Library/Logs/Velto/window-management.log,排查"移动了错误窗口"用。
-                    GroupCard(radius: MGRadius.cardLg) {
-                        HStack(spacing: 10) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("调试日志")
-                                    .font(.mgLabelStrong)
-                                    .foregroundStyle(Color.mgText1)
-                                Text("把移动/缩放时的窗口识别决策写入日志文件,排查「移动了错误窗口」这类问题时开启;反馈问题时附上日志更精准。")
-                                    .font(.mgMeta)
-                                    .foregroundStyle(Color.mgText2)
-                            }
-                            Spacer(minLength: 12)
-                            Toggle("", isOn: Binding(
-                                get: { store.preferences.windowManagementDebugLoggingEnabled },
-                                set: { v in
-                                    store.updatePreferences { $0.windowManagementDebugLoggingEnabled = v }
-                                    WindowManagementDebugLog.setEnabled(v)
-                                }
-                            ))
-                            .labelsHidden()
-                            .toggleStyle(.switch)
-                            .controlSize(.small)
-                            .tint(.mgAccent)
-                        }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 14)
-                    }
-                }
-                .padding(.horizontal, 32)
-                .padding(.top, 28)
-                .padding(.bottom, 28)
-            }
-
-            BottomToolbar(
-                hasUnsavedChanges: hasUnsavedChanges,
-                statusMessage: statusMessage,
-                onDiscard: { reloadFromStore() },
-                onSave: saveChanges
-            )
+      SettingsSection("快捷操作") {
+        SettingsRow(title: "移动窗口", subtitle: "按住此键 + 移动鼠标 → 拖动当前窗口") {
+          ShortcutField(modifiers: pref(\.windowMoveModifierFlags))
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .onAppear(perform: loadDraftIfNeeded)
-        .onReceive(NotificationCenter.default.publisher(for: .gestureStoreDidChange)) { note in
-            guard note.object as? GestureStore === store else { return }
-            switch note.gestureStoreChangeReason {
-            case .backupImport:
-                reloadFromStore(silent: true)
-            case .preferences:
-                if !hasUnsavedChanges { reloadFromStore(silent: true) }
-            default: break
-            }
+        SettingsRow(title: "缩放窗口", subtitle: "按住此键 + 移动鼠标 → 按光标所在边角缩放") {
+          ShortcutField(modifiers: pref(\.windowResizeModifierFlags))
         }
-    }
-
-    private func loadDraftIfNeeded() {
-        guard !didLoad else { return }
-        didLoad = true
-        reloadFromStore(silent: true)
-    }
-
-    private func saveChanges() {
-        store.updatePreferences { p in
-            p.windowMoveModifierFlags = draftMove
-            p.windowResizeModifierFlags = draftResize
-            p.contentZoomModifierFlags = draftZoom
-            p.windowMaximizeShortcut = draftMaximize
+        SettingsRow(title: "滚轮缩放修饰键", subtitle: "按住此键 + 滚动滚轮 → 缩放页面内容") {
+          ShortcutField(modifiers: pref(\.contentZoomModifierFlags))
         }
-        statusMessage = "已保存。"
-    }
-
-    private func reloadFromStore(silent: Bool = false) {
-        let p = store.preferences
-        draftMove = p.windowMoveModifierFlags
-        draftResize = p.windowResizeModifierFlags
-        draftZoom = p.contentZoomModifierFlags
-        draftMaximize = p.windowMaximizeShortcut
-        statusMessage = silent ? "" : "已丢弃未保存更改。"
-    }
-}
-
-// MARK: - WindowRow
-
-private struct WindowRow: View {
-    let icon: String
-    let title: String
-    let desc: String
-    let control: () -> AnyView
-    let onClear: () -> Void
-    let showDivider: Bool
-
-    var body: some View {
-        VStack(spacing: 0) {
-            if showDivider {
-                Rectangle()
-                    .fill(Color.mgHair)
-                    .frame(height: 0.5)
-                    .padding(.leading, 78)
-            }
-
-            HStack(alignment: .center, spacing: 16) {
-                ActionIcon(systemName: icon)
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(Color.mgText1)
-                    Text(desc)
-                        .font(.system(size: 12))
-                        .foregroundStyle(Color.mgText2)
-                }
-
-                Spacer(minLength: 12)
-
-                control()
-
-                Button("清除", action: onClear)
-                    .buttonStyle(MGPlainButtonStyle(foreground: Color.mgText3))
-            }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 16)
+        SettingsRow(title: "最大化快捷键", subtitle: "按下此快捷键 → 光标下的窗口最大化") {
+          ShortcutField(shortcut: pref(\.windowMaximizeShortcut))
         }
+      }
+
+      DebugSection(
+        isOn: pref(\.windowManagementDebugLoggingEnabled),
+        logURL: WindowManagementDebugLog.fileURL,
+        help: "把移动/缩放时的窗口识别决策写入日志文件,排查「移动了错误窗口」这类问题时开启;反馈问题时附上日志更精准。"
+      )
     }
+  }
+
+  /// 直接读写 store;updatePreferences 会顺带同步调试日志开关。
+  private func pref<V>(_ keyPath: WritableKeyPath<AppPreferences, V>) -> Binding<V> {
+    Binding(
+      get: { store.preferences[keyPath: keyPath] },
+      set: { v in store.updatePreferences { $0[keyPath: keyPath] = v } }
+    )
+  }
 }

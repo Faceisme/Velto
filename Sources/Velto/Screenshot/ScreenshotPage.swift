@@ -19,8 +19,7 @@ struct ScreenshotPage: View {
     ScrollView {
       VStack(alignment: .leading, spacing: 22) {
         PageHeader(
-          tag: "Screenshot",
-          title: "截图",
+          page: .screenshot,
           subtitle: "全局触发键唤起截图,支持区域/窗口选择、复制剪贴板、静默保存预设目录。"
         )
 
@@ -49,7 +48,7 @@ struct ScreenshotPage: View {
   // MARK: - 总开关 + 屏幕录制权限
 
   private var enableSection: some View {
-    GroupCard(radius: MGRadius.cardLg) {
+    GroupCard {
       VStack(spacing: 0) {
         row(
           icon: "power",
@@ -82,12 +81,11 @@ struct ScreenshotPage: View {
                   _ = PermissionManager.requestScreenRecordingPrompt()
                   screenRecordingTrusted = PermissionManager.isScreenRecordingTrusted
                 }
-                .buttonStyle(MGSecondaryButtonStyle(foreground: .mgAccent))
-
+                .buttonStyle(.borderedProminent)
                 Button("打开隐私设置") {
                   PermissionManager.openPrivacySettings()
                 }
-                .buttonStyle(MGSecondaryButtonStyle())
+                .buttonStyle(.bordered)
               }
             )
           }
@@ -101,7 +99,7 @@ struct ScreenshotPage: View {
   private var triggerSection: some View {
     VStack(alignment: .leading, spacing: 0) {
       MGSectionLabel(text: "全局触发键")
-      GroupCard(radius: MGRadius.cardLg) {
+      GroupCard {
         VStack(spacing: 0) {
           row(
             icon: "camera.viewfinder",
@@ -132,7 +130,8 @@ struct ScreenshotPage: View {
                     triggerShortcutWarning = false
                     updatePrefs { $0.screenshot.triggerShortcut = nil }
                   }
-                  .buttonStyle(MGPlainButtonStyle(foreground: .mgText3))
+                  .buttonStyle(.borderless)
+                  .foregroundStyle(Color.mgText3)
                 }
               }
             )
@@ -161,7 +160,7 @@ struct ScreenshotPage: View {
   private var sessionKeysSection: some View {
     VStack(alignment: .leading, spacing: 0) {
       MGSectionLabel(text: "会话内按键")
-      GroupCard(radius: MGRadius.cardLg) {
+      GroupCard {
         VStack(spacing: 0) {
           // 复制到剪贴板:裸 keyCode(默认空格 49),只读展示
           row(
@@ -246,7 +245,7 @@ struct ScreenshotPage: View {
   private var saveSection: some View {
     VStack(alignment: .leading, spacing: 0) {
       MGSectionLabel(text: "保存")
-      GroupCard(radius: MGRadius.cardLg) {
+      GroupCard {
         VStack(spacing: 0) {
           row(
             icon: "folder",
@@ -258,7 +257,7 @@ struct ScreenshotPage: View {
               Button("选择…") {
                 chooseSaveDirectory()
               }
-              .buttonStyle(MGSecondaryButtonStyle())
+              .buttonStyle(.bordered)
             )
           }
 
@@ -289,7 +288,7 @@ struct ScreenshotPage: View {
   private var annotationSection: some View {
     VStack(alignment: .leading, spacing: 0) {
       MGSectionLabel(text: "标注默认样式")
-      GroupCard(radius: MGRadius.cardLg) {
+      GroupCard {
         VStack(spacing: 0) {
           row(
             icon: "paintpalette",
@@ -399,7 +398,7 @@ struct ScreenshotPage: View {
   // MARK: - 放大镜
 
   private var magnifierSection: some View {
-    GroupCard(radius: MGRadius.cardLg) {
+    GroupCard {
       VStack(spacing: 0) {
         row(
           icon: "magnifyingglass.circle",
@@ -425,7 +424,7 @@ struct ScreenshotPage: View {
   // MARK: - 调试
 
   private var debugSection: some View {
-    GroupCard(radius: MGRadius.cardLg) {
+    GroupCard {
       VStack(spacing: 0) {
         row(
           icon: "ladybug",
@@ -456,7 +455,7 @@ struct ScreenshotPage: View {
         ) {
           AnyView(
             Button("在访达中显示") { revealDebugLog() }
-              .buttonStyle(MGSecondaryButtonStyle(foreground: .mgAccent))
+              .buttonStyle(.bordered)
           )
         }
       }

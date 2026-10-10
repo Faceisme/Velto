@@ -24,31 +24,20 @@ struct MouseInputRecorderField: View {
             HStack(spacing: 8) {
                 if isRecording {
                     Text("按键或鼠标按钮…")
-                        .font(.mgBody)
+                        .font(.mgMeta)
                         .foregroundStyle(Color.mgAccent)
                 } else if let trigger {
-                    Kbd(keys: trigger.displayComponents, size: .md)
+                    Kbd(keys: trigger.displayComponents, size: .sm)
                 } else {
                     Text(placeholder)
-                        .font(.mgBody)
+                        .font(.mgMeta)
                         .foregroundStyle(Color.mgText3)
                 }
             }
-            .padding(.vertical, 5)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .overlay {
-            if isRecording {
-                RoundedRectangle(cornerRadius: MGRadius.control, style: .continuous)
-                    .strokeBorder(
-                        Color.mgAccent.opacity(0.55),
-                        style: StrokeStyle(lineWidth: 1, dash: [3, 3])
-                    )
-                    .padding(-4)
-                    .allowsHitTesting(false)
-            }
-        }
+        .preference(key: RecordingKey.self, value: isRecording)
         .onDisappear { endRecording() }
     }
 

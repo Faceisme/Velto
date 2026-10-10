@@ -10,7 +10,7 @@ import SwiftUI
 struct GestureTrailView: View {
     var templates: [[StrokePoint]]
     var stroke: CGFloat = 4
-    var colors: [Color] = [.mgAccent, .mgAccentEnd]
+    var colors: [Color] = [.mgAccent, .mgAccent]
     var showStartDot: Bool = true
     var showEndArrow: Bool = true
     /// 最多渲染的 ghost 数量(避免糊成一团)。负数表示不限制。
@@ -87,7 +87,7 @@ struct GestureTrailView: View {
                     var sub = ctx
                     sub.translateBy(x: b.x, y: b.y)
                     sub.rotate(by: .radians(angle))
-                    sub.fill(arrow, with: .color(colors.last ?? .mgAccentEnd))
+                    sub.fill(arrow, with: .color(colors.last ?? .mgAccent))
                 }
             }
         }
@@ -172,11 +172,10 @@ struct GesturePreviewCard<Overlay: View>: View {
     }
 
     var body: some View {
-        let shape = RoundedRectangle(cornerRadius: MGRadius.cardSm, style: .continuous)
+        let shape = RoundedRectangle(cornerRadius: MGRadius.card, style: .continuous)
         return ZStack {
             shape
-                .fill(Color.mgCardAlt)
-                .veltoNativeGlass(in: shape)
+                .fill(Color.mgInset)
 
             // 点阵网格
             Canvas { ctx, size in
@@ -232,11 +231,7 @@ struct GesturePreviewCard<Overlay: View>: View {
                         }
                         .padding(.horizontal, 10)
                         .padding(.vertical, 4)
-                        .background(
-                            Capsule()
-                                .fill(Color.mgGlassControl)
-                        )
-                        .veltoNativeGlass(in: Capsule())
+                        .background(Capsule().fill(Color.mgKey))
                         .overlay(
                             Capsule()
                                 .strokeBorder(Color.mgHair, lineWidth: 0.5)

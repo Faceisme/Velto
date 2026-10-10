@@ -19,6 +19,9 @@ enum WindowManagementDebugLog {
 
   private static let envForced = ProcessInfo.processInfo.environment["VELTO_WINDOW_DEBUG"] == "1"
 
+  static let fileURL = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0]
+    .appendingPathComponent("Logs/Velto/window-management.log")
+
   private static let dateFormatter: DateFormatter = {
     let f = DateFormatter()
     f.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS"
@@ -116,12 +119,8 @@ enum WindowManagementDebugLog {
 
   private static func openLogFile() -> FileHandle? {
     let fm = FileManager.default
-    guard let logsDir = fm.urls(for: .libraryDirectory, in: .userDomainMask).first?
-      .appendingPathComponent("Logs", isDirectory: true)
-      .appendingPathComponent("Velto", isDirectory: true)
-    else { return nil }
-    try? fm.createDirectory(at: logsDir, withIntermediateDirectories: true)
-    let url = logsDir.appendingPathComponent("window-management.log")
+    let url = fileURL
+    try? fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
     if !fm.fileExists(atPath: url.path) {
       fm.createFile(atPath: url.path, contents: nil)
     }

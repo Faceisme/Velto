@@ -18,8 +18,7 @@ struct MouseControlPage: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
                     PageHeader(
-                        tag: "Mouse Control",
-                        title: "鼠标控制",
+                        page: .mouseControl,
                         subtitle: "平滑滚动、轴向反转、滚动功能键、按应用覆盖和按钮绑定。"
                     )
 
@@ -281,7 +280,8 @@ private struct MouseHotkeysEditor: View {
                 Button("清除") {
                     trigger.wrappedValue = nil
                 }
-                .buttonStyle(MGPlainButtonStyle(foreground: .mgText3))
+                .buttonStyle(.borderless)
+                .foregroundStyle(Color.mgText3)
             }
         }
     }
@@ -305,7 +305,7 @@ private struct MouseBindingsSection: View {
                         Text("添加绑定")
                     }
                 }
-                .buttonStyle(MGSecondaryButtonStyle(foreground: .mgAccent))
+                .buttonStyle(.bordered)
                 .padding(.bottom, 8)
             }
 
@@ -429,14 +429,15 @@ private struct MouseBindingRow: View {
                 )
 
                 Button("删除", action: onDelete)
-                    .buttonStyle(MGPlainButtonStyle(foreground: .mgDanger))
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(Color.mgDanger)
             }
 
             actionEditor
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 10)
-        .veltoGlassPanel(radius: MGRadius.cardSm)
+        .mgCard()
     }
 
     @ViewBuilder
@@ -541,7 +542,7 @@ private struct MouseBindingRow: View {
                 .truncationMode(.middle)
             Spacer()
             Button(buttonTitle, action: select)
-                .buttonStyle(MGSecondaryButtonStyle())
+                .buttonStyle(.bordered)
         }
     }
 
@@ -603,7 +604,7 @@ private struct MouseAppRulesSection: View {
                         Text("添加应用")
                     }
                 }
-                .buttonStyle(MGSecondaryButtonStyle(foreground: .mgAccent))
+                .buttonStyle(.bordered)
                 .padding(.bottom, 8)
             }
 
@@ -643,7 +644,7 @@ private struct MouseAppRulesSection: View {
                             .frame(width: 22, height: 22)
                         VStack(alignment: .leading, spacing: 1) {
                             Text(rule.displayName)
-                                .font(.mgBodyMedium)
+                                .font(.mgButtonSm)
                                 .foregroundStyle(Color.mgText1)
                                 .lineLimit(1)
                             Text(rule.bundleIdentifier)
@@ -656,8 +657,8 @@ private struct MouseAppRulesSection: View {
                     .padding(.horizontal, 8)
                     .padding(.vertical, 7)
                     .background(
-                        RoundedRectangle(cornerRadius: MGRadius.controlSm, style: .continuous)
-                            .fill(rule.id == (selectedID ?? preferences.appRules.first?.id) ? Color.mgAccentSoft : .clear)
+                        RoundedRectangle(cornerRadius: MGRadius.control, style: .continuous)
+                            .fill(rule.id == (selectedID ?? preferences.appRules.first?.id) ? Color.mgAccent.opacity(0.12) : .clear)
                     )
                 }
                 .buttonStyle(.plain)
@@ -679,13 +680,14 @@ private struct MouseAppRulesSection: View {
                         .truncationMode(.middle)
                 }
                 Spacer()
-                Button("删除") {
+                Button("删除", role: .destructive) {
                     let removed = preferences.appRules.remove(at: index)
                     if selectedID == removed.id {
                         selectedID = preferences.appRules.first?.id
                     }
                 }
-                .buttonStyle(MGDestructiveButtonStyle(height: 28))
+                .buttonStyle(.bordered)
+                .foregroundStyle(Color.mgDanger)
             }
 
             appRuleToggle("继承全局滚动", isOn: binding(index, \.inheritScroll))
@@ -712,7 +714,7 @@ private struct MouseAppRulesSection: View {
     private func appRuleToggle(_ title: String, isOn: Binding<Bool>) -> some View {
         HStack {
             Text(title)
-                .font(.mgBodyMedium)
+                .font(.mgButtonSm)
                 .foregroundStyle(Color.mgText1)
             Spacer()
             Toggle("", isOn: isOn)
@@ -723,7 +725,7 @@ private struct MouseAppRulesSection: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
-        .veltoGlassPanel(radius: MGRadius.control)
+        .mgCard(radius: MGRadius.control)
     }
 
     private func binding<Value>(_ index: Int, _ keyPath: WritableKeyPath<MouseAppRule, Value>) -> Binding<Value> {

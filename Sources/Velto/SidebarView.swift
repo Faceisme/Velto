@@ -5,7 +5,6 @@ import SwiftUI
 
 struct SidebarView: View {
     @Binding var page: MGPage?
-    private let store = GestureStore.shared
 
     var body: some View {
         ZStack {
@@ -20,79 +19,15 @@ struct SidebarView: View {
                 Spacer().frame(height: 54)
 
                 SidebarGroup(title: "功能") {
-                    SidebarItem(
-                        icon: MGPage.gestures.icon,
-                        label: MGPage.gestures.label,
-                        badge: store.gestures.count,
-                        active: page == .gestures
-                    ) { page = .gestures }
-
-                    SidebarItem(
-                        icon: MGPage.mouseControl.icon,
-                        label: MGPage.mouseControl.label,
-                        badge: nil,
-                        active: page == .mouseControl
-                    ) { page = .mouseControl }
-
-                    SidebarItem(
-                        icon: MGPage.window.icon,
-                        label: MGPage.window.label,
-                        badge: nil,
-                        active: page == .window
-                    ) { page = .window }
-
-                    SidebarItem(
-                        icon: MGPage.switcher.icon,
-                        label: MGPage.switcher.label,
-                        badge: nil,
-                        active: page == .switcher
-                    ) { page = .switcher }
-
-                    SidebarItem(
-                        icon: MGPage.inputSourceSwitch.icon,
-                        label: MGPage.inputSourceSwitch.label,
-                        badge: nil,
-                        active: page == .inputSourceSwitch
-                    ) { page = .inputSourceSwitch }
-
-                    SidebarItem(
-                        icon: MGPage.keyRemap.icon,
-                        label: MGPage.keyRemap.label,
-                        badge: nil,
-                        active: page == .keyRemap
-                    ) { page = .keyRemap }
-
-                    SidebarItem(
-                        icon: MGPage.betterFinder.icon,
-                        label: MGPage.betterFinder.label,
-                        badge: nil,
-                        active: page == .betterFinder
-                    ) { page = .betterFinder }
-
-                    SidebarItem(
-                        icon: MGPage.screenshot.icon,
-                        label: MGPage.screenshot.label,
-                        badge: nil,
-                        active: page == .screenshot
-                    ) { page = .screenshot }
-
-                    SidebarItem(
-                        icon: MGPage.networkMonitor.icon,
-                        label: MGPage.networkMonitor.label,
-                        badge: nil,
-                        active: page == .networkMonitor
-                    ) { page = .networkMonitor }
+                    ForEach(MGPage.allCases.filter { $0 != .general }) { item in
+                        SidebarItem(page: item, active: page == item) { page = item }
+                    }
                 }
 
                 Spacer().frame(height: 14)
 
                 SidebarGroup(title: "偏好") {
-                    SidebarItem(
-                        icon: MGPage.general.icon,
-                        label: MGPage.general.label,
-                        badge: nil,
-                        active: page == .general
-                    ) { page = .general }
+                    SidebarItem(page: .general, active: page == .general) { page = .general }
                 }
 
                 Spacer()
@@ -160,9 +95,7 @@ private struct SidebarGroup<Content: View>: View {
 // MARK: - SidebarItem
 
 private struct SidebarItem: View {
-    let icon: String
-    let label: String
-    let badge: Int?
+    let page: MGPage
     let active: Bool
     let action: () -> Void
     @State private var isHovered = false
@@ -173,32 +106,16 @@ private struct SidebarItem: View {
             action()
         } label: {
             HStack(spacing: 10) {
-                Image(systemName: icon)
-                    .font(.system(size: 15, weight: active ? .semibold : .regular))
-                    .frame(width: 18, height: 18)
-                    .foregroundStyle(active ? Color.white : Color.mgText2)
+                ModuleIcon(page: page)
 
-                Text(label)
+                Text(page.label)
                     .font(.system(size: 14, weight: active ? .semibold : .regular))
                     .foregroundStyle(active ? Color.white : Color.mgText1)
 
                 Spacer(minLength: 0)
-
-                if let badge, badge > 0 {
-                    Text("\(badge)")
-                        .font(.system(size: 12, weight: .semibold))
-                        .monospacedDigit()
-                        .foregroundStyle(active ? Color.white : Color.mgText2)
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 1)
-                        .background(
-                            Capsule()
-                                .fill(active ? Color.white.opacity(0.22) : Color.mgHair)
-                        )
-                }
             }
             .padding(.horizontal, 11)
-            .padding(.vertical, 8)
+            .padding(.vertical, 7)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
                 sidebarItemBackground

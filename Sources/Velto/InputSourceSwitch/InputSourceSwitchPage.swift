@@ -34,14 +34,14 @@ struct InputSourceSwitchPage: View {
       ScrollView {
         VStack(alignment: .leading, spacing: 22) {
           PageHeader(
-            tag: "Input Source",
-            title: "输入法切换",
+            page: .inputSourceSwitch,
             subtitle: "根据当前 App 和浏览器网站自动切换输入法。"
           )
           MGSegmentedPicker(
             selection: $segment,
             options: Segment.allCases.map { MGSegmentedOption($0, $0.title) }
           )
+          .controlSize(.large)
 
           switch segment {
           case .general: generalGroup
@@ -83,7 +83,7 @@ struct InputSourceSwitchPage: View {
   // MARK: - 通用
 
   private var generalGroup: some View {
-    GroupCard(radius: MGRadius.cardLg) {
+    GroupCard {
       VStack(spacing: 0) {
         row(icon: "power", title: "启用输入法切换",
             desc: "关闭后不再自动切换输入法。", showDivider: false) {
@@ -113,7 +113,7 @@ struct InputSourceSwitchPage: View {
             desc: "~/Library/Logs/Velto/", showDivider: true) {
           AnyView(
             Button("打开") { openLogsFolder() }
-              .buttonStyle(MGSecondaryButtonStyle())
+              .buttonStyle(.bordered)
           )
         }
       }
@@ -148,7 +148,7 @@ struct InputSourceSwitchPage: View {
   private func groupColumn(role: InputSourceGroupRole) -> some View {
     let group = store.preferences.inputSourceSwitch.appGroups.first { $0.role == role }
     let members = group?.bundleIdentifiers ?? []
-    return GroupCard(radius: MGRadius.cardLg) {
+    return GroupCard {
       VStack(spacing: 0) {
         // 组头:固定名 + 应用数 + 分组级输入法。
         HStack(alignment: .center, spacing: 12) {
@@ -188,7 +188,8 @@ struct InputSourceSwitchPage: View {
             importTargetRole = role
             appImporterPresented = true
           } label: { Label("添加应用", systemImage: "plus") }
-            .buttonStyle(MGPlainButtonStyle(foreground: .mgAccent))
+            .buttonStyle(.borderless)
+            .foregroundStyle(Color.mgAccent)
           Spacer()
         }
         .padding(.horizontal, 16).padding(.vertical, 12)
@@ -213,7 +214,8 @@ struct InputSourceSwitchPage: View {
         Button { removeAppFromGroup(bundleID, role: role) } label: {
           Image(systemName: "minus.circle")
         }
-        .buttonStyle(MGPlainButtonStyle(foreground: .mgText3))
+        .buttonStyle(.borderless)
+        .foregroundStyle(Color.mgText3)
       }
       .padding(.horizontal, 16).padding(.vertical, 10)
     }
@@ -225,7 +227,7 @@ struct InputSourceSwitchPage: View {
     VStack(alignment: .leading, spacing: 16) {
       VStack(alignment: .leading, spacing: 10) {
         sectionLabel("启用的浏览器")
-        GroupCard(radius: MGRadius.cardLg) {
+        GroupCard {
           VStack(spacing: 0) {
             if installedBrowsers.isEmpty { emptyHint("没检测到受支持的浏览器。") }
             ForEach(installedBrowsers) { b in
@@ -254,9 +256,9 @@ struct InputSourceSwitchPage: View {
           Button {
             editingBrowserRule = InputSourceBrowserRule()
           } label: { Label("新增规则", systemImage: "plus") }
-            .buttonStyle(MGSecondaryButtonStyle(foreground: .mgAccent))
+            .buttonStyle(.bordered)
         }
-        GroupCard(radius: MGRadius.cardLg) {
+        GroupCard {
           VStack(spacing: 0) {
             let rules = store.preferences.inputSourceSwitch.browserRules
             if rules.isEmpty { emptyHint("还没有 URL 规则。") }
@@ -280,7 +282,7 @@ struct InputSourceSwitchPage: View {
   // MARK: - 故障排除
 
   private var troubleshootingGroup: some View {
-    GroupCard(radius: MGRadius.cardLg) {
+    GroupCard {
       VStack(spacing: 0) {
         row(icon: "wrench.and.screwdriver", title: "修复输入法切换问题(CJKV)",
             desc: "中日韩越输入法切了图标变但实际没切时打开。", showDivider: false) {
@@ -298,7 +300,7 @@ struct InputSourceSwitchPage: View {
               desc: "该策略依赖此系统快捷键,请到键盘设置开启。", showDivider: true) {
             AnyView(
               Button("打开键盘设置") { PermissionManager.openKeyboardSettings() }
-                .buttonStyle(MGSecondaryButtonStyle(foreground: .mgAccent))
+                .buttonStyle(.bordered)
             )
           }
         }
@@ -358,10 +360,12 @@ struct InputSourceSwitchPage: View {
           .labelsHidden().toggleStyle(.switch).controlSize(.small).tint(.mgAccent)
         if let onEdit {
           Button { onEdit() } label: { Image(systemName: "pencil") }
-            .buttonStyle(MGPlainButtonStyle(foreground: .mgText3))
+            .buttonStyle(.borderless)
+            .foregroundStyle(Color.mgText3)
         }
         Button { onDelete() } label: { Image(systemName: "trash") }
-          .buttonStyle(MGPlainButtonStyle(foreground: .mgDanger))
+          .buttonStyle(.borderless)
+          .foregroundStyle(Color.mgDanger)
       })
     }
   }
@@ -384,10 +388,12 @@ struct InputSourceSwitchPage: View {
           .labelsHidden().toggleStyle(.switch).controlSize(.small).tint(.mgAccent)
         if let onEdit {
           Button { onEdit() } label: { Image(systemName: "pencil") }
-            .buttonStyle(MGPlainButtonStyle(foreground: .mgText3))
+            .buttonStyle(.borderless)
+            .foregroundStyle(Color.mgText3)
         }
         Button { onDelete() } label: { Image(systemName: "trash") }
-          .buttonStyle(MGPlainButtonStyle(foreground: .mgDanger))
+          .buttonStyle(.borderless)
+          .foregroundStyle(Color.mgDanger)
       })
     }
   }
@@ -513,15 +519,12 @@ private struct BundleAppIcon: View {
   var body: some View {
     Group {
       if let icon {
-        let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
         Image(nsImage: icon)
           .resizable()
           .aspectRatio(contentMode: .fit)
           .frame(width: 30, height: 30)
           .padding(5)
           .frame(width: 40, height: 40)
-          .background(shape.fill(Color.mgGlassControl.opacity(0.35)))
-          .veltoNativeGlass(in: shape)
       } else {
         ActionIcon(systemName: "app")
       }
@@ -546,15 +549,12 @@ private struct BrowserIcon: View {
   var body: some View {
     Group {
       if let icon {
-        let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
         Image(nsImage: icon)
           .resizable()
           .aspectRatio(contentMode: .fit)
           .frame(width: 30, height: 30)
           .padding(5)
           .frame(width: 40, height: 40)
-          .background(shape.fill(Color.mgGlassControl.opacity(0.35)))
-          .veltoNativeGlass(in: shape)
       } else {
         ActionIcon(systemName: "globe")
       }

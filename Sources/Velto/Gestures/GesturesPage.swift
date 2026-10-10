@@ -141,6 +141,7 @@ struct GesturesPage: View {
                         MGSegmentedOption(.settings, "设置")
                     ]
                 )
+                .controlSize(.large)
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 20)
@@ -171,7 +172,7 @@ struct GesturesPage: View {
                     .foregroundStyle(Color.mgAccent)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 1)
-                    .background(Capsule().fill(Color.mgAccentSoft))
+                    .background(Capsule().fill(Color.mgAccent.opacity(0.12)))
 
                 Spacer()
 
@@ -182,7 +183,7 @@ struct GesturesPage: View {
                         Text("新建")
                     }
                 }
-                .buttonStyle(MGPrimaryButtonStyle(height: 30, hPad: 13, font: .mgButtonSm))
+                .buttonStyle(.borderedProminent)
             }
             .padding(.horizontal, 20)
             .padding(.top, 18)
@@ -216,8 +217,7 @@ struct GesturesPage: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 PageHeader(
-                    tag: "Gesture",
-                    title: "手势设置",
+                    page: .gestures,
                     subtitle: "行为、识别参数与调试,仅作用于鼠标手势模块。"
                 )
 
@@ -498,7 +498,7 @@ private struct GestureListItem: View {
                     RoundedRectangle(cornerRadius: 9, style: .continuous)
                         .fill(selected
                               ? Color.white.opacity(0.18)
-                              : Color.mgCardAlt)
+                              : Color.mgInset)
 
                     if !gesture.templates.isEmpty {
                         GestureTrailView(
@@ -560,17 +560,8 @@ private struct GestureListItem: View {
             .padding(.vertical, 9)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
-                Group {
-                    if selected {
-                        Color.clear
-                            .glassEffect(.regular.tint(Color.mgAccent.opacity(0.85)),
-                                         in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                    } else {
-                        RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .fill(Color.mgGlassWeak.opacity(0.3))
-                            .veltoNativeGlass(in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                    }
-                }
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(selected ? Color.mgAccent : Color.mgCard)
             )
             .contentShape(Rectangle())
         }
@@ -640,16 +631,16 @@ private struct GestureDetailPanel: View {
                             Text(isEditingName ? "完成" : "修改")
                         }
                     }
-                    .buttonStyle(MGSecondaryButtonStyle(height: 32, hPad: 12, font: .mgBodyMedium))
-
-                    Button(action: onDelete) {
+                    .buttonStyle(.bordered)
+                    Button(role: .destructive, action: onDelete) {
                         HStack(spacing: 5) {
                             Image(systemName: "trash")
                                 .font(.system(size: 12, weight: .medium))
                             Text("删除")
                         }
                     }
-                    .buttonStyle(MGDestructiveButtonStyle())
+                    .buttonStyle(.bordered)
+                    .foregroundStyle(Color.mgDanger)
                 }
                 // hold 住右侧整组的固有宽度。Kbd 多一个键(如 ⇧⌘])就要多 ~37pt,
                 // 父 HStack 宽度紧时 SwiftUI 默认会去挤 Button label —— 表现是
@@ -718,13 +709,13 @@ private struct GestureDetailPanel: View {
                         if !g.templates.isEmpty { g.templates.removeLast() }
                     }
                 }
-                .buttonStyle(MGSecondaryButtonStyle())
+                .buttonStyle(.bordered)
                 .disabled(gesture.templates.isEmpty)
 
                 Button("清空样本") {
                     updateDraft { $0.templates.removeAll() }
                 }
-                .buttonStyle(MGSecondaryButtonStyle())
+                .buttonStyle(.bordered)
                 .disabled(gesture.templates.isEmpty)
 
                 Spacer()
@@ -735,7 +726,7 @@ private struct GestureDetailPanel: View {
             }
         }
         .padding(16)
-        .veltoGlassPanel(radius: MGRadius.cardLg, shadow: true)
+        .mgCard()
     }
 
     // 触发的快捷键卡片
@@ -754,13 +745,13 @@ private struct GestureDetailPanel: View {
                 Button("清除") {
                     shortcut = nil
                 }
-                .buttonStyle(MGPlainButtonStyle())
+                .buttonStyle(.borderless)
             }
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 12)
         .frame(minHeight: 56)
-        .veltoGlassPanel(radius: MGRadius.card)
+        .mgCard()
     }
 }
 
@@ -793,20 +784,18 @@ struct BottomToolbar: View {
                 Spacer()
 
                 Button("丢弃更改", action: onDiscard)
-                    .buttonStyle(MGPlainButtonStyle())
+                    .buttonStyle(.borderless)
                     .disabled(!hasUnsavedChanges)
-                    .opacity(hasUnsavedChanges ? 1 : 0.45)
 
                 Button("保存", action: onSave)
-                    .buttonStyle(MGPrimaryButtonStyle())
+                    .buttonStyle(.borderedProminent)
                     .keyboardShortcut(.return)
                     .disabled(saveDisabled)
-                    .opacity(saveDisabled ? 0.55 : 1)
             }
             .padding(.horizontal, 20)
             .frame(height: 54)
         }
-        .veltoGlassSurface(radius: 0, fill: .mgGlassWeak, shadow: false)
+        .glassEffect(.regular, in: Rectangle())
     }
 
     @ViewBuilder

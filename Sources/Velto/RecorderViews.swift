@@ -3,7 +3,7 @@ import SwiftUI
 
 // MARK: - ShortcutRecorderField (SwiftUI)
 //
-// 点击进入录制态:边框变虚线 + 提示"请按下快捷键…"
+// 点击进入录制态:提示"请按下快捷键…",并通过 RecordingKey 让外层 KeyCapSlot 描强调色边框。
 // 用 NSEvent.addLocalMonitorForEvents 截取按键。
 //
 // 退出录制态的触发器(任一即可):
@@ -39,35 +39,26 @@ struct ShortcutRecorderField: View {
             HStack(spacing: 8) {
                 if isRecording {
                     Text("请按下快捷键…")
-                        .font(.mgBody)
+                        .font(.mgMeta)
                         .foregroundStyle(Color.mgAccent)
                 } else if let sc = shortcut, !sc.kbdKeys.isEmpty {
-                    Kbd(keys: sc.kbdKeys, size: .md)
+                    Kbd(keys: sc.kbdKeys, size: fillWidth ? .md : .sm)
                     if fillWidth {
                         Text("点击修改")
-                            .font(.system(size: 12))
+                            .font(.mgMeta)
                             .foregroundStyle(Color.mgText3)
                     }
                 } else {
                     Text(placeholder)
-                        .font(.mgBody)
+                        .font(.mgMeta)
                         .foregroundStyle(Color.mgText3)
                 }
                 if fillWidth { Spacer(minLength: 0) }
             }
-            .padding(.vertical, 6)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .overlay(alignment: .bottom) {
-            if isRecording {
-                RoundedRectangle(cornerRadius: 4, style: .continuous)
-                    .strokeBorder(Color.mgAccent.opacity(0.5),
-                                  style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
-                    .padding(-4)
-                    .allowsHitTesting(false)
-            }
-        }
+        .preference(key: RecordingKey.self, value: isRecording)
         .onDisappear { endRecording() }
     }
 
@@ -170,32 +161,24 @@ struct ModifierRecorderField: View {
             HStack(spacing: 4) {
                 if isRecording {
                     if captured != 0 {
-                        Kbd(keys: keysFromRaw(captured), size: .md)
+                        Kbd(keys: keysFromRaw(captured), size: .sm)
                     } else {
                         Text("按住修饰键…")
-                            .font(.system(size: 12))
+                            .font(.mgMeta)
                             .foregroundStyle(Color.mgAccent)
                     }
                 } else if modifierFlagsRawValue != 0 {
-                    Kbd(keys: keysFromRaw(modifierFlagsRawValue), size: .md)
+                    Kbd(keys: keysFromRaw(modifierFlagsRawValue), size: .sm)
                 } else {
                     Text(placeholder)
-                        .font(.system(size: 12))
+                        .font(.mgMeta)
                         .foregroundStyle(Color.mgText3)
                 }
             }
-            .padding(.vertical, 4)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .overlay {
-            if isRecording {
-                RoundedRectangle(cornerRadius: MGRadius.control, style: .continuous)
-                    .strokeBorder(Color.mgAccent.opacity(0.55),
-                                  style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
-                    .allowsHitTesting(false)
-            }
-        }
+        .preference(key: RecordingKey.self, value: isRecording)
         .onDisappear { endRecording(commit: false) }
     }
 
@@ -224,9 +207,8 @@ struct ModifierRecorderField: View {
             if event.type == .flagsChanged {
                 let raw = ModifierFormatter.normalizedRawValue(from: event.modifierFlags)
                 if raw == 0 {
-                    // 松开所有键 → 提交
+                    // 松开所有键 → 提交(endRecording 里写一次,实时保存的页面不会重复落盘)
                     if captured != 0 {
-                        modifierFlagsRawValue = captured
                         endRecording(commit: true)
                     }
                 } else {

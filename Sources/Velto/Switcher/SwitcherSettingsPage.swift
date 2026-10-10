@@ -13,8 +13,7 @@ struct SwitcherSettingsPage: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
                     PageHeader(
-                        tag: "Window Switcher",
-                        title: "窗口切换",
+                        page: .switcher,
                         subtitle: "类似 Win11 风格的窗口切换器,按快捷键呼出,带实时缩略图。"
                     )
 
@@ -33,7 +32,7 @@ struct SwitcherSettingsPage: View {
     // MARK: - 1. 启用 + 触发 + 屏幕
 
     private var triggerGroup: some View {
-        GroupCard(radius: MGRadius.cardLg) {
+        GroupCard {
             VStack(spacing: 0) {
                 row(
                     icon: "power",
@@ -106,7 +105,7 @@ struct SwitcherSettingsPage: View {
     private var filtersGroup: some View {
         VStack(alignment: .leading, spacing: 10) {
             sectionLabel("筛选")
-            GroupCard(radius: MGRadius.cardLg) {
+            GroupCard {
                 VStack(spacing: 0) {
                     row(
                         icon: "app.dashed",
@@ -174,7 +173,7 @@ struct SwitcherSettingsPage: View {
     private var sortingAndAppearanceGroup: some View {
         VStack(alignment: .leading, spacing: 10) {
             sectionLabel("排序与外观")
-            GroupCard(radius: MGRadius.cardLg) {
+            GroupCard {
                 VStack(spacing: 0) {
                     row(
                         icon: "square.stack.3d.up",

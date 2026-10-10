@@ -35,6 +35,22 @@ enum MGPage: String, CaseIterable, Identifiable, Hashable {
         case .general:  "gearshape"
         }
     }
+
+    /// 侧栏 / 页头模块图标的底色
+    var color: Color {
+        switch self {
+        case .gestures: .purple
+        case .mouseControl: .indigo
+        case .window: .blue
+        case .switcher: .teal
+        case .inputSourceSwitch: .orange
+        case .keyRemap: .brown
+        case .betterFinder: .cyan
+        case .screenshot: .pink
+        case .networkMonitor: .green
+        case .general: .gray
+        }
+    }
 }
 
 // MARK: - Root shell

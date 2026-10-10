@@ -23,8 +23,7 @@ struct GeneralSettingsPage: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 PageHeader(
-                    tag: "General",
-                    title: "通用设置",
+                    page: .general,
                     subtitle: "调整应用行为与数据备份。"
                 )
 
@@ -70,7 +69,7 @@ struct GeneralSettingsPage: View {
                     GroupCard(padding: EdgeInsets(top: 16, leading: 20, bottom: 16, trailing: 20)) {
                         VStack(alignment: .leading, spacing: 14) {
                             Text("配置文件几乎包含全部模块设置:鼠标手势、鼠标控制、窗口管理、切换器、输入法切换、按键映射、截图、网络监控与增强Finder,以及识别参数和菜单栏等通用偏好;开机自动启动属于系统登录项,不随配置导入导出。")
-                                .font(.system(size: 12.5))
+                                .font(.mgMeta)
                                 .lineSpacing(3)
                                 .foregroundStyle(Color.mgText2)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -85,8 +84,7 @@ struct GeneralSettingsPage: View {
                                         Text("导入配置")
                                     }
                                 }
-                                .buttonStyle(MGSecondaryButtonStyle())
-
+                                .buttonStyle(.bordered)
                                 Button {
                                     exportConfiguration()
                                 } label: {
@@ -96,8 +94,7 @@ struct GeneralSettingsPage: View {
                                         Text("导出配置")
                                     }
                                 }
-                                .buttonStyle(MGSecondaryButtonStyle())
-
+                                .buttonStyle(.bordered)
                                 Spacer()
 
                                 Button {
@@ -109,7 +106,7 @@ struct GeneralSettingsPage: View {
                                             .font(.system(size: 10, weight: .bold))
                                     }
                                 }
-                                .buttonStyle(MGSecondaryButtonStyle(foreground: .mgAccent))
+                                .buttonStyle(.bordered)
                             }
 
                             if !statusMessage.isEmpty {
@@ -131,7 +128,7 @@ struct GeneralSettingsPage: View {
                                 sub: "各模块的调试开关已移至各自页面;打开后日志都写在这里"
                             ) {
                                 Button("在访达中显示", action: revealDebugLog)
-                                    .buttonStyle(MGSecondaryButtonStyle())
+                                    .buttonStyle(.bordered)
                             }
                         }
                     }

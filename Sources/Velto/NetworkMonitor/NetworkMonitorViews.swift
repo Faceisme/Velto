@@ -413,8 +413,7 @@ struct NetworkMonitorPage: View {
     ScrollView {
       VStack(alignment: .leading, spacing: 22) {
         PageHeader(
-          tag: "Network",
-          title: "网络监控",
+          page: .networkMonitor,
           subtitle: "菜单栏实时网速,点开查看哪些进程在占用网络。"
         )
 
@@ -434,7 +433,7 @@ struct NetworkMonitorPage: View {
               }
               GroupRow(label: "网络面板", sub: "按进程查看实时流量与活动连接", showDivider: true) {
                 Button("打开") { NetworkMonitorController.shared.showDashboard() }
-                  .buttonStyle(MGSecondaryButtonStyle())
+                  .buttonStyle(.bordered)
               }
             }
           }
