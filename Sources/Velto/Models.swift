@@ -62,10 +62,6 @@ struct AppPreferences: Codable, Equatable {
     /// 窗口管理调试日志开关。默认关,关闭时日志路径零文件开销。开启后写
     /// ~/Library/Logs/Velto/window-management.log,记录 move/resize 目标定位决策。
     var windowManagementDebugLoggingEnabled: Bool = false
-    /// 触控板双指手势总开关。默认关,避免升级后立即接管标题栏滚动。
-    var trackpadGesturesEnabled: Bool = false
-    /// 触控板手势调试日志开关。默认关,关闭时日志路径零文件开销。
-    var trackpadGestureDebugLoggingEnabled: Bool = false
     /// 网络监控(菜单栏网速 + 进程/连接面板)开关。默认开。
     var networkMonitorEnabled: Bool = true
     var showTrail: Bool
@@ -133,8 +129,6 @@ struct AppPreferences: Codable, Equatable {
         gesturesEnabled = try container.decodeIfPresent(Bool.self, forKey: .gesturesEnabled) ?? Self.defaults.gesturesEnabled
         windowManagementEnabled = try container.decodeIfPresent(Bool.self, forKey: .windowManagementEnabled) ?? Self.defaults.windowManagementEnabled
         windowManagementDebugLoggingEnabled = try container.decodeIfPresent(Bool.self, forKey: .windowManagementDebugLoggingEnabled) ?? Self.defaults.windowManagementDebugLoggingEnabled
-        trackpadGesturesEnabled = try container.decodeIfPresent(Bool.self, forKey: .trackpadGesturesEnabled) ?? Self.defaults.trackpadGesturesEnabled
-        trackpadGestureDebugLoggingEnabled = try container.decodeIfPresent(Bool.self, forKey: .trackpadGestureDebugLoggingEnabled) ?? Self.defaults.trackpadGestureDebugLoggingEnabled
         networkMonitorEnabled = try container.decodeIfPresent(Bool.self, forKey: .networkMonitorEnabled) ?? Self.defaults.networkMonitorEnabled
         showTrail = try container.decodeIfPresent(Bool.self, forKey: .showTrail) ?? Self.defaults.showTrail
         showMenuBarIcon = try container.decodeIfPresent(Bool.self, forKey: .showMenuBarIcon) ?? Self.defaults.showMenuBarIcon
@@ -370,7 +364,6 @@ final class GestureStore {
     /// 把"调试模式"开关同步给 `DebugLog` —— 覆盖启动加载 / UI 改动 / 配置导入。
     private func syncDebugLog() {
         DebugLog.setEnabled(preferences.debugLoggingEnabled)
-        TrackpadGestureDebugLog.setEnabled(preferences.trackpadGestureDebugLoggingEnabled)
         WindowManagementDebugLog.setEnabled(preferences.windowManagementDebugLoggingEnabled)
     }
 

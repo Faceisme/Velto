@@ -16,7 +16,6 @@ import betterfinder
 /// - `MouseControlController` smooth scroll / scroll hotkeys / button bindings
 /// - `WindowDragController` modifier+drag move/resize
 /// - `ContentZoomController` modifier+scroll content zoom
-/// - `TrackpadGestureController` titlebar trackpad gestures
 /// - `WindowShortcutController` shortcut-triggered window actions
 ///
 /// The tap callback runs on a private high-QoS thread+runloop. State that's
@@ -145,7 +144,6 @@ final class EventTapManager: @unchecked Sendable {
     private let windowDragController = WindowDragController()
     private let contentZoomController = ContentZoomController()
     private let windowShortcutController = WindowShortcutController()
-    private let trackpadGestureController = TrackpadGestureController()
     private let betterFinderShortcutController = BetterFinderGlobalShortcutController()
     private let keyRemapController = KeyRemapController()
     private let screenshotShortcutController = ScreenshotShortcutController()
@@ -735,10 +733,6 @@ final class EventTapManager: @unchecked Sendable {
             return nil
         }
 
-        if raw == 0, trackpadGestureController.handleScrollWheel(event: event) {
-            return nil
-        }
-
         return mouseControlController.handleScrollWheel(event: event)
             ? nil
             : Unmanaged.passUnretained(event)
@@ -862,7 +856,6 @@ final class EventTapManager: @unchecked Sendable {
         contentZoomController.updateModifierFlag(preferences.contentZoomModifierFlags)
         windowShortcutController.updateShortcut(preferences.windowMaximizeShortcut)
         screenshotShortcutController.updateShortcut(preferences.screenshot.triggerShortcut)
-        trackpadGestureController.setEnabled(preferences.trackpadGesturesEnabled)
     }
 
     private func prewarmCaches() {
