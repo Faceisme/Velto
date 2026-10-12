@@ -65,8 +65,4 @@ extension View {
   func mgCard(radius: CGFloat = MGRadius.card) -> some View {
     background(Color.mgCard, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
   }
-
-  func mgInset(radius: CGFloat = MGRadius.control) -> some View {
-    background(Color.mgInset, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
-  }
 }

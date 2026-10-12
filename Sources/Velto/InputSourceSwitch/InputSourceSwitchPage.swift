@@ -7,14 +7,13 @@ struct InputSourceSwitchPage: View {
   private let store = GestureStore.shared
 
   private enum Segment: String, CaseIterable, Identifiable {
-    case general, appRules, browserRules, troubleshooting
+    case general, appRules, browserRules
     var id: String { rawValue }
     var title: String {
       switch self {
       case .general: return "通用"
       case .appRules: return "应用规则"
       case .browserRules: return "浏览器规则"
-      case .troubleshooting: return "故障排除"
       }
     }
   }
@@ -29,33 +28,37 @@ struct InputSourceSwitchPage: View {
   @State private var sources = InputSourceCatalog.all()
   @State private var installedBrowsers = SupportedBrowserCatalog.installed()
 
-  var body: some View {
-    VStack(spacing: 0) {
-      ScrollView {
-        VStack(alignment: .leading, spacing: 22) {
-          PageHeader(
-            page: .inputSourceSwitch,
-            subtitle: "根据当前 App 和浏览器网站自动切换输入法。"
-          )
-          MGSegmentedPicker(
-            selection: $segment,
-            options: Segment.allCases.map { MGSegmentedOption($0, $0.title) }
-          )
-          .controlSize(.large)
+  private var prefs: InputSourceSwitchPreferences { store.preferences.inputSourceSwitch }
 
-          switch segment {
-          case .general: generalGroup
-          case .appRules: appRulesGroup
-          case .browserRules: browserRulesGroup
-          case .troubleshooting: troubleshootingGroup
-          }
+  var body: some View {
+    SettingsPage {
+      PageHeader(
+        page: .inputSourceSwitch,
+        subtitle: "根据当前 App 和浏览器网站自动切换输入法。",
+        isOn: bind(\.enabled)
+      )
+      .help("关闭后不再自动切换输入法。")
+
+      VStack(alignment: .leading, spacing: 8) {
+        MGSegmentedPicker(
+          selection: $segment,
+          options: Segment.allCases.map { MGSegmentedOption($0, $0.title) }
+        )
+        .controlSize(.large)
+        if segment == .appRules {
+          Text("把应用分到中文组 / 英文组,按组指定输入法 —— 改一次,整组生效。")
+            .font(.mgMeta)
+            .foregroundStyle(Color.mgText2)
+            .padding(.leading, 4)
         }
-        .padding(.horizontal, 32)
-        .padding(.top, 28)
-        .padding(.bottom, 28)
+      }
+
+      switch segment {
+      case .general: generalSegment
+      case .appRules: appRulesSegment
+      case .browserRules: browserRulesSegment
       }
     }
-    .frame(maxWidth: .infinity, maxHeight: .infinity)
     // 输入法候选跟着系统走:进页刷新一次,系统「启用的输入法」变化(用户在系统
     // 设置里增删)时也实时刷新。@State 缓存只是避免每帧重查 TIS,不是写死列表。
     .onAppear {
@@ -82,53 +85,62 @@ struct InputSourceSwitchPage: View {
 
   // MARK: - 通用
 
-  private var generalGroup: some View {
-    GroupCard {
-      VStack(spacing: 0) {
-        row(icon: "power", title: "启用输入法切换",
-            desc: "关闭后不再自动切换输入法。", showDivider: false) {
-          AnyView(toggle(\.enabled))
-        }
-        row(icon: "globe", title: "全局默认输入法",
-            desc: "无任何规则命中的 App 激活时切到它。", showDivider: true) {
-          AnyView(sourcePicker(\.systemDefaultInputSourceID))
-        }
-        row(icon: "arrow.uturn.backward", title: "切回 App / 网站时",
-            desc: "用默认,还是恢复上次在该上下文用过的输入法。", showDivider: true) {
-          AnyView(enumPicker(\.restoreStrategy, cases: InputSourceRestoreStrategy.allCases) { $0.displayName })
-        }
-        row(icon: "magnifyingglass", title: "浏览器地址栏默认输入法",
-            desc: "地址栏聚焦时切到它(常用于切英文)。", showDivider: true) {
-          AnyView(sourcePicker(\.browserAddressDefaultInputSourceID))
-        }
-        row(icon: "textformat.abc", title: "强制英文标点",
-            desc: "中文输入法打字时,, . ; ' [ ] 等标点直接输出英文字符;带 ⌘⌃⌥ 的快捷键不受影响。", showDivider: true) {
-          AnyView(toggle(\.forceEnglishPunctuationEnabled))
-        }
-        row(icon: "ladybug", title: "调试日志",
-            desc: "排查时打开,只写 input-source-switch.log。", showDivider: true) {
-          AnyView(toggle(\.debugLoggingEnabled))
-        }
-        row(icon: "folder", title: "打开日志文件夹",
-            desc: "~/Library/Logs/Velto/", showDivider: true) {
-          AnyView(
-            Button("打开") { openLogsFolder() }
-              .buttonStyle(.bordered)
-          )
+  @ViewBuilder
+  private var generalSegment: some View {
+    SettingsSection("通用") {
+      SettingsRow(title: "全局默认输入法", subtitle: "无任何规则命中的 App 激活时切到它。") {
+        sourcePicker(bind(\.systemDefaultInputSourceID))
+      }
+      SettingsRow(title: "切回 App / 网站时", subtitle: "用默认,还是恢复上次在该上下文用过的输入法。") {
+        enumPicker(\.restoreStrategy, cases: InputSourceRestoreStrategy.allCases) { $0.displayName }
+      }
+      SettingsRow(title: "浏览器地址栏默认输入法", subtitle: "地址栏聚焦时切到它(常用于切英文)。") {
+        sourcePicker(bind(\.browserAddressDefaultInputSourceID))
+      }
+      SettingsRow(
+        "强制英文标点",
+        subtitle: "中文输入法打字时,, . ; ' [ ] 等标点直接输出英文字符;带 ⌘⌃⌥ 的快捷键不受影响。",
+        isOn: bind(\.forceEnglishPunctuationEnabled)
+      )
+    }
+
+    SettingsSection("兼容性") {
+      SettingsRow(
+        "修复输入法切换问题(CJKV)",
+        subtitle: "中日韩越输入法切了图标变但实际没切时打开。",
+        isOn: bind(\.cjkFixEnabled)
+      )
+      // 修复关着时 selector 根本不看修复方式,置灰免得误以为改了有用。
+      SettingsRow(
+        title: "CJKV 修复方式",
+        subtitle: "模拟快捷键不抢焦点;切换焦点会短暂激活 Velto,但对 macOS 26/CJKV 更强。"
+      ) {
+        enumPicker(\.cjkFixStrategy, cases: InputSourceCJKFixStrategy.allCases) { $0.displayName }
+      }
+      .disabled(!prefs.cjkFixEnabled)
+      if prefs.cjkFixEnabled,
+         prefs.cjkFixStrategy == .previousInputSourceShortcut,
+         InputSourceSwitchSelector.previousInputSourceShortcut() == nil {
+        SettingsRow(title: "系统未配置「选择上一个输入法」快捷键", subtitle: "该策略依赖此系统快捷键,请到键盘设置开启。") {
+          Button("打开键盘设置") { PermissionManager.openKeyboardSettings() }
+            .buttonStyle(.bordered)
         }
       }
     }
+
+    DebugSection(
+      isOn: bind(\.debugLoggingEnabled),
+      logURL: InputSourceSwitchDebugLog.fileURL,
+      help: "排查时打开,只写 input-source-switch.log。"
+    )
   }
 
-  // MARK: - 应用规则（写死两组:英文组 / 中文组,并排两列)
+  // MARK: - 应用规则(写死两组:中文组 / 英文组,上下排列)
 
-  private var appRulesGroup: some View {
-    VStack(alignment: .leading, spacing: 14) {
-      sectionLabel("把应用分到中文组 / 英文组,按组指定输入法 —— 改一次,整组生效。")
-      HStack(alignment: .top, spacing: 16) {
-        groupColumn(role: .chinese)
-        groupColumn(role: .english)
-      }
+  private var appRulesSegment: some View {
+    VStack(alignment: .leading, spacing: 24) {
+      groupSection(.chinese)
+      groupSection(.english)
     }
     .fileImporter(
       isPresented: $appImporterPresented,
@@ -144,299 +156,104 @@ struct InputSourceSwitchPage: View {
     .onAppear { ensureFixedGroups() }
   }
 
-  /// 一列 = 一个固定分组(英文组 / 中文组)。
-  private func groupColumn(role: InputSourceGroupRole) -> some View {
-    let group = store.preferences.inputSourceSwitch.appGroups.first { $0.role == role }
+  private func groupSection(_ role: InputSourceGroupRole) -> some View {
+    let group = prefs.appGroups.first { $0.role == role }
     let members = group?.bundleIdentifiers ?? []
-    return GroupCard {
-      VStack(spacing: 0) {
-        // 组头:固定名 + 应用数 + 分组级输入法。
-        HStack(alignment: .center, spacing: 12) {
-          ActionIcon(systemName: role == .english ? "a.square" : "character.bubble")
-          VStack(alignment: .leading, spacing: 2) {
-            Text(role.displayName)
-              .font(.system(size: 14, weight: .semibold)).foregroundStyle(Color.mgText1)
-            Text("\(members.count) 个应用")
-              .font(.system(size: 12)).foregroundStyle(Color.mgText2)
-          }
-          Spacer(minLength: 8)
-          MGMenuPicker(
-            selection: Binding(
-              get: { group?.inputSourceID ?? "" },
-              set: { updateGroupSource(role: role, $0.isEmpty ? nil : $0) }
-            ),
-            options: [MGMenuOption("", "不指定")] + sources.map { MGMenuOption($0.id, $0.localizedName) },
-            minWidth: 120
-          )
-        }
-        .padding(.horizontal, 16).padding(.vertical, 14)
-
-        ForEach(members, id: \.self) { bid in
-          memberRow(role: role, bundleID: bid)
-        }
-        if members.isEmpty {
-          Rectangle().fill(Color.mgHair).frame(height: 0.5)
-          Text("还没有应用,点下方「添加应用」。")
-            .font(.system(size: 12)).foregroundStyle(Color.mgText3)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 16).padding(.vertical, 12)
-        }
-
-        Rectangle().fill(Color.mgHair).frame(height: 0.5)
-        HStack {
-          Button {
-            importTargetRole = role
-            appImporterPresented = true
-          } label: { Label("添加应用", systemImage: "plus") }
-            .buttonStyle(.borderless)
-            .foregroundStyle(Color.mgAccent)
-          Spacer()
-        }
-        .padding(.horizontal, 16).padding(.vertical, 12)
+    return SettingsSection("\(role.displayName) · \(members.count) 个应用") {
+      SettingsRow(title: "输入法") {
+        sourcePicker(Binding(
+          get: { group?.inputSourceID },
+          set: { updateGroupSource(role: role, $0) }
+        ))
       }
-    }
-    .frame(maxWidth: .infinity, alignment: .top)
-  }
-
-  /// 成员应用行:图标 + 名称 + bundleId + 移出分组。
-  private func memberRow(role: InputSourceGroupRole, bundleID: String) -> some View {
-    VStack(spacing: 0) {
-      Rectangle().fill(Color.mgHair).frame(height: 0.5)
-      HStack(alignment: .center, spacing: 12) {
-        BundleAppIcon(bundleID: bundleID)
-        VStack(alignment: .leading, spacing: 2) {
-          Text(appDisplayName(forBundleID: bundleID))
-            .font(.system(size: 13, weight: .medium)).foregroundStyle(Color.mgText1)
-            .lineLimit(1)
-          Text(bundleID).font(.system(size: 11)).foregroundStyle(Color.mgText2).lineLimit(1)
+      if members.isEmpty { EmptyRow("还没有应用。") }
+      ForEach(members, id: \.self) { bid in
+        BundleAppRow(bundleID: bid, title: appDisplayName(forBundleID: bid)) {
+          DeleteIconButton { removeAppFromGroup(bid, role: role) }
         }
-        Spacer(minLength: 8)
-        Button { removeAppFromGroup(bundleID, role: role) } label: {
-          Image(systemName: "minus.circle")
-        }
-        .buttonStyle(.borderless)
-        .foregroundStyle(Color.mgText3)
       }
-      .padding(.horizontal, 16).padding(.vertical, 10)
+    } accessory: {
+      Button("添加应用", systemImage: "plus") {
+        importTargetRole = role
+        appImporterPresented = true
+      }
+      .buttonStyle(.bordered)
     }
   }
 
   // MARK: - 浏览器规则
 
-  private var browserRulesGroup: some View {
-    VStack(alignment: .leading, spacing: 16) {
-      VStack(alignment: .leading, spacing: 10) {
-        sectionLabel("启用的浏览器")
-        GroupCard {
-          VStack(spacing: 0) {
-            if installedBrowsers.isEmpty { emptyHint("没检测到受支持的浏览器。") }
-            ForEach(installedBrowsers) { b in
-              row(
-                title: b.displayName,
-                desc: b.bundleID,
-                showDivider: b.id != installedBrowsers.first?.id,
-                icon: { AnyView(BrowserIcon(browser: b)) }
-              ) {
-                AnyView(Toggle("", isOn: Binding(
-                  get: { store.preferences.inputSourceSwitch.enabledBrowserBundleIDs.contains(b.bundleID) },
-                  set: { v in store.updatePreferences { p in
-                    if v { p.inputSourceSwitch.enabledBrowserBundleIDs.insert(b.bundleID) }
-                    else { p.inputSourceSwitch.enabledBrowserBundleIDs.remove(b.bundleID) }
-                  } }
-                )).labelsHidden().toggleStyle(.switch).controlSize(.small).tint(.mgAccent))
-              }
-            }
-          }
-        }
-      }
-      VStack(alignment: .leading, spacing: 10) {
-        HStack {
-          sectionLabel("URL 规则")
-          Spacer()
-          Button {
-            editingBrowserRule = InputSourceBrowserRule()
-          } label: { Label("新增规则", systemImage: "plus") }
-            .buttonStyle(.bordered)
-        }
-        GroupCard {
-          VStack(spacing: 0) {
-            let rules = store.preferences.inputSourceSwitch.browserRules
-            if rules.isEmpty { emptyHint("还没有 URL 规则。") }
-            ForEach(rules) { rule in
-              ruleRow(
-                title: "\(rule.type.displayName): \(rule.value)", subtitle: rule.sample,
-                isEnabled: rule.isEnabled, sourceID: rule.inputSourceID,
-                showDivider: rule.id != rules.first?.id,
-                onToggle: { v in updateBrowserRule(rule.id) { $0.isEnabled = v } },
-                onPick: { id in updateBrowserRule(rule.id) { $0.inputSourceID = id } },
-                onDelete: { deleteBrowserRule(rule.id) },
-                onEdit: { editingBrowserRule = rule }
-              )
-            }
-          }
+  @ViewBuilder
+  private var browserRulesSegment: some View {
+    SettingsSection("启用的浏览器") {
+      if installedBrowsers.isEmpty { EmptyRow("没检测到受支持的浏览器。") }
+      ForEach(installedBrowsers) { b in
+        BundleAppRow(bundleID: b.bundleID, title: b.displayName) {
+          SettingsSwitch(isOn: Binding(
+            get: { prefs.enabledBrowserBundleIDs.contains(b.bundleID) },
+            set: { v in store.updatePreferences { p in
+              if v { p.inputSourceSwitch.enabledBrowserBundleIDs.insert(b.bundleID) }
+              else { p.inputSourceSwitch.enabledBrowserBundleIDs.remove(b.bundleID) }
+            } }
+          ))
         }
       }
     }
-  }
 
-  // MARK: - 故障排除
-
-  private var troubleshootingGroup: some View {
-    GroupCard {
-      VStack(spacing: 0) {
-        row(icon: "wrench.and.screwdriver", title: "修复输入法切换问题(CJKV)",
-            desc: "中日韩越输入法切了图标变但实际没切时打开。", showDivider: false) {
-          AnyView(toggle(\.cjkFixEnabled))
-        }
-        row(icon: "slider.horizontal.3", title: "CJKV 修复方式",
-            desc: "模拟快捷键不抢焦点;切换焦点会短暂激活 Velto,但对 macOS 26/CJKV 更强。",
-            showDivider: true) {
-          AnyView(enumPicker(\.cjkFixStrategy, cases: InputSourceCJKFixStrategy.allCases) { $0.displayName })
-        }
-        if store.preferences.inputSourceSwitch.cjkFixEnabled,
-           store.preferences.inputSourceSwitch.cjkFixStrategy == .previousInputSourceShortcut,
-           InputSourceSwitchSelector.previousInputSourceShortcut() == nil {
-          row(icon: "exclamationmark.triangle", title: "系统未配置「选择上一个输入法」快捷键",
-              desc: "该策略依赖此系统快捷键,请到键盘设置开启。", showDivider: true) {
-            AnyView(
-              Button("打开键盘设置") { PermissionManager.openKeyboardSettings() }
-                .buttonStyle(.bordered)
-            )
-          }
-        }
-      }
-    }
-  }
-
-  // MARK: - 行/控件 helper
-
-  private func row(
-    icon: String,
-    title: String,
-    desc: String?,
-    showDivider: Bool,
-    @ViewBuilder control: () -> AnyView
-  ) -> some View {
-    row(title: title, desc: desc, showDivider: showDivider, icon: { AnyView(ActionIcon(systemName: icon)) }, control: control)
-  }
-
-  private func row(
-    title: String,
-    desc: String?,
-    showDivider: Bool,
-    @ViewBuilder icon: () -> AnyView,
-                   @ViewBuilder control: () -> AnyView) -> some View {
-    VStack(spacing: 0) {
-      if showDivider {
-        Rectangle().fill(Color.mgHair).frame(height: 0.5).padding(.leading, 78)
-      }
-      HStack(alignment: .center, spacing: 16) {
-        icon()
-        VStack(alignment: .leading, spacing: 2) {
-          Text(title).font(.system(size: 14, weight: .semibold)).foregroundStyle(Color.mgText1)
-          if let desc { Text(desc).font(.system(size: 12)).foregroundStyle(Color.mgText2) }
-        }
-        Spacer(minLength: 12)
-        control()
-      }
-      .padding(.horizontal, 20).padding(.vertical, 16)
-    }
-  }
-
-  private func ruleRow(
-    title: String, subtitle: String, isEnabled: Bool, sourceID: String?,
-    showDivider: Bool,
-    onToggle: @escaping (Bool) -> Void, onPick: @escaping (String?) -> Void,
-    onDelete: @escaping () -> Void, onEdit: (() -> Void)? = nil
-  ) -> some View {
-    row(icon: "list.bullet", title: title, desc: subtitle.isEmpty ? nil : subtitle, showDivider: showDivider) {
-      AnyView(HStack(spacing: 10) {
-        MGMenuPicker(
-          selection: Binding(get: { sourceID ?? "" }, set: { onPick($0.isEmpty ? nil : $0) }),
-          options: [MGMenuOption("", "不指定")] + sources.map { MGMenuOption($0.id, $0.localizedName) },
-          minWidth: 140
-        )
-        Toggle("", isOn: Binding(get: { isEnabled }, set: { onToggle($0) }))
-          .labelsHidden().toggleStyle(.switch).controlSize(.small).tint(.mgAccent)
-        if let onEdit {
-          Button { onEdit() } label: { Image(systemName: "pencil") }
+    SettingsSection("URL 规则") {
+      if prefs.browserRules.isEmpty { EmptyRow("还没有 URL 规则。") }
+      ForEach(prefs.browserRules) { rule in
+        SettingsRow(
+          title: "\(rule.type.displayName): \(rule.value)",
+          subtitle: rule.sample.isEmpty ? nil : rule.sample
+        ) {
+          sourcePicker(Binding(
+            get: { rule.inputSourceID },
+            set: { id in updateBrowserRule(rule.id) { $0.inputSourceID = id } }
+          ), minWidth: 140)
+          Button { editingBrowserRule = rule } label: { Image(systemName: "pencil") }
             .buttonStyle(.borderless)
             .foregroundStyle(Color.mgText3)
+            .help("编辑")
+          DeleteIconButton { deleteBrowserRule(rule.id) }
+          SettingsSwitch(isOn: Binding(
+            get: { rule.isEnabled },
+            set: { v in updateBrowserRule(rule.id) { $0.isEnabled = v } }
+          ))
         }
-        Button { onDelete() } label: { Image(systemName: "trash") }
-          .buttonStyle(.borderless)
-          .foregroundStyle(Color.mgDanger)
-      })
+      }
+    } accessory: {
+      Button("新增规则", systemImage: "plus") { editingBrowserRule = InputSourceBrowserRule() }
+        .buttonStyle(.bordered)
     }
   }
 
-  private func ruleRow(
-    title: String, subtitle: String, icon: @escaping () -> AnyView,
-    isEnabled: Bool, sourceID: String?,
-    showDivider: Bool,
-    onToggle: @escaping (Bool) -> Void, onPick: @escaping (String?) -> Void,
-    onDelete: @escaping () -> Void, onEdit: (() -> Void)? = nil
-  ) -> some View {
-    row(title: title, desc: subtitle.isEmpty ? nil : subtitle, showDivider: showDivider, icon: icon) {
-      AnyView(HStack(spacing: 10) {
-        MGMenuPicker(
-          selection: Binding(get: { sourceID ?? "" }, set: { onPick($0.isEmpty ? nil : $0) }),
-          options: [MGMenuOption("", "不指定")] + sources.map { MGMenuOption($0.id, $0.localizedName) },
-          minWidth: 140
-        )
-        Toggle("", isOn: Binding(get: { isEnabled }, set: { onToggle($0) }))
-          .labelsHidden().toggleStyle(.switch).controlSize(.small).tint(.mgAccent)
-        if let onEdit {
-          Button { onEdit() } label: { Image(systemName: "pencil") }
-            .buttonStyle(.borderless)
-            .foregroundStyle(Color.mgText3)
-        }
-        Button { onDelete() } label: { Image(systemName: "trash") }
-          .buttonStyle(.borderless)
-          .foregroundStyle(Color.mgDanger)
-      })
-    }
-  }
+  // MARK: - 控件 helper
 
-  private func sectionLabel(_ t: String) -> some View {
-    Text(t).font(.mgSubLabel).foregroundStyle(Color.mgText3).padding(.leading, 4)
-  }
-
-  private func emptyHint(_ t: String) -> some View {
-    Text(t).font(.system(size: 13)).foregroundStyle(Color.mgText3)
-      .frame(maxWidth: .infinity, alignment: .leading).padding(20)
-  }
-
-  private func toggle(_ kp: WritableKeyPath<InputSourceSwitchPreferences, Bool>) -> some View {
-    Toggle("", isOn: Binding(
+  private func bind<V>(_ kp: WritableKeyPath<InputSourceSwitchPreferences, V>) -> Binding<V> {
+    Binding(
       get: { store.preferences.inputSourceSwitch[keyPath: kp] },
       set: { v in store.updatePreferences { $0.inputSourceSwitch[keyPath: kp] = v } }
-    )).labelsHidden().toggleStyle(.switch).controlSize(.small).tint(.mgAccent)
+    )
   }
 
-  private func sourcePicker(_ kp: WritableKeyPath<InputSourceSwitchPreferences, String?>) -> some View {
+  /// 输入法下拉,「不指定」存 nil。
+  private func sourcePicker(_ selection: Binding<String?>, minWidth: CGFloat = 160) -> some View {
     MGMenuPicker(
       selection: Binding(
-        get: { store.preferences.inputSourceSwitch[keyPath: kp] ?? "" },
-        set: { v in store.updatePreferences { $0.inputSourceSwitch[keyPath: kp] = v.isEmpty ? nil : v } }
+        get: { selection.wrappedValue ?? "" },
+        set: { selection.wrappedValue = $0.isEmpty ? nil : $0 }
       ),
       options: [MGMenuOption("", "不指定")] + sources.map { MGMenuOption($0.id, $0.localizedName) },
-      minWidth: 160
+      minWidth: minWidth
     )
   }
 
   private func enumPicker<E: Hashable>(
     _ kp: WritableKeyPath<InputSourceSwitchPreferences, E>,
-    cases: [E], name: @escaping (E) -> String
+    cases: [E], name: (E) -> String
   ) -> some View {
-    MGMenuPicker(
-      selection: Binding(
-        get: { store.preferences.inputSourceSwitch[keyPath: kp] },
-        set: { v in store.updatePreferences { $0.inputSourceSwitch[keyPath: kp] = v } }
-      ),
-      options: cases.map { MGMenuOption($0, name($0)) },
-      minWidth: 160
-    )
+    MGMenuPicker(selection: bind(kp), options: cases.map { MGMenuOption($0, name($0)) })
   }
 
   // MARK: - 固定分组操作
@@ -503,74 +320,24 @@ struct InputSourceSwitchPage: View {
   private func deleteBrowserRule(_ id: UUID) {
     store.updatePreferences { $0.inputSourceSwitch.browserRules.removeAll { $0.id == id } }
   }
-
-  private func openLogsFolder() {
-    let url = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first?
-      .appendingPathComponent("Logs/Velto", isDirectory: true)
-    if let url { NSWorkspace.shared.open(url) }
-  }
 }
 
-/// 分组内成员图标 —— 仅靠 bundleId 解析(分组只存 bundleId,不存路径)。
-private struct BundleAppIcon: View {
+/// 只存了 bundleId 的 App 行(分组成员、浏览器):图标按 bundleId 现查,查不到用通用 App 图标。
+private struct BundleAppRow<Trailing: View>: View {
   let bundleID: String
+  let title: String
+  @ViewBuilder var trailing: () -> Trailing
   @State private var icon: NSImage?
 
   var body: some View {
-    Group {
-      if let icon {
-        Image(nsImage: icon)
-          .resizable()
-          .aspectRatio(contentMode: .fit)
-          .frame(width: 30, height: 30)
-          .padding(5)
-          .frame(width: 40, height: 40)
-      } else {
-        ActionIcon(systemName: "app")
-      }
-    }
-    .onAppear { if icon == nil { icon = loadIcon() } }
-    .onChange(of: bundleID) { _, _ in icon = loadIcon() }
+    SettingsRow(title: title, subtitle: bundleID, icon: icon, trailing: trailing)
+      .onAppear { if icon == nil { icon = loadIcon() } }
+      .onChange(of: bundleID) { _, _ in icon = loadIcon() }
   }
 
-  private func loadIcon() -> NSImage? {
+  private func loadIcon() -> NSImage {
     guard let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else {
-      return nil
-    }
-    return NSWorkspace.shared.icon(forFile: appURL.path)
-  }
-}
-
-
-private struct BrowserIcon: View {
-  let browser: SupportedBrowser
-  @State private var icon: NSImage?
-
-  var body: some View {
-    Group {
-      if let icon {
-        Image(nsImage: icon)
-          .resizable()
-          .aspectRatio(contentMode: .fit)
-          .frame(width: 30, height: 30)
-          .padding(5)
-          .frame(width: 40, height: 40)
-      } else {
-        ActionIcon(systemName: "globe")
-      }
-    }
-    .onAppear(perform: loadIconIfNeeded)
-    .onChange(of: browser.bundleID) { _, _ in icon = loadIcon() }
-  }
-
-  private func loadIconIfNeeded() {
-    guard icon == nil else { return }
-    icon = loadIcon()
-  }
-
-  private func loadIcon() -> NSImage? {
-    guard let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: browser.bundleID) else {
-      return nil
+      return NSWorkspace.shared.icon(for: .application)
     }
     return NSWorkspace.shared.icon(forFile: appURL.path)
   }

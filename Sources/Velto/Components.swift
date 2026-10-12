@@ -99,21 +99,6 @@ struct KeyCapSlot<Content: View>: View {
   }
 }
 
-// MARK: - ActionIcon(行内装饰图标,各页迁移时删)
-
-struct ActionIcon: View {
-  let systemName: String
-  var size: CGFloat = 40
-
-  var body: some View {
-    Image(systemName: systemName)
-      .font(.system(size: size * 0.48, weight: .semibold))
-      .foregroundStyle(Color.mgAccent)
-      .frame(width: size, height: size)
-      .mgInset(radius: size * 0.28)
-  }
-}
-
 // MARK: - 模块图标
 
 /// 系统设置式的彩色圆角方块 + 白色符号。侧栏 20pt,页头 32pt。
@@ -241,22 +226,32 @@ extension SettingsSection where Accessory == EmptyView {
   }
 }
 
-/// 一行设置:标题 / 说明在左,控件在右。
+/// 一行设置:(可选的 App 图标)标题 / 说明在左,控件在右。
 struct SettingsRow<Trailing: View>: View {
   let title: String
   var subtitle: String? = nil
+  var icon: NSImage? = nil
   @ViewBuilder var trailing: () -> Trailing
+  /// 外面 .disabled() 时文字跟着变灰,不然只有控件变灰、看不出整行不生效。
+  @Environment(\.isEnabled) private var isEnabled
 
   var body: some View {
     HStack(alignment: .center, spacing: 14) {
-      VStack(alignment: .leading, spacing: 2) {
-        Text(title)
-          .font(.mgBody)
-          .foregroundStyle(Color.mgText1)
-        if let subtitle {
-          Text(subtitle)
-            .font(.mgMeta)
-            .foregroundStyle(Color.mgText2)
+      HStack(spacing: 10) {
+        if let icon {
+          Image(nsImage: icon)
+            .resizable()
+            .frame(width: 24, height: 24)
+        }
+        VStack(alignment: .leading, spacing: 2) {
+          Text(title)
+            .font(.mgBody)
+            .foregroundStyle(isEnabled ? Color.mgText1 : Color.mgText3)
+          if let subtitle {
+            Text(subtitle)
+              .font(.mgMeta)
+              .foregroundStyle(isEnabled ? Color.mgText2 : Color.mgText3)
+          }
         }
       }
       Spacer(minLength: 8)
@@ -373,12 +368,18 @@ struct DebugSection: View {
   let logURL: URL
   /// 悬停说明:日志记什么、什么时候开
   let help: String
+  /// 给了就多一个「清空」按钮
+  var clear: (() -> Void)? = nil
 
   var body: some View {
     SettingsSection("调试") {
       SettingsRow(title: "调试日志") {
         Button("在访达中显示", action: reveal)
           .buttonStyle(.bordered)
+        if let clear {
+          Button("清空", action: clear)
+            .buttonStyle(.bordered)
+        }
         SettingsSwitch(isOn: isOn)
       }
       .help(help)
@@ -481,13 +482,14 @@ struct MGStepperField<Value: Strideable>: View where Value: BinaryFloatingPoint 
   let range: ClosedRange<Value>
   let step: Value.Stride
   var format: String = "%.1f"
+  @Environment(\.isEnabled) private var isEnabled
 
   var body: some View {
     HStack(spacing: 4) {
       Text(String(format: format, Double(value)))
         .font(.system(size: 13, weight: .medium))
         .monospacedDigit()
-        .foregroundStyle(Color.mgText1)
+        .foregroundStyle(isEnabled ? Color.mgText1 : Color.mgText3)
         .frame(minWidth: 30, alignment: .trailing)
         .padding(.leading, 8)
 

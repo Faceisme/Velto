@@ -10,302 +10,107 @@ struct BetterFinderPage: View {
     @State private var installedTerminals: [BetterFinderApp] = []
     @State private var installedEditors: [BetterFinderApp] = []
     @State private var installedSupportedApps: [BetterFinderApp] = []
-    @State private var notInstalledSupportedApps: [BetterFinderApp] = []
     @State private var statusMessage = ""
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 22) {
-                PageHeader(
-                    page: .betterFinder,
-                    subtitle: "在 Finder 工具栏和右键菜单中打开终端、编辑器或拷贝路径。"
-                )
+        SettingsPage {
+            PageHeader(
+                page: .betterFinder,
+                subtitle: "在 Finder 工具栏和右键菜单中打开终端、编辑器或拷贝路径。",
+                isOn: bind(\.isEnabled)
+            )
+            .help("关闭后,Finder 扩展菜单和全局快捷键都会停止执行。")
 
-                integrationSection
-                debugSection
-                defaultAppsSection
-                customMenuSection
-                shortcutSection
+            SettingsSection("集成") {
+                SettingsRow(
+                    title: "Finder 扩展",
+                    subtitle: statusMessage.isEmpty ? "首次使用或重装后,需要注册并启用 Finder Sync 扩展。" : statusMessage
+                ) {
+                    Button("注册并启用", action: registerFinderExtension)
+                        .buttonStyle(.borderedProminent)
+                    Menu {
+                        Button("打开系统扩展设置", action: openExtensionSettings)
+                        Button("重启 Finder", action: restartFinder)
+                    } label: {
+                        // 裸 Image 只有省略号字形那么高,按钮会比旁边矮一截;包进 Text 撑到正文行高
+                        Text(Image(systemName: "ellipsis"))
+                    }
+                    .menuStyle(.button)
+                    .menuIndicator(.hidden)
+                    .buttonStyle(.bordered)
+                    .fixedSize()
+                    .help("更多")
+                    .accessibilityLabel("更多")
+                }
             }
-            .padding(.horizontal, 32)
-            .padding(.top, 28)
-            .padding(.bottom, 32)
-            .frame(maxWidth: .infinity, alignment: .leading)
+
+            SettingsSection("默认应用") {
+                SettingsRow(title: "默认终端", subtitle: "Finder 工具栏默认菜单中的第一项") {
+                    appPicker(
+                        bind(\.defaultTerminal),
+                        installedTerminals.isEmpty
+                            ? BetterFinderApplicationCatalog.allSupportedApps(type: .terminal)
+                            : installedTerminals
+                    )
+                }
+                SettingsRow(title: "默认编辑器", subtitle: "Finder 工具栏默认菜单中的第二项") {
+                    appPicker(
+                        bind(\.defaultEditor),
+                        installedEditors.isEmpty
+                            ? BetterFinderApplicationCatalog.allSupportedApps(type: .editor)
+                            : installedEditors
+                    )
+                }
+            }
+
+            SettingsSection("自定义菜单") {
+                if preferences.customMenuApps.isEmpty {
+                    EmptyRow("未添加自定义应用。")
+                }
+                ForEach(preferences.customMenuApps) { app in
+                    SettingsRow(title: app.name, subtitle: app.type.label, icon: appIcon(app)) {
+                        DeleteIconButton { removeCustomApp(app) }
+                    }
+                }
+            } accessory: {
+                addAppMenu
+            }
+
+            SettingsSection("菜单行为") {
+                SettingsRow("应用到 Finder 工具栏菜单", isOn: bind(\.appliesCustomMenuToToolbar))
+                SettingsRow("应用到 Finder 右键菜单", isOn: bind(\.appliesCustomMenuToContextMenu))
+                SettingsRow("隐藏 Finder 右键菜单项", isOn: bind(\.hidesContextMenuItems))
+                SettingsRow(title: "图标类型") {
+                    MGMenuPicker(
+                        selection: bind(\.iconStyle),
+                        options: BetterFinderIconStyle.allCases.map { MGMenuOption($0, $0.label) }
+                    )
+                }
+                SettingsRow("拷贝路径时转义", isOn: bind(\.escapesCopiedPaths))
+            }
+
+            SettingsSection("快捷键") {
+                SettingsRow(title: "打开默认终端") {
+                    ShortcutField(shortcut: shortcutBinding(\.openTerminalShortcut))
+                }
+                SettingsRow(title: "打开默认编辑器") {
+                    ShortcutField(shortcut: shortcutBinding(\.openEditorShortcut))
+                }
+                SettingsRow(title: "拷贝路径到剪贴板") {
+                    ShortcutField(shortcut: shortcutBinding(\.copyPathShortcut))
+                }
+            }
+
+            DebugSection(
+                isOn: bind(\.debugLoggingEnabled),
+                logURL: BetterFinderDebugLog.fileURL,
+                help: "排查 Finder 工具栏和右键菜单时打开,日志写入 betterfinder-debug.log。",
+                clear: { BetterFinderDebugLog.clear() }
+            )
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onAppear(perform: refreshCatalogs)
         .onReceive(NotificationCenter.default.publisher(for: BetterFinderPreferencesStore.didChangeNotification)) { _ in
             preferences = store.preferences
-        }
-    }
-
-    private var debugSection: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            MGSectionLabel(text: "调试")
-            GroupCard {
-                VStack(spacing: 0) {
-                    GroupRow(
-                        label: "调试日志",
-                        sub: "排查 Finder 工具栏和右键菜单时打开,日志写入 betterfinder-debug.log",
-                        showDivider: false
-                    ) {
-                        Toggle("", isOn: Binding(
-                            get: { preferences.debugLoggingEnabled },
-                            set: { value in updatePreferences { $0.debugLoggingEnabled = value } }
-                        ))
-                        .labelsHidden()
-                        .toggleStyle(.switch)
-                        .controlSize(.small)
-                        .tint(.mgAccent)
-                    }
-
-                    GroupRow(
-                        label: "日志文件",
-                        sub: BetterFinderDebugLog.fileURL.path,
-                        showDivider: true
-                    ) {
-                        HStack(spacing: 8) {
-                            Button("打开文件夹", action: openDebugLogFolder)
-                                .buttonStyle(.bordered)
-                            Button("清空", action: clearDebugLog)
-                                .buttonStyle(.bordered)
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    private var integrationSection: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            MGSectionLabel(text: "集成")
-            GroupCard {
-                VStack(spacing: 0) {
-                    GroupRow(
-                        label: "启用增强Finder",
-                        sub: "关闭后,Finder 扩展菜单和全局快捷键都会停止执行",
-                        showDivider: false
-                    ) {
-                        Toggle("", isOn: Binding(
-                            get: { preferences.isEnabled },
-                            set: { value in updatePreferences { $0.isEnabled = value } }
-                        ))
-                        .labelsHidden()
-                        .toggleStyle(.switch)
-                        .controlSize(.small)
-                        .tint(.mgAccent)
-                    }
-
-                    GroupRow(
-                        label: "Finder 扩展",
-                        sub: "首次使用或重装后,需要注册并启用 Finder Sync 扩展",
-                        showDivider: true
-                    ) {
-                        HStack(spacing: 8) {
-                            Button("注册并启用", action: registerFinderExtension)
-                                .buttonStyle(.borderedProminent)
-                            Button("打开系统扩展设置", action: openExtensionSettings)
-                                .buttonStyle(.bordered)
-                            Button("重启 Finder", action: restartFinder)
-                                .buttonStyle(.bordered)
-                        }
-                    }
-                }
-            }
-            if !statusMessage.isEmpty {
-                Text(statusMessage)
-                    .font(.mgMeta)
-                    .foregroundStyle(Color.mgText2)
-                    .padding(.top, 8)
-                    .padding(.leading, 4)
-            }
-        }
-    }
-
-    private var defaultAppsSection: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            MGSectionLabel(text: "默认应用")
-            GroupCard {
-                VStack(spacing: 0) {
-                    GroupRow(
-                        label: "默认终端",
-                        sub: "Finder 工具栏默认菜单中的第一项"
-                    ) {
-                        appPicker(
-                            selection: Binding(
-                                get: { preferences.defaultTerminal },
-                                set: { value in updatePreferences { $0.defaultTerminal = value } }
-                            ),
-                            options: installedTerminals.isEmpty
-                                ? BetterFinderApplicationCatalog.allSupportedApps(type: .terminal)
-                                : installedTerminals
-                        )
-                    }
-
-                    GroupRow(
-                        label: "默认编辑器",
-                        sub: "Finder 工具栏默认菜单中的第二项",
-                        showDivider: true
-                    ) {
-                        appPicker(
-                            selection: Binding(
-                                get: { preferences.defaultEditor },
-                                set: { value in updatePreferences { $0.defaultEditor = value } }
-                            ),
-                            options: installedEditors.isEmpty
-                                ? BetterFinderApplicationCatalog.allSupportedApps(type: .editor)
-                                : installedEditors
-                        )
-                    }
-                }
-            }
-        }
-    }
-
-    private var customMenuSection: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            MGSectionLabel(text: "自定义菜单")
-            GroupCard(padding: EdgeInsets(top: 16, leading: 18, bottom: 16, trailing: 18)) {
-                VStack(alignment: .leading, spacing: 16) {
-                    supportedAppsSummary
-                    customAppList
-
-                    HStack(spacing: 8) {
-                        addAppMenu
-                        Button {
-                            if !preferences.customMenuApps.isEmpty {
-                                updatePreferences { $0.customMenuApps.removeLast() }
-                            }
-                        } label: {
-                            Image(systemName: "minus")
-                        }
-                        .buttonStyle(.bordered)
-                        .disabled(preferences.customMenuApps.isEmpty)
-                    }
-
-                    VStack(spacing: 0) {
-                        GroupRow(label: "应用到 Finder 工具栏菜单") {
-                            Toggle("", isOn: Binding(
-                                get: { preferences.appliesCustomMenuToToolbar },
-                                set: { value in updatePreferences { $0.appliesCustomMenuToToolbar = value } }
-                            ))
-                            .labelsHidden()
-                            .toggleStyle(.switch)
-                            .controlSize(.small)
-                            .tint(.mgAccent)
-                        }
-                        GroupRow(label: "应用到 Finder 右键菜单", showDivider: true) {
-                            Toggle("", isOn: Binding(
-                                get: { preferences.appliesCustomMenuToContextMenu },
-                                set: { value in updatePreferences { $0.appliesCustomMenuToContextMenu = value } }
-                            ))
-                            .labelsHidden()
-                            .toggleStyle(.switch)
-                            .controlSize(.small)
-                            .tint(.mgAccent)
-                        }
-                        GroupRow(label: "隐藏 Finder 右键菜单项", showDivider: true) {
-                            Toggle("", isOn: Binding(
-                                get: { preferences.hidesContextMenuItems },
-                                set: { value in updatePreferences { $0.hidesContextMenuItems = value } }
-                            ))
-                            .labelsHidden()
-                            .toggleStyle(.switch)
-                            .controlSize(.small)
-                            .tint(.mgAccent)
-                        }
-                        GroupRow(label: "图标类型", showDivider: true) {
-                            MGSegmentedPicker(
-                                selection: Binding(
-                                    get: { preferences.iconStyle },
-                                    set: { value in updatePreferences { $0.iconStyle = value } }
-                                ),
-                                options: BetterFinderIconStyle.allCases.map {
-                                    MGSegmentedOption($0, $0.label)
-                                }
-                            )
-                        }
-                        GroupRow(label: "路径转义", showDivider: true) {
-                            MGSegmentedPicker(
-                                selection: Binding(
-                                    get: { preferences.escapesCopiedPaths },
-                                    set: { value in updatePreferences { $0.escapesCopiedPaths = value } }
-                                ),
-                                options: [
-                                    MGSegmentedOption(false, "否"),
-                                    MGSegmentedOption(true, "是")
-                                ]
-                            )
-                        }
-                    }
-                    .mgCard()
-                }
-            }
-        }
-    }
-
-    private var supportedAppsSummary: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("已安装的受支持应用")
-                .font(.mgLabelStrong)
-                .foregroundStyle(Color.mgText1)
-            Text(installedSupportedApps.map(\.name).sortedIgnoreCase().joined(separator: ", "))
-                .font(.mgBody)
-                .foregroundStyle(Color.mgText1)
-                .fixedSize(horizontal: false, vertical: true)
-
-            Text("未安装的应用")
-                .font(.mgLabelStrong)
-                .foregroundStyle(Color.mgText1)
-                .padding(.top, 4)
-            Text(notInstalledSupportedApps.map(\.name).sortedIgnoreCase().joined(separator: ", "))
-                .font(.mgBody)
-                .foregroundStyle(Color.mgText2)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-
-    private var customAppList: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("菜单选项")
-                .font(.mgLabelStrong)
-                .foregroundStyle(Color.mgText1)
-
-            VStack(spacing: 0) {
-                if preferences.customMenuApps.isEmpty {
-                    Text("未添加自定义应用")
-                        .font(.mgBody)
-                        .foregroundStyle(Color.mgText3)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 10)
-                } else {
-                    ForEach(preferences.customMenuApps) { app in
-                        HStack(spacing: 10) {
-                            Image(systemName: app.type == .terminal ? "terminal" : "square.and.pencil")
-                                .foregroundStyle(Color.mgText2)
-                                .frame(width: 18)
-                            Text(app.name)
-                                .font(.mgBody)
-                                .foregroundStyle(Color.mgText1)
-                            Spacer()
-                            Button("移除") {
-                                removeCustomApp(app)
-                            }
-                            .buttonStyle(.borderless)
-                            .foregroundStyle(Color.mgText3)
-                        }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 9)
-                        if app.id != preferences.customMenuApps.last?.id {
-                            Rectangle()
-                                .fill(Color.mgHair)
-                                .frame(height: 0.5)
-                        }
-                    }
-                }
-            }
-            .mgCard(radius: MGRadius.control)
         }
     }
 
@@ -332,47 +137,26 @@ struct BetterFinderPage: View {
         }
         .menuStyle(.button)
         .buttonStyle(.bordered)
+        .fixedSize()
     }
 
-    private var shortcutSection: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            MGSectionLabel(text: "快捷键")
-            GroupCard {
-                VStack(spacing: 0) {
-                    ShortcutRow(
-                        icon: "terminal",
-                        title: "打开默认终端",
-                        shortcut: shortcutBinding(\.openTerminalShortcut)
-                    )
-                    ShortcutRow(
-                        icon: "square.and.pencil",
-                        title: "打开默认编辑器",
-                        shortcut: shortcutBinding(\.openEditorShortcut),
-                        showDivider: true
-                    )
-                    ShortcutRow(
-                        icon: "doc.on.clipboard",
-                        title: "拷贝路径到剪贴板",
-                        shortcut: shortcutBinding(\.copyPathShortcut),
-                        showDivider: true
-                    )
-                }
-            }
-        }
+    private func appPicker(_ selection: Binding<BetterFinderApp>, _ options: [BetterFinderApp]) -> some View {
+        MGMenuPicker(selection: selection, options: options.map { MGMenuOption($0, $0.name) }, minWidth: 220)
     }
 
-    private func appPicker(
-        selection: Binding<BetterFinderApp>,
-        options: [BetterFinderApp]
-    ) -> some View {
-        Picker("", selection: selection) {
-            ForEach(options) { app in
-                Text(app.name).tag(app)
-            }
+    /// 只填了名字的应用(手动输入、没装)找不到 .app,用通用 App 图标。
+    private func appIcon(_ app: BetterFinderApp) -> NSImage {
+        guard let url = BetterFinderApplicationCatalog.bundleURL(for: app) else {
+            return NSWorkspace.shared.icon(for: .application)
         }
-        .labelsHidden()
-        .pickerStyle(.menu)
-        .frame(minWidth: 220, alignment: .trailing)
+        return NSWorkspace.shared.icon(forFile: url.path)
+    }
+
+    private func bind<V>(_ keyPath: WritableKeyPath<BetterFinderPreferences, V>) -> Binding<V> {
+        Binding(
+            get: { preferences[keyPath: keyPath] },
+            set: { value in updatePreferences { $0[keyPath: keyPath] = value } }
+        )
     }
 
     private func shortcutBinding(
@@ -407,9 +191,6 @@ struct BetterFinderPage: View {
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         installedSupportedApps = (installedTerminals + installedEditors)
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-        let installedSet = Set(installedSupportedApps)
-        notInstalledSupportedApps = BetterFinderApplicationCatalog.allSupportedApps()
-            .filter { !installedSet.contains($0) }
     }
 
     private func addCustomApp(_ app: BetterFinderApp) {
@@ -498,21 +279,6 @@ struct BetterFinderPage: View {
         statusMessage = "已请求重启 Finder。"
     }
 
-    private func openDebugLogFolder() {
-        let folderURL = BetterFinderDebugLog.fileURL.deletingLastPathComponent()
-        try? FileManager.default.createDirectory(at: folderURL, withIntermediateDirectories: true)
-        if FileManager.default.fileExists(atPath: BetterFinderDebugLog.fileURL.path) {
-            NSWorkspace.shared.activateFileViewerSelecting([BetterFinderDebugLog.fileURL])
-        } else {
-            NSWorkspace.shared.open(folderURL)
-        }
-    }
-
-    private func clearDebugLog() {
-        BetterFinderDebugLog.clear()
-        statusMessage = "已清空增强Finder调试日志。"
-    }
-
     private func runCommand(_ executable: String, arguments: [String]) -> Bool {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
@@ -523,40 +289,6 @@ struct BetterFinderPage: View {
             return process.terminationStatus == 0
         } catch {
             return false
-        }
-    }
-}
-
-private struct ShortcutRow: View {
-    let icon: String
-    let title: String
-    @Binding var shortcut: Shortcut?
-    var showDivider: Bool = false
-
-    var body: some View {
-        VStack(spacing: 0) {
-            if showDivider {
-                Rectangle()
-                    .fill(Color.mgHair)
-                    .frame(height: 0.5)
-                    .padding(.leading, 78)
-            }
-
-            HStack(spacing: 16) {
-                ActionIcon(systemName: icon)
-                Text(title)
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(Color.mgText1)
-                Spacer(minLength: 12)
-                KeyCapSlot(minWidth: 120) {
-                    ShortcutRecorderField(shortcut: $shortcut, placeholder: "点击录制")
-                }
-                Button("清除") { shortcut = nil }
-                    .buttonStyle(.borderless)
-                    .foregroundStyle(Color.mgText3)
-            }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 16)
         }
     }
 }
@@ -576,11 +308,5 @@ private extension BetterFinderShortcut {
             modifierFlags: modifierFlags,
             displayName: displayName
         )
-    }
-}
-
-private extension Array where Element == String {
-    func sortedIgnoreCase() -> [String] {
-        sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
     }
 }

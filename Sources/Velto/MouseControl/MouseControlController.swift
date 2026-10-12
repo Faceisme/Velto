@@ -16,8 +16,10 @@ private struct MouseScrollHotkeyState {
     var disableSmooth = false
 }
 
-private final class MouseScrollDebugLogger: @unchecked Sendable {
+final class MouseScrollDebugLogger: @unchecked Sendable {
     static let shared = MouseScrollDebugLogger()
+    static let fileURL = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Library/Logs/Velto/mouse-scroll-debug.log")
 
     private let queue = DispatchQueue(label: "com.face.velto.mouse-scroll.debug-log", qos: .utility)
     private let stateLock = NSLock()
@@ -83,10 +85,8 @@ private final class MouseScrollDebugLogger: @unchecked Sendable {
         try? fileHandle?.close()
         fileHandle = nil
 
-        let directory = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Logs/Velto", isDirectory: true)
-        let fileURL = directory.appendingPathComponent("mouse-scroll-debug.log")
-        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let fileURL = Self.fileURL
+        try? FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         if !FileManager.default.fileExists(atPath: fileURL.path) {
             FileManager.default.createFile(atPath: fileURL.path, contents: nil)
         }
