@@ -8,9 +8,24 @@ struct MouseControlPage: View {
     @State private var draft = MouseControlPreferences.defaults
     @State private var didLoad = false
     @State private var statusMessage = ""
+    /// 指针速度是系统设置,不走 draft / 保存栏:拖动即写入系统,所以单独存一份。
+    @State private var pointerSpeed = 0.0
 
     private var hasUnsavedChanges: Bool {
         draft != store.preferences.mouseControl
+    }
+
+    private var pointerSpeedBinding: Binding<Double> {
+        Binding(
+            get: { pointerSpeed },
+            set: { newValue in
+                let speed = MousePointerSpeed.quantized(newValue)
+                // 拖动时同一档位会连发多次,只在跨档时写系统。
+                guard speed != pointerSpeed else { return }
+                pointerSpeed = speed
+                MousePointerSpeed.apply(speed)
+            }
+        )
     }
 
     var body: some View {
@@ -19,7 +34,7 @@ struct MouseControlPage: View {
                 VStack(alignment: .leading, spacing: 22) {
                     PageHeader(
                         page: .mouseControl,
-                        subtitle: "平滑滚动、轴向反转、滚动功能键、按应用覆盖和按钮绑定。"
+                        subtitle: "指针速度、平滑滚动、轴向反转、滚动功能键、按应用覆盖和按钮绑定。"
                     )
 
                     VStack(alignment: .leading, spacing: 0) {
@@ -60,6 +75,23 @@ struct MouseControlPage: View {
                     }
 
                     VStack(alignment: .leading, spacing: 0) {
+                        MGSectionLabel(text: "指针")
+                        GroupCard {
+                            GroupRow(
+                                label: "移动速度",
+                                sub: "即系统的鼠标跟踪速度(系统设置最高 3.0)。拖动即时生效,无需保存,不受总开关影响"
+                            ) {
+                                MouseSliderStepperField(
+                                    value: pointerSpeedBinding,
+                                    range: MousePointerSpeed.range,
+                                    step: MousePointerSpeed.step,
+                                    format: "%.1f"
+                                )
+                            }
+                        }
+                    }
+
+                    VStack(alignment: .leading, spacing: 0) {
                         MGSectionLabel(text: "全局滚动")
                         MouseScrollProfileEditor(profile: $draft.scroll)
                     }
@@ -86,7 +118,11 @@ struct MouseControlPage: View {
             )
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .onAppear(perform: loadDraftIfNeeded)
+        .onAppear {
+            loadDraftIfNeeded()
+            // 每次进页面都重读:用户可能刚在系统设置里改过跟踪速度。
+            pointerSpeed = MousePointerSpeed.current()
+        }
         .onReceive(NotificationCenter.default.publisher(for: .gestureStoreDidChange)) { note in
             guard note.object as? GestureStore === store else { return }
             switch note.gestureStoreChangeReason {
