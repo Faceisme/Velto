@@ -114,11 +114,16 @@ enum GestureTargetController {
         frame(of: window)
     }
 
+    /// 尺寸 → 位置 → 再补一次尺寸。只设一次尺寸不够:app 会按窗口**当前**原点把
+    /// 尺寸夹到屏幕内 —— 访达在 x=149 时设宽 1920,实际只给 1771(=1920−149),
+    /// 再挪到 x=0 就成了"贴左但没铺满",得按第二次才满。挪完位置后再设一次尺寸,
+    /// 这时原点已经对了,不会再被夹。先设一次尺寸是为了跨屏挪时大窗口不被位置推偏。
     static func setFrame(_ frame: CGRect, ofWindow window: AXUIElement) -> Bool {
-        guard setSize(frame.size, ofWindow: window) else {
+        guard setSize(frame.size, ofWindow: window),
+              setPosition(frame.origin, ofWindow: window) else {
             return false
         }
-        return setPosition(frame.origin, ofWindow: window)
+        return setSize(frame.size, ofWindow: window)
     }
 
     static func maximizeWindowUnderPointer(at point: CGPoint) {
@@ -135,7 +140,11 @@ enum GestureTargetController {
             return
         }
 
-        _ = setFrame(frame, ofWindow: window)
+        let ok = setFrame(frame, ofWindow: window)
+        if WindowManagementDebugLog.isEnabled {
+            let result = self.frame(of: window).map(fmt) ?? "?"
+            WindowManagementDebugLog.log("最大化: 目标 frame=\(fmt(frame)) → 结果 frame=\(result) ok=\(ok)")
+        }
     }
 
     // MARK: - AX 熔断(pid 级负缓存)
