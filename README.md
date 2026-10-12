@@ -359,11 +359,6 @@ docs/
 - 默认 Bundle Identifier 是 `com.face.myapp`，偏好也存在这个域里；公开分发前建议改成自己的反向域名。
 - 仓库没有声明开源许可证，正式公开前需要添加 `LICENSE`。
 
-## 致谢与第三方声明
-
-- 鼠标控制参考了 [Caldis/Mos](https://github.com/Caldis/Mos) 的功能形态和滚动处理思路。Mos 使用 CC BY-NC 4.0 授权；如果公开或商业分发 Velto，需要重新确认授权兼容性。
-- 网络监控的流量统计改编自 [exelban/stats](https://github.com/exelban/stats)（MIT），声明见 `Resources/ThirdPartyNotices/Stats.md`。
-- 截图的部分交互、工具栏和图像配准逻辑改编自 [realskyrin/capcap](https://github.com/realskyrin/capcap)（MIT），声明见 `Resources/ThirdPartyNotices/CapCap.md`。
 
 ## 紧急停止
 
