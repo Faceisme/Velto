@@ -56,6 +56,10 @@ final class GestureEngine: @unchecked Sendable {
     private var startPoint = CGPoint.zero
     private var lastPoint = CGPoint.zero
     private var lastArmedLocation = CGPoint.zero
+    /// 起手时被吞掉的那个真实 rightMouseDown 的副本。没画成手势(.pending 松手)时
+    /// 连同真实的 up 一起原样补发,而不是凭空合成一对新事件 —— 合成事件缺 HID 时间戳、
+    /// 事件号、设备字段,Movist 这类自己处理右键的 App 不认(实测右键动作失效)。
+    private var pendingRightMouseDown: CGEvent?
 
     // MARK: 乱划检测 (scribble-to-cancel)
     //
@@ -193,7 +197,7 @@ final class GestureEngine: @unchecked Sendable {
     }
 
     /// Returns whether the engine consumed the event. Tap thread.
-    func handleRightMouseDown(at location: CGPoint) -> Bool {
+    func handleRightMouseDown(at location: CGPoint, originalEvent: CGEvent? = nil) -> Bool {
         if state != .idle {
             if debugThisSession { debugTrace.flush(reason: "abandoned") }
             resetTracking()
@@ -206,6 +210,7 @@ final class GestureEngine: @unchecked Sendable {
         }
 
         state = .pending
+        pendingRightMouseDown = originalEvent?.copy()
         frontmostApplicationAtGestureStart = lastFrontmostApplication ?? NSWorkspace.shared.frontmostApplication
         startPoint = location
         lastPoint = location
@@ -272,7 +277,7 @@ final class GestureEngine: @unchecked Sendable {
         }
     }
 
-    func handleRightMouseUp(at location: CGPoint) -> Bool {
+    func handleRightMouseUp(at location: CGPoint, originalEvent: CGEvent? = nil) -> Bool {
         // 本次 release 轨迹的 seq —— 仅 .gesturing 才会进入匹配,把它带给 runGesture,
         // 让匹配判定日志与轨迹日志共享同一个 seq 互相对应。
         var debugSeq: Int?
@@ -291,9 +296,10 @@ final class GestureEngine: @unchecked Sendable {
         switch state {
         case .pending:
             let point = startPoint
+            let recordedDown = pendingRightMouseDown
             resetTracking()
             lastSyncedCursorPosition = nil
-            replayRightClickAsync(at: point)
+            replayRightClickAsync(down: recordedDown, up: originalEvent?.copy(), fallbackPoint: point)
             return true
 
         case .gesturing:
@@ -573,8 +579,22 @@ final class GestureEngine: @unchecked Sendable {
 
     // MARK: - Right-click replay
 
-    private func replayRightClickAsync(at point: CGPoint) {
+    /// CGEvent 是 CFType,SDK 没标 Sendable;副本在 tap 线程生成后只交给补发闭包独占。
+    private struct RecordedClick: @unchecked Sendable {
+        let down: CGEvent
+        let up: CGEvent
+    }
+
+    private func replayRightClickAsync(down recordedDown: CGEvent?, up recordedUp: CGEvent?, fallbackPoint point: CGPoint) {
+        let recorded = recordedDown.flatMap { down in recordedUp.map { RecordedClick(down: down, up: $0) } }
         DispatchQueue.global(qos: .userInteractive).async { [marker = syntheticMarker] in
+            if let recorded {
+                recorded.down.setIntegerValueField(.eventSourceUserData, value: marker)
+                recorded.up.setIntegerValueField(.eventSourceUserData, value: marker)
+                recorded.down.post(tap: .cgSessionEventTap)
+                recorded.up.post(tap: .cgSessionEventTap)
+                return
+            }
             guard let down = CGEvent(
                 mouseEventSource: nil,
                 mouseType: .rightMouseDown,
@@ -641,6 +661,7 @@ final class GestureEngine: @unchecked Sendable {
         startPoint = .zero
         lastPoint = .zero
         lastArmedLocation = .zero
+        pendingRightMouseDown = nil
         resetScribbleTracking(at: .zero)
         overlay.hide()
     }

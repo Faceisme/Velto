@@ -547,7 +547,7 @@ final class EventTapManager: @unchecked Sendable {
             guard gesturesEnabledForTap else {
                 return Unmanaged.passUnretained(event)
             }
-            _ = gestureEngine.handleRightMouseDown(at: event.location)
+            _ = gestureEngine.handleRightMouseDown(at: event.location, originalEvent: event)
             return nil
 
         case .rightMouseDragged:
@@ -585,7 +585,7 @@ final class EventTapManager: @unchecked Sendable {
             if mouseControlController.handleTriggerEvent(type: type, event: event, normalizedFlags: raw) {
                 return nil
             }
-            return gestureEngine.handleRightMouseUp(at: event.location)
+            return gestureEngine.handleRightMouseUp(at: event.location, originalEvent: event)
                 ? nil
                 : Unmanaged.passUnretained(event)
 
