@@ -3,7 +3,7 @@ import SwiftUI
 
 // MARK: - ShortcutRecorderField (SwiftUI)
 //
-// 点击进入录制态:提示"请按下快捷键…",并通过 RecordingKey 让外层 KeyCapSlot 描强调色边框。
+// 点击进入录制态:提示"请按下快捷键…",并通过 RecordingKey 让外层 ShortcutField 描强调色边框。
 // 用 NSEvent.addLocalMonitorForEvents 截取按键。
 //
 // 退出录制态的触发器(任一即可):
@@ -27,10 +27,6 @@ struct ShortcutRecorderField: View {
     @State private var mouseMonitor: Any?
     @State private var resignObservers: [NSObjectProtocol] = []
 
-    /// 当 true 时,字段会填满父容器宽度并左对齐(详情卡里那种场景);
-    /// 当 false 时,字段紧贴内容(键帽槽里那种场景)。
-    var fillWidth: Bool = false
-
     var body: some View {
         Button {
             // 只 begin,不 toggle。退出靠 monitor / Esc / 失焦。
@@ -42,18 +38,12 @@ struct ShortcutRecorderField: View {
                         .font(.mgMeta)
                         .foregroundStyle(Color.mgAccent)
                 } else if let sc = shortcut, !sc.kbdKeys.isEmpty {
-                    Kbd(keys: sc.kbdKeys, size: fillWidth ? .md : .sm)
-                    if fillWidth {
-                        Text("点击修改")
-                            .font(.mgMeta)
-                            .foregroundStyle(Color.mgText3)
-                    }
+                    Kbd(keys: sc.kbdKeys, size: .sm)
                 } else {
                     Text(placeholder)
                         .font(.mgMeta)
                         .foregroundStyle(Color.mgText3)
                 }
-                if fillWidth { Spacer(minLength: 0) }
             }
             .contentShape(Rectangle())
         }

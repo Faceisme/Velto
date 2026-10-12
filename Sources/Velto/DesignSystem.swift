@@ -37,32 +37,15 @@ enum MGRadius {
 extension Font {
   static let mgPageTitle = Font.system(size: 22, weight: .bold)
   static let mgTitleM = Font.system(size: 17, weight: .semibold)
-  static let mgLabelStrong = Font.system(size: 14, weight: .semibold)
   static let mgBody = Font.system(size: 14)
-  static let mgButtonSm = Font.system(size: 13, weight: .semibold)
   static let mgSubLabel = Font.system(size: 13, weight: .semibold)
   static let mgMeta = Font.system(size: 12)
-  static let mgTag = Font.system(size: 11.5, weight: .bold) // 只剩手势详情的 GESTURE 标签在用,第 3 期删
 }
 
-// MARK: - 分组标题
-
-struct MGSectionLabel: View {
-  let text: String
-
-  var body: some View {
-    Text(text)
-      .font(.mgSubLabel)
-      .foregroundStyle(Color.mgText2)
-      .padding(.leading, 4)
-      .padding(.bottom, 8)
-  }
-}
-
-// MARK: - 卡片 / 内嵌底
+// MARK: - 卡片
 
 extension View {
-  func mgCard(radius: CGFloat = MGRadius.card) -> some View {
-    background(Color.mgCard, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
+  func mgCard() -> some View {
+    background(Color.mgCard, in: RoundedRectangle(cornerRadius: MGRadius.card, style: .continuous))
   }
 }

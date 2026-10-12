@@ -241,7 +241,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // 关闭后不要被 AppKit 释放,这样 ⌘W / 红点关闭后还能再次打开同一窗口。
             window.isReleasedWhenClosed = false
             window.setContentSize(NSSize(width: 1180, height: 760))
-            window.minSize = NSSize(width: 1100, height: 720)
+            window.minSize = NSSize(width: 960, height: 640)
             window.center()
             settingsWindow = window
         }

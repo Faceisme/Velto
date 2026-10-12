@@ -143,36 +143,26 @@ struct GestureTrailView: View {
 
 // MARK: - GesturePreviewCard
 //
-// 大的录制画布:
-//  - 高 220px,圆角 10px
-//  - 三层背景: 两个 radial gradient + #F8F9FB
-//  - dotted grid 衬底, 每 14px 一个点, opacity 0.45
-//  - 右上角玻璃药丸 "● N 个样本"
-//  - 左下角灰色提示 "按住右键并画出轨迹"
+// 录制画布:点阵衬底上画已存的样本(最新一个实线,之前的做淡影);
+// 还没样本时居中提示怎么录。overlay 叠录制视图。
 
 struct GesturePreviewCard<Overlay: View>: View {
     var templates: [[StrokePoint]]
-    var sampleCount: Int? = nil
     var height: CGFloat = 220
-    var hint: String? = "按住右键并画出轨迹"
     @ViewBuilder var overlay: () -> Overlay
 
     init(
         templates: [[StrokePoint]],
-        sampleCount: Int? = nil,
         height: CGFloat = 220,
-        hint: String? = "按住右键并画出轨迹",
         @ViewBuilder overlay: @escaping () -> Overlay = { EmptyView() }
     ) {
         self.templates = templates
-        self.sampleCount = sampleCount
         self.height = height
-        self.hint = hint
         self.overlay = overlay
     }
 
     var body: some View {
-        let shape = RoundedRectangle(cornerRadius: MGRadius.card, style: .continuous)
+        let shape = RoundedRectangle(cornerRadius: MGRadius.control, style: .continuous)
         return ZStack {
             shape
                 .fill(Color.mgInset)
@@ -194,53 +184,18 @@ struct GesturePreviewCard<Overlay: View>: View {
             }
             .opacity(0.45)
 
-            // 居中的大轨迹
-            GestureTrailView(templates: templates, stroke: 5)
-                .padding(height * 0.10)
+            if templates.isEmpty {
+                Text("按住右键在此画出轨迹")
+                    .font(.mgBody)
+                    .foregroundStyle(Color.mgText3)
+            } else {
+                // 居中的大轨迹
+                GestureTrailView(templates: templates, stroke: 5)
+                    .padding(height * 0.10)
+            }
 
             // 自定义 overlay(比如录制中的轨迹)
             overlay()
-
-            // 提示文字 (左下)
-            if let hint, !hint.isEmpty {
-                VStack {
-                    Spacer()
-                    HStack {
-                        Text(hint)
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(Color.mgText3)
-                        Spacer()
-                    }
-                }
-                .padding(.leading, 12)
-                .padding(.bottom, 10)
-            }
-
-            // 样本数玻璃药丸 (右上)
-            if let n = sampleCount {
-                VStack {
-                    HStack {
-                        Spacer()
-                        HStack(spacing: 6) {
-                            Circle()
-                                .fill(Color.mgAccent)
-                                .frame(width: 6, height: 6)
-                            Text("\(n) 个样本")
-                                .font(.mgSubLabel)
-                                .foregroundStyle(Color.mgText1)
-                        }
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 4)
-                        .background(Capsule().fill(Color.mgKey))
-                        .overlay(
-                            Capsule()
-                                .strokeBorder(Color.mgHair, lineWidth: 0.5)
-                        )
-                    }
-                    Spacer()
-                }
-                .padding(10)
-            }
         }
         .frame(height: height)
         .overlay {

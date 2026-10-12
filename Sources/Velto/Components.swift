@@ -15,8 +15,6 @@ enum KbdSize {
 struct Kbd: View {
   let keys: [String]
   var size: KbdSize = .md
-  /// 深底(选中行)上用浅色键帽
-  var inverted: Bool = false
 
   var body: some View {
     HStack(spacing: size.gap) {
@@ -24,14 +22,12 @@ struct Kbd: View {
         let shape = RoundedRectangle(cornerRadius: MGRadius.kbd, style: .continuous)
         Text(key)
           .font(.system(size: size.fontSize, weight: .semibold))
-          .foregroundStyle(inverted ? Color.white : Color.mgText2)
+          .foregroundStyle(Color.mgText2)
           .monospacedDigit()
           .frame(minWidth: size.height, minHeight: size.height)
           .padding(.horizontal, size.hPad - 1) // minWidth 已经留了一点边
-          .background(inverted ? Color.white.opacity(0.24) : Color.mgKey, in: shape)
-          .overlay {
-            if !inverted { shape.strokeBorder(Color.mgHair, lineWidth: 0.5) }
-          }
+          .background(Color.mgKey, in: shape)
+          .overlay { shape.strokeBorder(Color.mgHair, lineWidth: 0.5) }
       }
     }
   }
@@ -75,28 +71,12 @@ extension Shortcut {
   }
 }
 
-// MARK: - KeyCapSlot 录制框的内嵌槽
+// MARK: - RecordingKey 录制态
 
-/// 录制框把「正在录制」往上报,外层 KeyCapSlot 据此描强调色边框。
+/// 录制框把「正在录制」往上报,外层(ShortcutField 等)据此描强调色边框。
 struct RecordingKey: PreferenceKey {
   static let defaultValue = false
   static func reduce(value: inout Bool, nextValue: () -> Bool) { value = value || nextValue() }
-}
-
-struct KeyCapSlot<Content: View>: View {
-  var minWidth: CGFloat = 80
-  @ViewBuilder var content: () -> Content
-
-  var body: some View {
-    let shape = RoundedRectangle(cornerRadius: MGRadius.control, style: .continuous)
-    content()
-      .padding(.horizontal, 8)
-      .frame(minWidth: minWidth, minHeight: 28)
-      .background(Color.mgInset, in: shape)
-      .overlayPreferenceValue(RecordingKey.self) { recording in
-        if recording { shape.strokeBorder(Color.mgAccent, lineWidth: 1.5) }
-      }
-  }
 }
 
 // MARK: - 模块图标
@@ -201,21 +181,7 @@ struct SettingsSection<Content: View, Accessory: View>: View {
       }
       .padding(.leading, 4)
       .padding(.bottom, 8)
-      GroupCard {
-        VStack(spacing: 0) {
-          Group(subviews: content()) { rows in
-            ForEach(rows) { row in
-              if row.id != rows.first?.id {
-                Rectangle()
-                  .fill(Color.mgHair)
-                  .frame(height: 0.5)
-                  .padding(.leading, 16)
-              }
-              row
-            }
-          }
-        }
-      }
+      GroupCard { content() }
     }
   }
 }
@@ -301,26 +267,6 @@ struct DeleteIconButton: View {
   }
 }
 
-/// 旧页面还在用的行,各页迁移到 SettingsSection 后删。
-struct GroupRow<Trailing: View>: View {
-  let label: String
-  var sub: String? = nil
-  var showDivider: Bool = false
-  @ViewBuilder var trailing: () -> Trailing
-
-  var body: some View {
-    VStack(spacing: 0) {
-      if showDivider {
-        Rectangle()
-          .fill(Color.mgHair)
-          .frame(height: 0.5)
-          .padding(.leading, 16)
-      }
-      SettingsRow(title: label, subtitle: sub, trailing: trailing)
-    }
-  }
-}
-
 // MARK: - ShortcutField 录制框 + 框内清除
 
 struct ShortcutField<Recorder: View>: View {
@@ -329,18 +275,23 @@ struct ShortcutField<Recorder: View>: View {
   @ViewBuilder var recorder: () -> Recorder
 
   var body: some View {
-    KeyCapSlot(minWidth: 96) {
-      HStack(spacing: 6) {
-        recorder()
-        if hasValue {
-          Button(action: clear) {
-            Image(systemName: "xmark.circle.fill")
-          }
-          .buttonStyle(.borderless)
-          .foregroundStyle(Color.mgText3)
-          .help("清除")
+    let shape = RoundedRectangle(cornerRadius: MGRadius.control, style: .continuous)
+    HStack(spacing: 6) {
+      recorder()
+      if hasValue {
+        Button(action: clear) {
+          Image(systemName: "xmark.circle.fill")
         }
+        .buttonStyle(.borderless)
+        .foregroundStyle(Color.mgText3)
+        .help("清除")
       }
+    }
+    .padding(.horizontal, 8)
+    .frame(minWidth: 96, minHeight: 28)
+    .background(Color.mgInset, in: shape)
+    .overlayPreferenceValue(RecordingKey.self) { recording in
+      if recording { shape.strokeBorder(Color.mgAccent, lineWidth: 1.5) }
     }
   }
 }
@@ -398,34 +349,6 @@ struct DebugSection: View {
   }
 }
 
-// MARK: - Segmented picker(原生 .segmented)
-
-struct MGSegmentedOption<Value: Hashable> {
-  let value: Value
-  let title: String
-
-  init(_ value: Value, _ title: String) {
-    self.value = value
-    self.title = title
-  }
-}
-
-struct MGSegmentedPicker<Value: Hashable>: View {
-  @Binding var selection: Value
-  let options: [MGSegmentedOption<Value>]
-
-  var body: some View {
-    Picker("", selection: $selection) {
-      ForEach(options.indices, id: \.self) { i in
-        Text(options[i].title).tag(options[i].value)
-      }
-    }
-    .pickerStyle(.segmented)
-    .labelsHidden()
-    .fixedSize()
-  }
-}
-
 // MARK: - Menu picker
 
 struct MGMenuOption<Value: Hashable>: Identifiable {
@@ -458,16 +381,22 @@ struct MGMenuPicker<Value: Hashable>: View {
 
 // MARK: - GroupCard 实色分组卡片
 
+/// 实色分组卡片,里面各行之间自动加分隔线。
 struct GroupCard<Content: View>: View {
-  var padding: EdgeInsets? = nil
   @ViewBuilder var content: () -> Content
 
   var body: some View {
-    Group {
-      if let padding {
-        content().padding(padding)
-      } else {
-        content()
+    VStack(spacing: 0) {
+      Group(subviews: content()) { rows in
+        ForEach(rows) { row in
+          if row.id != rows.first?.id {
+            Rectangle()
+              .fill(Color.mgHair)
+              .frame(height: 0.5)
+              .padding(.leading, 16)
+          }
+          row
+        }
       }
     }
     .frame(maxWidth: .infinity, alignment: .leading)

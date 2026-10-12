@@ -1,26 +1,22 @@
 import AppKit
 import SwiftUI
 
-// MARK: - GesturesPage (v2)
+// MARK: - GesturesPage
 //
-// 顶部分页 [手势 | 设置],下面按分页切换:
-//   手势:[List column 360] | [Detail] + BottomToolbar
-//   设置:本模块自己的 行为 / 识别参数 / 调试(原先散落在「通用设置」里的手势项)
-// Sidebar 由 SettingsRootView 提供。
-
-/// 手势页顶部分页:手势列表编辑 vs. 本模块设置。
-enum GesturesTab: Hashable { case gestures, settings }
+// 页头 + [手势 | 设置] 分段固定在顶部,下面按分段切换:
+//   手势:列表(一张卡)| 详情(录制 / 快捷键),两栏各自滚动、不限宽;有改动或冲突时底部出现保存栏
+//   设置:行为 / 识别 / 调试,直接写 store
+// 手势列表留草稿:录样本是"编辑文档"式的操作,而且要先过冲突校验才能保存。
 
 struct GesturesPage: View {
+    private enum Tab: Hashable { case gestures, settings }
+
     private let store = GestureStore.shared
 
-    @State private var tab: GesturesTab = .gestures
+    @State private var tab: Tab = .gestures
     @State private var draftGestures: [GestureCommand] = []
     @State private var didLoad = false
     @State private var selectedID: UUID?
-    @State private var editingName = ""
-    @State private var isEditingName = false
-    @State private var shortcut: Shortcut?
     @State private var statusMessage = ""
     @State private var hasUnsavedChanges = false
 
@@ -82,315 +78,166 @@ struct GesturesPage: View {
     var body: some View {
         let validation = saveValidation
         return VStack(spacing: 0) {
-            topTabBar
+            VStack(alignment: .leading, spacing: 24) {
+                PageHeader(
+                    page: .gestures,
+                    subtitle: "按住右键画出轨迹,触发对应的快捷键。",
+                    isOn: pref(\.gesturesEnabled)
+                )
+                .help("关闭后右键手势暂停,不影响其它模块。")
 
-            if tab == .gestures {
-                VStack(spacing: 0) {
-                    HStack(spacing: 0) {
-                        listColumn
-                            .frame(width: 360)
-                            .background(Color.clear)
-                            .overlay(
-                                Rectangle()
-                                    .fill(Color.mgHair)
-                                    .frame(width: 1),
-                                alignment: .trailing
-                            )
+                Picker("", selection: $tab) {
+                    Text("手势").tag(Tab.gestures)
+                    Text("设置").tag(Tab.settings)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .fixedSize()
+                .controlSize(.large)
+            }
+            .padding(.horizontal, 32)
+            .padding(.top, 28)
 
-                        detailColumn
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            .background(Color.clear)
+            switch tab {
+            case .gestures:
+                HStack(alignment: .top, spacing: 16) {
+                    ScrollView {
+                        gestureList
+                            .padding(.top, 24)
+                            .padding(.bottom, 28)
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .frame(width: 320)
 
+                    ScrollView {
+                        detail
+                            .padding(.top, 24)
+                            .padding(.bottom, 28)
+                    }
+                }
+                .padding(.horizontal, 32)
+
+                if hasUnsavedChanges || validation.block != nil || !statusMessage.isEmpty {
                     BottomToolbar(
                         hasUnsavedChanges: hasUnsavedChanges,
                         statusMessage: statusMessage,
                         saveBlockReason: validation.block,
                         saveWarning: validation.warning,
-                        onDiscard: { reloadFromStore() },
+                        onDiscard: reloadFromStore,
                         onSave: saveChanges
                     )
                 }
-            } else {
-                settingsTab
+            case .settings:
+                ScrollView {
+                    settingsTab
+                        .padding(.top, 24)
+                        .padding(.bottom, 28)
+                        .padding(.horizontal, 32)
+                }
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .onAppear(perform: loadDraftIfNeeded)
         .onReceive(NotificationCenter.default.publisher(for: .gestureStoreDidChange)) { note in
             guard note.object as? GestureStore === store else { return }
             switch note.gestureStoreChangeReason {
             case .gestures, .backupImport:
-                reloadFromStore(silent: true)
+                reloadFromStore()
             default: break
             }
         }
     }
 
-    // MARK: Top tab bar
-
-    /// 顶部 [手势 | 设置] 分页条:左对齐分段控件 + 0.5px 底分隔线。
-    private var topTabBar: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 0) {
-                MGSegmentedPicker(
-                    selection: $tab,
-                    options: [
-                        MGSegmentedOption(.gestures, "手势"),
-                        MGSegmentedOption(.settings, "设置")
-                    ]
-                )
-                .controlSize(.large)
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 11)
-
-            Rectangle()
-                .fill(Color.mgHair)
-                .frame(height: 0.5)
-        }
+    private func pref<V>(_ kp: WritableKeyPath<AppPreferences, V>) -> Binding<V> {
+        Binding(
+            get: { store.preferences[keyPath: kp] },
+            set: { v in store.updatePreferences { $0[keyPath: kp] = v } }
+        )
     }
 
-    // MARK: List column
+    // MARK: 手势分段
 
-    private var listColumn: some View {
+    private var gestureList: some View {
         // 每次渲染只算一遍规范序列与冲突集,避免在 ForEach 里逐行重复计算。
         let canonical = canonicalByID
         let conflicts = conflictSet(from: canonical)
-        return VStack(alignment: .leading, spacing: 0) {
-            // Header
-            HStack(spacing: 10) {
-                Text("鼠标手势")
-                    .font(.mgTitleM)
-                    .foregroundStyle(Color.mgText1)
-
-                Text("\(draftGestures.count)")
-                    .font(.system(size: 11, weight: .semibold))
-                    .monospacedDigit()
-                    .foregroundStyle(Color.mgAccent)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 1)
-                    .background(Capsule().fill(Color.mgAccent.opacity(0.12)))
-
-                Spacer()
-
-                Button(action: addGesture) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "plus")
-                            .font(.system(size: 10, weight: .bold))
-                        Text("新建")
-                    }
-                }
-                .buttonStyle(.borderedProminent)
-            }
-            .padding(.horizontal, 20)
-            .padding(.top, 18)
-            .padding(.bottom, 14)
-
-            // List
-            ScrollView {
-                LazyVStack(spacing: 6) {
-                    ForEach(draftGestures) { g in
-                        let sig = canonical[g.id] ?? .empty
-                        GestureListItem(
-                            gesture: g,
-                            directionArrows: GestureDirection.displayString(sig),
-                            conflict: conflicts.contains(g.id),
-                            selected: g.id == selectedID,
-                            onClick: { selectGesture(g.id) }
-                        )
-                    }
-                }
-                .padding(.horizontal, 12)
-                .padding(.bottom, 14)
-            }
-        }
-    }
-
-    // MARK: Settings tab
-    //
-    // 本模块自己的偏好:从前散落在「通用设置」里的手势项(行为 + 识别参数)
-    // 以及原先挂在列表底部的调试开关,统一收到这里。直接写 store(无草稿/保存)。
-    private var settingsTab: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 22) {
-                PageHeader(
-                    page: .gestures,
-                    subtitle: "行为、识别参数与调试,仅作用于鼠标手势模块。"
-                )
-
-                // 行为
-                settingsSection("行为") {
-                    GroupCard {
-                        VStack(spacing: 0) {
-                            GroupRow(
-                                label: "启用手势监听",
-                                sub: "关闭后右键手势暂停,不影响其它模块"
-                            ) {
-                                Toggle("", isOn: Binding(
-                                    get: { store.preferences.gesturesEnabled },
-                                    set: { v in store.updatePreferences { $0.gesturesEnabled = v } }
-                                ))
-                                .labelsHidden()
-                                .toggleStyle(.switch)
-                                .controlSize(.small)
-                                .tint(.mgAccent)
-                            }
-                            GroupRow(label: "绘制时显示轨迹", showDivider: true) {
-                                Toggle("", isOn: Binding(
-                                    get: { store.preferences.showTrail },
-                                    set: { v in store.updatePreferences { $0.showTrail = v } }
-                                ))
-                                .labelsHidden()
-                                .toggleStyle(.switch)
-                                .controlSize(.small)
-                                .tint(.mgAccent)
-                            }
-                            GroupRow(
-                                label: "乱划取消手势",
-                                sub: "手势途中来回乱划几下即可取消,无需等待超时",
-                                showDivider: true
-                            ) {
-                                Toggle("", isOn: Binding(
-                                    get: { store.preferences.scribbleCancelEnabled },
-                                    set: { v in store.updatePreferences { $0.scribbleCancelEnabled = v } }
-                                ))
-                                .labelsHidden()
-                                .toggleStyle(.switch)
-                                .controlSize(.small)
-                                .tint(.mgAccent)
-                            }
-                        }
-                    }
-                }
-
-                // 识别参数
-                settingsSection("识别参数") {
-                    GroupCard {
-                        VStack(spacing: 0) {
-                            GroupRow(
-                                label: "手势超时时长",
-                                sub: "超时未完成的手势会被丢弃"
-                            ) {
-                                HStack(spacing: 6) {
-                                    MGStepperField(
-                                        value: Binding(
-                                            get: { store.preferences.gestureTimeoutSeconds },
-                                            set: { v in store.updatePreferences { $0.gestureTimeoutSeconds = min(max(v, 0.5), 10) } }
-                                        ),
-                                        range: 0.5...10.0,
-                                        step: 0.5
-                                    )
-                                    Text("秒")
-                                        .font(.mgBody)
-                                        .foregroundStyle(Color.mgText2)
-                                }
-                            }
-                            GroupRow(label: "手势作用目标", showDivider: true) {
-                                MGSegmentedPicker(
-                                    selection: Binding(
-                                        get: { store.preferences.gestureTargetPolicy },
-                                        set: { v in store.updatePreferences { $0.gestureTargetPolicy = v } }
-                                    ),
-                                    options: [
-                                        MGSegmentedOption(.windowUnderPointer, "鼠标指针下方"),
-                                        MGSegmentedOption(.activeWindow, "活动窗口")
-                                    ]
-                                )
-                            }
-                        }
-                    }
-                }
-
-                // 调试
-                settingsSection("调试") {
-                    GroupCard {
-                        GroupRow(
-                            label: "调试日志",
-                            sub: "记录手势轨迹/匹配诊断,排查时打开"
-                        ) {
-                            Toggle("", isOn: Binding(
-                                get: { store.preferences.debugLoggingEnabled },
-                                set: { v in store.updatePreferences { $0.debugLoggingEnabled = v } }
-                            ))
-                            .labelsHidden()
-                            .toggleStyle(.switch)
-                            .controlSize(.small)
-                            .tint(.mgAccent)
-                        }
-                    }
-                }
-            }
-            .padding(.horizontal, 32)
-            .padding(.top, 28)
-            .padding(.bottom, 28)
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-    }
-
-    /// section 小标题 + 内容的竖排容器(与「通用设置」一致的留白)。
-    @ViewBuilder
-    private func settingsSection<C: View>(_ title: String, @ViewBuilder content: () -> C) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            MGSectionLabel(text: title)
-            content()
-        }
-    }
-
-    // MARK: Detail column
-
-    @ViewBuilder
-    private var detailColumn: some View {
-        if let g = selected {
-            ScrollView {
-                GestureDetailPanel(
+        return GroupCard {
+            ForEach(draftGestures) { g in
+                GestureRow(
                     gesture: g,
-                    editingName: $editingName,
-                    isEditingName: $isEditingName,
-                    shortcut: $shortcut,
-                    onDelete: deleteSelectedGesture,
-                    updateDraft: updateSelectedDraft
+                    directionArrows: GestureDirection.displayString(canonical[g.id] ?? .empty),
+                    conflict: conflicts.contains(g.id),
+                    selected: g.id == selectedID,
+                    onSelect: { selectedID = g.id }
                 )
-                .padding(.horizontal, 32)
-                .padding(.top, 28)
-                .padding(.bottom, 28)
             }
-        } else {
-            VStack(spacing: 10) {
-                Image(systemName: "hand.draw")
-                    .font(.system(size: 28, weight: .regular))
-                    .foregroundStyle(Color.mgText3)
-                Text("未选择手势")
-                    .font(.mgTitleM)
-                    .foregroundStyle(Color.mgText1)
-                Text("从左侧选择一个手势进行编辑")
+            Button(action: addGesture) {
+                Label("新建手势", systemImage: "plus")
                     .font(.mgBody)
-                    .foregroundStyle(Color.mgText2)
+                    .foregroundStyle(Color.mgAccent)
+                    .padding(.horizontal, 16)
+                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                    .contentShape(Rectangle())
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .buttonStyle(.plain)
         }
     }
 
-    // MARK: Lifecycle helpers
+    @ViewBuilder
+    private var detail: some View {
+        if let g = selected {
+            // 换手势时整块重建:改名状态、录制中的笔迹都不带到下一个手势。
+            GestureDetail(gesture: g, onDelete: deleteSelectedGesture, updateDraft: updateSelectedDraft)
+                .id(g.id)
+        } else {
+            GroupCard {
+                EmptyRow(draftGestures.isEmpty ? "还没有手势。点左侧「新建手势」录制第一个。" : "从左侧选一个手势。")
+            }
+        }
+    }
+
+    // MARK: 设置分段
+
+    private var settingsTab: some View {
+        VStack(alignment: .leading, spacing: 24) {
+            SettingsSection("行为") {
+                SettingsRow("绘制时显示轨迹", isOn: pref(\.showTrail))
+                SettingsRow(
+                    "乱划取消手势",
+                    subtitle: "手势途中来回乱划几下即可取消,无需等待超时。",
+                    isOn: pref(\.scribbleCancelEnabled)
+                )
+            }
+
+            SettingsSection("识别") {
+                SettingsRow(title: "手势超时时长", subtitle: "超时未完成的手势会被丢弃。") {
+                    MGStepperField(value: pref(\.gestureTimeoutSeconds), range: 0.5...10.0, step: 0.5, format: "%.1f 秒")
+                }
+                SettingsRow(title: "手势作用目标") {
+                    Picker("", selection: pref(\.gestureTargetPolicy)) {
+                        Text("鼠标指针下方").tag(GestureTargetPolicy.windowUnderPointer)
+                        Text("活动窗口").tag(GestureTargetPolicy.activeWindow)
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .fixedSize()
+                }
+            }
+
+            DebugSection(
+                isOn: pref(\.debugLoggingEnabled),
+                logURL: DebugLog.fileURL,
+                help: "记录手势轨迹和匹配诊断,排查时打开。"
+            )
+        }
+    }
+
+    // MARK: 草稿
 
     private func loadDraftIfNeeded() {
         guard !didLoad else { return }
         didLoad = true
         draftGestures = store.gestures
-        hasUnsavedChanges = false
-        if selectedID == nil, let first = draftGestures.first {
-            selectedID = first.id
-        }
-        if let g = selected { syncEditor(from: g) }
-    }
-
-    private func syncEditor(from g: GestureCommand) {
-        editingName = g.name
-        isEditingName = false
-        shortcut = g.shortcut
+        selectedID = draftGestures.first?.id
     }
 
     private func updateSelectedDraft(_ update: (inout GestureCommand) -> Void) {
@@ -408,7 +255,6 @@ struct GesturesPage: View {
         let new = GestureCommand(name: "新手势", templates: [], shortcut: nil)
         draftGestures.append(new)
         selectedID = new.id
-        syncEditor(from: new)
         hasUnsavedChanges = true
         statusMessage = ""
     }
@@ -421,7 +267,6 @@ struct GesturesPage: View {
             : nil
         draftGestures.remove(at: idx)
         selectedID = nextID
-        if let g = selected { syncEditor(from: g) }
         hasUnsavedChanges = true
         statusMessage = ""
     }
@@ -441,359 +286,219 @@ struct GesturesPage: View {
         let persisted = store.updateGestures { $0 = normalized }
         draftGestures = normalized
         hasUnsavedChanges = false
-        statusMessage = persisted
-            ? "已保存。"
-            : "保存失败:无法写入配置(本次更改本会话有效,重启后会丢失)。"
+        // 存成功保存栏直接收起;失败留着提示。
+        statusMessage = persisted ? "" : "保存失败:无法写入配置(本次更改本会话有效,重启后会丢失)。"
     }
 
-    private func reloadFromStore(silent: Bool = false) {
+    /// 丢弃草稿,或 store 被别处改了(备份导入等)时重载。
+    private func reloadFromStore() {
         draftGestures = store.gestures
         hasUnsavedChanges = false
-        if selectedID == nil {
-            selectedID = draftGestures.first?.id
-        } else if let id = selectedID, !draftGestures.contains(where: { $0.id == id }) {
+        if !draftGestures.contains(where: { $0.id == selectedID }) {
             selectedID = draftGestures.first?.id
         }
-        if let g = selected {
-            syncEditor(from: g)
-        } else {
-            editingName = ""
-            isEditingName = false
-            shortcut = nil
-        }
-        statusMessage = silent ? "" : "已丢弃未保存更改。"
-    }
-
-    private func selectGesture(_ id: UUID) {
-        guard selectedID != id else { return }
-        selectedID = id
-        if let g = draftGestures.first(where: { $0.id == id }) {
-            syncEditor(from: g)
-        }
+        statusMessage = ""
     }
 }
 
-// MARK: - GestureListItem
-//
-// 高 ~56pt 横向布局:
-//  - 40×40 缩略图盒子
-//  - 标签 + N 样本(子文字)
-//  - Kbd chips
-// 选中:整行 #0A84FF, 全部文字白色, 缩略图盒子 + Kbd 切到 inverted 配色
+// MARK: - 列表行
 
-private struct GestureListItem: View {
+private struct GestureRow: View {
     let gesture: GestureCommand
-    /// 该手势识别成的方向箭头串(如 "↗→"),空串表示还没录。
+    /// 识别成的方向 + 弧向签名(如 "↗⌣"),空串表示还没录。
     let directionArrows: String
-    /// 与别的手势撞了同一条方向序列。
+    /// 和别的手势太像,谁都可能识别不出。
     let conflict: Bool
     let selected: Bool
-    let onClick: () -> Void
+    let onSelect: () -> Void
 
     var body: some View {
-        Button(action: onClick) {
-            HStack(spacing: 12) {
-                // Thumbnail 盒子
-                ZStack {
-                    RoundedRectangle(cornerRadius: 9, style: .continuous)
-                        .fill(selected
-                              ? Color.white.opacity(0.18)
-                              : Color.mgInset)
+        Button(action: onSelect) {
+            HStack(spacing: 10) {
+                thumbnail
 
-                    if !gesture.templates.isEmpty {
-                        GestureTrailView(
-                            templates: [gesture.templates.last!],  // 缩略图只渲染最后一个样本,免噪
-                            stroke: 3,
-                            colors: selected
-                                ? [.white, Color.white.opacity(0.75)]
-                                : [.mgAccent, .mgAccent],
-                            showStartDot: true,
-                            showEndArrow: true,
-                            maxGhosts: 0
-                        )
-                        .padding(6)
-                    } else {
-                        Image(systemName: "questionmark")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(selected
-                                             ? Color.white.opacity(0.75)
-                                             : Color.mgText3)
-                    }
-                }
-                .frame(width: 40, height: 40)
-
-                // Label + sub
                 VStack(alignment: .leading, spacing: 2) {
                     Text(gesture.name)
-                        .font(.mgLabelStrong)
-                        .foregroundStyle(selected ? .white : Color.mgText1)
+                        .font(.mgBody)
+                        .foregroundStyle(Color.mgText1)
                         .lineLimit(1)
                     HStack(spacing: 6) {
                         if !directionArrows.isEmpty {
                             Text(directionArrows)
                                 .font(.system(size: 12, weight: .semibold))
-                                .foregroundStyle(selected ? .white : Color.mgText1)
                         }
-                        Text("\(gesture.templates.count) 样本")
-                            .font(.mgMeta)
-                            .foregroundStyle(selected ? Color.white.opacity(0.78) : Color.mgText2)
+                        Text("\(gesture.templates.count) 个样本")
                         if conflict {
                             Text("冲突")
-                                .font(.mgMeta)
-                                .foregroundStyle(selected ? Color.yellow : Color.orange)
+                                .foregroundStyle(Color.orange)
                         }
                     }
+                    .font(.mgMeta)
+                    .foregroundStyle(Color.mgText2)
+                    .lineLimit(1)
                 }
 
-                Spacer(minLength: 4)
+                Spacer(minLength: 8)
 
-                // Kbd chips
                 if let sc = gesture.shortcut {
-                    Kbd(keys: sc.kbdKeys, size: .sm, inverted: selected)
+                    Kbd(keys: sc.kbdKeys, size: .sm)
                 } else {
                     Text("未设置")
                         .font(.mgMeta)
-                        .foregroundStyle(selected ? Color.white.opacity(0.7) : Color.mgText3)
+                        .foregroundStyle(Color.mgText3)
                 }
             }
-            .padding(.horizontal, 11)
-            .padding(.vertical, 9)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(selected ? Color.mgAccent : Color.mgCard)
-            )
+            .background {
+                if selected {
+                    RoundedRectangle(cornerRadius: MGRadius.control, style: .continuous)
+                        .fill(Color.mgAccent.opacity(0.12))
+                        .padding(4)
+                }
+            }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .transaction { $0.animation = nil }
     }
+
+    private var thumbnail: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: MGRadius.kbd, style: .continuous)
+                .fill(Color.mgInset)
+            if let last = gesture.templates.last {
+                // 缩略图只画最后一个样本,免噪
+                GestureTrailView(templates: [last], stroke: 2.5, maxGhosts: 0)
+                    .padding(4)
+            } else {
+                Image(systemName: "questionmark")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Color.mgText3)
+            }
+        }
+        .frame(width: 32, height: 32)
+    }
 }
 
-// MARK: - Detail panel (right column)
+// MARK: - 详情
 
-private struct GestureDetailPanel: View {
+private struct GestureDetail: View {
     let gesture: GestureCommand
-    @Binding var editingName: String
-    @Binding var isEditingName: Bool
-    @Binding var shortcut: Shortcut?
-    var onDelete: () -> Void
-    var updateDraft: ((inout GestureCommand) -> Void) -> Void
-    @FocusState private var nameFieldFocused: Bool
+    let onDelete: () -> Void
+    let updateDraft: ((inout GestureCommand) -> Void) -> Void
+
+    @State private var isEditingName = false
+    @FocusState private var nameFocused: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            headerRow
-                .padding(.bottom, 22)
-
-            // 录制新样本 section
-            Text("录制新样本")
-                .font(.mgLabelStrong)
-                .foregroundStyle(Color.mgText2)
-                .padding(.bottom, 8)
-
-            captureCard
-                .padding(.bottom, 20)
-
-            // 触发的快捷键 section
-            Text("触发的快捷键")
-                .font(.mgLabelStrong)
-                .foregroundStyle(Color.mgText2)
-                .padding(.bottom, 8)
-
-            shortcutCard
-        }
-    }
-
-    // Header: GESTURE tag 独立一行;下面大标题 + Kbd + 按钮组同一行,
-    // 右侧控件整体垂直居中于标题。**不要**用外层 alignment + padding 微调
-    // 的写法 —— 字号一动就破。
-    private var headerRow: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text("GESTURE")
-                .font(.mgTag)
-                .tracking(1.5)
-                .foregroundStyle(Color.mgText3)
-                .padding(.bottom, 6)
-
-            HStack(alignment: .center, spacing: 12) {
-                titleField
+        VStack(alignment: .leading, spacing: 24) {
+            HStack(spacing: 12) {
+                if isEditingName {
+                    TextField("手势名称", text: Binding(
+                        get: { gesture.name },
+                        set: { v in updateDraft { $0.name = v } }
+                    ))
+                    .textFieldStyle(.plain)
+                    .font(.mgTitleM)
+                    .focused($nameFocused)
+                    .onSubmit { isEditingName = false }
+                } else {
+                    Text(displayName)
+                        .font(.mgTitleM)
+                        .foregroundStyle(Color.mgText1)
+                        .lineLimit(1)
+                }
 
                 Spacer(minLength: 12)
 
-                HStack(alignment: .center, spacing: 8) {
-                    Button {
-                        isEditingName.toggle()
-                    } label: {
-                        HStack(spacing: 5) {
-                            Image(systemName: isEditingName ? "checkmark" : "pencil")
-                                .font(.system(size: 12, weight: .medium))
-                            Text(isEditingName ? "完成" : "修改")
-                        }
-                    }
-                    .buttonStyle(.bordered)
-                    Button(role: .destructive, action: onDelete) {
-                        HStack(spacing: 5) {
-                            Image(systemName: "trash")
-                                .font(.system(size: 12, weight: .medium))
-                            Text("删除")
-                        }
-                    }
-                    .buttonStyle(.bordered)
-                    .foregroundStyle(Color.mgDanger)
+                HStack(spacing: 8) {
+                    Button(isEditingName ? "完成" : "重命名") { isEditingName.toggle() }
+                        .buttonStyle(.bordered)
+                    Button("删除", role: .destructive, action: onDelete)
+                        .buttonStyle(.bordered)
+                        .foregroundStyle(Color.mgDanger)
                 }
-                // hold 住右侧整组的固有宽度。Kbd 多一个键(如 ⇧⌘])就要多 ~37pt,
-                // 父 HStack 宽度紧时 SwiftUI 默认会去挤 Button label —— 表现是
-                // "修改" / "删除" 两个字被截掉,只剩个铅笔/垃圾桶图标。
-                // fixedSize 把压缩压力推回给左边的标题 Text(它已经 lineLimit(1),
-                // 会优雅截断)。
-                .fixedSize(horizontal: true, vertical: false)
+                // 按钮组守住固有宽度:窄的时候让名称去截断,别把按钮的字挤没。
+                .fixedSize()
             }
-        }
-        .onChange(of: isEditingName) { _, editing in
-            if editing {
-                DispatchQueue.main.async {
-                    nameFieldFocused = true
-                }
-            } else {
-                nameFieldFocused = false
+            .onChange(of: isEditingName) { _, editing in
+                // 输入框这一帧才插进来,下一轮再给焦点。
+                if editing { DispatchQueue.main.async { nameFocused = true } }
             }
-        }
-    }
 
-    @ViewBuilder
-    private var titleField: some View {
-        if isEditingName {
-            TextField("手势名称", text: $editingName)
-                .textFieldStyle(.plain)
-                .font(.mgPageTitle)
-                .foregroundStyle(Color.mgText1)
-                .focused($nameFieldFocused)
-                .onSubmit { isEditingName = false }
-                .onChange(of: editingName) { _, newVal in
-                    updateDraft { $0.name = newVal }
+            SettingsSection("录制") {
+                // 画布画已存的样本;上面叠一层透明的录制视图截右键拖动,松手追加一个样本。
+                GesturePreviewCard(templates: gesture.templates) {
+                    GestureCaptureRepresentable { points in
+                        updateDraft { $0.templates.append(points.map(StrokePoint.init)) }
+                    }
                 }
-        } else {
-            Text(displayName)
-                .font(.mgPageTitle)
-                .foregroundStyle(Color.mgText1)
-                .lineLimit(1)
-                .textSelection(.disabled)
+                .padding(12)
+
+                SettingsRow(title: "\(gesture.templates.count) 个样本", subtitle: "建议录 2–3 个。") {
+                    Group {
+                        Button("撤销上一个") { updateDraft { _ = $0.templates.popLast() } }
+                        Button("清空") { updateDraft { $0.templates.removeAll() } }
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(gesture.templates.isEmpty)
+                }
+            }
+
+            SettingsSection("快捷键") {
+                SettingsRow(title: "触发") {
+                    ShortcutField(shortcut: Binding(
+                        get: { gesture.shortcut },
+                        set: { v in updateDraft { $0.shortcut = v } }
+                    ))
+                }
+            }
         }
     }
 
     private var displayName: String {
-        let trimmed = editingName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = gesture.name.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? "未命名" : trimmed
-    }
-
-    // 录制卡:系统白底 + 原生玻璃效果 + 操作区
-    private var captureCard: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            // GesturePreviewCard 提供网格 / 已保存样本 / 玻璃药丸 / 提示;
-            // GestureCaptureRepresentable 是透明 NSView,只负责截获鼠标事件并
-            // 实时画出正在录制的笔迹。
-            GesturePreviewCard(
-                templates: gesture.templates,
-                sampleCount: gesture.templates.count,
-                height: 220
-            ) {
-                GestureCaptureRepresentable { points in
-                    updateDraft { $0.templates.append(points.map(StrokePoint.init)) }
-                }
-            }
-
-            HStack(spacing: 8) {
-                Button("撤销上一个") {
-                    updateDraft { g in
-                        if !g.templates.isEmpty { g.templates.removeLast() }
-                    }
-                }
-                .buttonStyle(.bordered)
-                .disabled(gesture.templates.isEmpty)
-
-                Button("清空样本") {
-                    updateDraft { $0.templates.removeAll() }
-                }
-                .buttonStyle(.bordered)
-                .disabled(gesture.templates.isEmpty)
-
-                Spacer()
-
-                Text("建议同一手势录制 2–3 个样本,识别会更稳。")
-                    .font(.system(size: 12))
-                    .foregroundStyle(Color.mgText2)
-            }
-        }
-        .padding(16)
-        .mgCard()
-    }
-
-    // 触发的快捷键卡片
-    private var shortcutCard: some View {
-        HStack(spacing: 12) {
-            ShortcutRecorderField(
-                shortcut: $shortcut,
-                placeholder: "未设置 · 点击录制",
-                fillWidth: true
-            )
-            .onChange(of: shortcut) { _, newVal in
-                updateDraft { $0.shortcut = newVal }
-            }
-
-            if shortcut != nil {
-                Button("清除") {
-                    shortcut = nil
-                }
-                .buttonStyle(.borderless)
-            }
-        }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 12)
-        .frame(minHeight: 56)
-        .mgCard()
     }
 }
 
-// MARK: - BottomToolbar
+// MARK: - BottomToolbar 保存栏
 //
-// 52pt 高, 白底, 顶部 0.5px 分隔线, 右对齐:
-//   [丢弃更改]  [保存]
+// 只在有改动、冲突或保存失败时出现;状态在左,[丢弃更改] [保存] 在右。
 
-struct BottomToolbar: View {
+private struct BottomToolbar: View {
     let hasUnsavedChanges: Bool
     let statusMessage: String
     /// 非空 = 存在冲突,阻止保存(红色提示 + 禁用保存按钮)。
-    var saveBlockReason: String? = nil
+    let saveBlockReason: String?
     /// 非空 = 半配置手势,不阻止保存(橙色提示)。
-    var saveWarning: String? = nil
+    let saveWarning: String?
     let onDiscard: () -> Void
     let onSave: () -> Void
 
-    private var saveDisabled: Bool { !hasUnsavedChanges || saveBlockReason != nil }
-
     var body: some View {
-        VStack(spacing: 0) {
+        HStack(spacing: 10) {
+            statusArea
+
+            Spacer()
+
+            Button("丢弃更改", action: onDiscard)
+                .buttonStyle(.borderless)
+                .disabled(!hasUnsavedChanges)
+
+            Button("保存", action: onSave)
+                .buttonStyle(.borderedProminent)
+                .keyboardShortcut(.return)
+                .disabled(!hasUnsavedChanges || saveBlockReason != nil)
+        }
+        .padding(.horizontal, 32)
+        .frame(height: 54)
+        .overlay(alignment: .top) {
             Rectangle()
                 .fill(Color.mgHair)
                 .frame(height: 0.5)
-
-            HStack(spacing: 10) {
-                statusArea
-
-                Spacer()
-
-                Button("丢弃更改", action: onDiscard)
-                    .buttonStyle(.borderless)
-                    .disabled(!hasUnsavedChanges)
-
-                Button("保存", action: onSave)
-                    .buttonStyle(.borderedProminent)
-                    .keyboardShortcut(.return)
-                    .disabled(saveDisabled)
-            }
-            .padding(.horizontal, 20)
-            .frame(height: 54)
         }
         .glassEffect(.regular, in: Rectangle())
     }

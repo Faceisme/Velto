@@ -56,7 +56,8 @@ enum MGPage: String, CaseIterable, Identifiable, Hashable {
 // MARK: - Root shell
 
 struct SettingsRootView: View {
-    @State private var page: MGPage? = .gestures
+    /// 记住上次停留的页面,重开设置窗口回到那一页。
+    @AppStorage("Velto.settingsPage") private var page: MGPage?
 
     var body: some View {
         HStack(spacing: 0) {
@@ -69,7 +70,7 @@ struct SettingsRootView: View {
                 .background(Color.mgBg)
                 .transaction { $0.animation = nil }
         }
-        .frame(minWidth: 1100, idealWidth: 1280, minHeight: 720, idealHeight: 800)
+        .frame(minWidth: 960, idealWidth: 1280, minHeight: 640, idealHeight: 800)
         .background(Color.clear)
     }
 

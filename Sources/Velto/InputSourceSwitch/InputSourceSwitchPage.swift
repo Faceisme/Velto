@@ -40,10 +40,12 @@ struct InputSourceSwitchPage: View {
       .help("关闭后不再自动切换输入法。")
 
       VStack(alignment: .leading, spacing: 8) {
-        MGSegmentedPicker(
-          selection: $segment,
-          options: Segment.allCases.map { MGSegmentedOption($0, $0.title) }
-        )
+        Picker("", selection: $segment) {
+          ForEach(Segment.allCases) { Text($0.title).tag($0) }
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .fixedSize()
         .controlSize(.large)
         if segment == .appRules {
           Text("把应用分到中文组 / 英文组,按组指定输入法 —— 改一次,整组生效。")
