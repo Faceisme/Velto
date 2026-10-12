@@ -75,9 +75,12 @@ cd "$ROOT_DIR"
 #   - 预建 .build / build 并打 `com.dropbox.ignored` 标记(标记是 inode 级,删了重建会丢,
 #     所以每次打包都重新打,堵住裸 swift build 重建 .build 的窗口);
 #   - 配合仓库根的 .dropboxignore(基于模式,更持久)。
+# File Provider 版 Dropbox(仓库在 ~/Library/CloudStorage 下)只认 `com.apple.fileprovider.ignore#P`,
+# 旧标记对它无效:两台 Mac 共用这个目录时,构建产物会互相同步,冲突出 `build 2` / `.build 2`。
 for _ignore_dir in .build build; do
     mkdir -p "$ROOT_DIR/$_ignore_dir"
     xattr -w com.dropbox.ignored 1 "$ROOT_DIR/$_ignore_dir" 2>/dev/null || true
+    xattr -w 'com.apple.fileprovider.ignore#P' 1 "$ROOT_DIR/$_ignore_dir" 2>/dev/null || true
 done
 
 install -d "$BUILD_HOME" "$BUILD_ROOT/clang-module-cache" "$BUILD_ROOT/swiftpm-cache"
