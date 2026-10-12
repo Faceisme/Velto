@@ -2,215 +2,177 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
-// MARK: - GeneralSettingsPage (v2)
-//
-// PageHeader + 3 个 GroupCard:
-//   行为:4 个 Toggle 行
-//   识别参数:Stepper + Segmented
-//   数据与权限:说明文字 + 导入/导出/打开权限设置 按钮
-// 这一页没有 BottomToolbar(所有变更直接落到 store)。
-
+/// 通用设置页。改动即时保存。
 struct GeneralSettingsPage: View {
-    private let store = GestureStore.shared
+  private let store = GestureStore.shared
 
-    @State private var showingImportConfirm = false
-    @State private var showingError = false
-    @State private var errorMessage = ""
-    @State private var statusMessage = ""
-    @State private var pendingImportURL: URL?
+  // 登录项 / 权限都是系统状态,回到前台时重读(从系统设置授权回来即刷新)。
+  @State private var loginItem = LoginItemManager.isEnabled
+  @State private var axTrusted = PermissionManager.isAccessibilityTrusted
+  @State private var screenTrusted = PermissionManager.isScreenRecordingTrusted
+  @State private var showingImportConfirm = false
+  @State private var showingError = false
+  @State private var errorMessage = ""
+  @State private var statusMessage = ""
+  @State private var pendingImportURL: URL?
 
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 22) {
-                PageHeader(
-                    page: .general,
-                    subtitle: "调整应用行为与数据备份。"
-                )
+  var body: some View {
+    SettingsPage {
+      PageHeader(page: .general, subtitle: "调整应用行为与数据备份。")
 
-                // 行为
-                VStack(alignment: .leading, spacing: 0) {
-                    MGSectionLabel(text: "行为")
-                    GroupCard {
-                        VStack(spacing: 0) {
-                            GroupRow(label: "开机自动启动") {
-                                Toggle("", isOn: Binding(
-                                    get: { LoginItemManager.isEnabled },
-                                    set: { enabled in
-                                        do {
-                                            try LoginItemManager.setEnabled(enabled)
-                                            statusMessage = "已更新开机启动设置。"
-                                        } catch {
-                                            statusMessage = "无法更新开机启动:\(error.localizedDescription)"
-                                        }
-                                    }
-                                ))
-                                .labelsHidden()
-                                .toggleStyle(.switch)
-                                .controlSize(.small)
-                                .tint(.mgAccent)
-                            }
-                            GroupRow(label: "显示菜单栏图标", showDivider: true) {
-                                Toggle("", isOn: Binding(
-                                    get: { store.preferences.showMenuBarIcon },
-                                    set: { v in store.updatePreferences { $0.showMenuBarIcon = v } }
-                                ))
-                                .labelsHidden()
-                                .toggleStyle(.switch)
-                                .controlSize(.small)
-                                .tint(.mgAccent)
-                            }
-                        }
-                    }
-                }
-
-                // 数据与权限
-                VStack(alignment: .leading, spacing: 0) {
-                    MGSectionLabel(text: "数据与权限")
-                    GroupCard(padding: EdgeInsets(top: 16, leading: 20, bottom: 16, trailing: 20)) {
-                        VStack(alignment: .leading, spacing: 14) {
-                            Text("配置文件几乎包含全部模块设置:鼠标手势、鼠标控制、窗口管理、切换器、输入法切换、按键映射、截图、网络监控与增强Finder,以及识别参数和菜单栏等通用偏好;开机自动启动属于系统登录项,不随配置导入导出。")
-                                .font(.mgMeta)
-                                .lineSpacing(3)
-                                .foregroundStyle(Color.mgText2)
-                                .fixedSize(horizontal: false, vertical: true)
-
-                            HStack(spacing: 8) {
-                                Button {
-                                    importConfiguration()
-                                } label: {
-                                    HStack(spacing: 5) {
-                                        Image(systemName: "square.and.arrow.down")
-                                            .font(.system(size: 11, weight: .medium))
-                                        Text("导入配置")
-                                    }
-                                }
-                                .buttonStyle(.bordered)
-                                Button {
-                                    exportConfiguration()
-                                } label: {
-                                    HStack(spacing: 5) {
-                                        Image(systemName: "square.and.arrow.up")
-                                            .font(.system(size: 11, weight: .medium))
-                                        Text("导出配置")
-                                    }
-                                }
-                                .buttonStyle(.bordered)
-                                Spacer()
-
-                                Button {
-                                    PermissionManager.openPrivacySettings()
-                                } label: {
-                                    HStack(spacing: 4) {
-                                        Text("打开权限设置")
-                                        Image(systemName: "arrow.up.right")
-                                            .font(.system(size: 10, weight: .bold))
-                                    }
-                                }
-                                .buttonStyle(.bordered)
-                            }
-
-                            if !statusMessage.isEmpty {
-                                Text(statusMessage)
-                                    .font(.mgMeta)
-                                    .foregroundStyle(Color.mgText2)
-                            }
-                        }
-                    }
-                }
-
-                // 日志
-                VStack(alignment: .leading, spacing: 0) {
-                    MGSectionLabel(text: "日志")
-                    GroupCard {
-                        VStack(spacing: 0) {
-                            GroupRow(
-                                label: "日志文件夹",
-                                sub: "各模块的调试开关已移至各自页面;打开后日志都写在这里"
-                            ) {
-                                Button("在访达中显示", action: revealDebugLog)
-                                    .buttonStyle(.bordered)
-                            }
-                        }
-                    }
-                }
+      SettingsSection("行为") {
+        SettingsRow("开机自动启动", subtitle: "登录 Mac 后自动在后台运行。", isOn: Binding(
+          get: { loginItem },
+          set: { v in
+            do {
+              try LoginItemManager.setEnabled(v)
+            } catch {
+              errorMessage = "无法更新开机启动:\(error.localizedDescription)"
+              showingError = true
             }
-            .padding(.horizontal, 32)
-            .padding(.top, 28)
-            .padding(.bottom, 32)
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .confirmationDialog(
-            "导入配置会覆盖当前全部配置",
-            isPresented: $showingImportConfirm,
-            titleVisibility: .visible
+            refresh()
+          }
+        ))
+        SettingsRow(
+          "显示菜单栏图标",
+          subtitle: "隐藏后再次打开 Velto(启动台或聚焦搜索)即可回到设置。",
+          isOn: Binding(
+            get: { store.preferences.showMenuBarIcon },
+            set: { v in store.updatePreferences { $0.showMenuBarIcon = v } }
+          )
+        )
+      }
+
+      SettingsSection("权限") {
+        permissionRow(
+          "辅助功能",
+          subtitle: "监听手势与快捷键、移动窗口等核心功能都需要。",
+          granted: axTrusted,
+          pane: "Privacy_Accessibility"
+        )
+        permissionRow(
+          "屏幕录制",
+          subtitle: "窗口切换缩略图和截图需要;授权后重启 Velto 生效。",
+          granted: screenTrusted,
+          pane: "Privacy_ScreenCapture"
+        )
+      }
+
+      SettingsSection("配置") {
+        SettingsRow(
+          title: "备份配置",
+          subtitle: statusMessage.isEmpty ? "包含全部模块设置,开机自动启动除外。" : statusMessage
         ) {
-            Button("导入", role: .destructive) { performImport() }
-            Button("取消", role: .cancel) {}
-        } message: {
-            Text("会覆盖鼠标手势、鼠标控制、窗口管理、切换器、输入法切换、按键映射、截图、网络监控、增强Finder 及通用偏好等全部模块配置。建议先导出当前配置作为备份。")
+          HStack(spacing: 8) {
+            Button("导入…", action: importConfiguration)
+              .buttonStyle(.bordered)
+            Button("导出…", action: exportConfiguration)
+              .buttonStyle(.bordered)
+          }
         }
-        .alert("操作失败", isPresented: $showingError) {
-            Button("好") {}
-        } message: {
-            Text(errorMessage)
+        .help("配置文件几乎包含全部模块设置:鼠标手势、鼠标控制、窗口管理、切换器、输入法切换、按键映射、截图、网络监控与增强Finder,以及识别参数和菜单栏等通用偏好;开机自动启动属于系统登录项,不随配置导入导出。")
+      }
+
+      SettingsSection("日志") {
+        SettingsRow(title: "日志文件夹", subtitle: "各模块的调试日志都写在这里,调试开关在各自页面。") {
+          Button("在访达中显示", action: revealDebugLog)
+            .buttonStyle(.bordered)
         }
+      }
     }
-
-    // MARK: - Debug
-
-    /// 在访达里定位诊断日志;文件还没生成时,退而打开其所在目录。
-    private func revealDebugLog() {
-        let url = DebugLog.fileURL
-        let dir = url.deletingLastPathComponent()
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        if FileManager.default.fileExists(atPath: url.path) {
-            NSWorkspace.shared.activateFileViewerSelecting([url])
-        } else {
-            NSWorkspace.shared.open(dir)
-        }
+    .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+      refresh()
     }
-
-    // MARK: - Import/export
-
-    private func importConfiguration() {
-        let panel = NSOpenPanel()
-        panel.title = "导入 Velto 配置"
-        panel.allowedContentTypes = [.json]
-        panel.allowsMultipleSelection = false
-        panel.canChooseDirectories = false
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        pendingImportURL = url
-        showingImportConfirm = true
+    .confirmationDialog(
+      "导入配置会覆盖当前全部配置",
+      isPresented: $showingImportConfirm,
+      titleVisibility: .visible
+    ) {
+      Button("导入", role: .destructive) { performImport() }
+      Button("取消", role: .cancel) {}
+    } message: {
+      Text("会覆盖鼠标手势、鼠标控制、窗口管理、切换器、输入法切换、按键映射、截图、网络监控、增强Finder 及通用偏好等全部模块配置。建议先导出当前配置作为备份。")
     }
-
-    private func performImport() {
-        guard let url = pendingImportURL else { return }
-        pendingImportURL = nil
-        do {
-            let data = try Data(contentsOf: url)
-            try store.importBackupData(data)
-            statusMessage = "配置已导入:\(url.lastPathComponent)"
-        } catch {
-            errorMessage = error.localizedDescription
-            showingError = true
-        }
+    .alert("操作失败", isPresented: $showingError) {
+      Button("好") {}
+    } message: {
+      Text(errorMessage)
     }
+  }
 
-    private func exportConfiguration() {
-        let panel = NSSavePanel()
-        panel.title = "导出 Velto 配置"
-        panel.nameFieldStringValue = "Velto-Backup.json"
-        panel.canCreateDirectories = true
-        panel.allowedContentTypes = [.json]
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        do {
-            let data = try store.exportBackupData()
-            try data.write(to: url, options: .atomic)
-            statusMessage = "配置已导出:\(url.lastPathComponent)"
-        } catch {
-            errorMessage = error.localizedDescription
-            showingError = true
-        }
+  /// 权限行:授权状态 + 跳到系统设置对应面板。
+  private func permissionRow(_ title: String, subtitle: String, granted: Bool, pane: String) -> some View {
+    SettingsRow(title: title, subtitle: subtitle) {
+      HStack(spacing: 4) {
+        Image(systemName: granted ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
+          .foregroundStyle(granted ? Color.green : Color.orange)
+        Text(granted ? "已授权" : "未授权")
+          .foregroundStyle(Color.mgText2)
+      }
+      .font(.mgMeta)
+      Button("前往设置") { PermissionManager.openPrivacySettings(pane) }
+        .buttonStyle(.bordered)
     }
+  }
+
+  private func refresh() {
+    loginItem = LoginItemManager.isEnabled
+    axTrusted = PermissionManager.isAccessibilityTrusted
+    screenTrusted = PermissionManager.isScreenRecordingTrusted
+  }
+
+  /// 在访达里定位诊断日志;文件还没生成时,退而打开其所在目录。
+  private func revealDebugLog() {
+    let url = DebugLog.fileURL
+    let dir = url.deletingLastPathComponent()
+    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    if FileManager.default.fileExists(atPath: url.path) {
+      NSWorkspace.shared.activateFileViewerSelecting([url])
+    } else {
+      NSWorkspace.shared.open(dir)
+    }
+  }
+
+  // MARK: - 导入 / 导出
+
+  private func importConfiguration() {
+    let panel = NSOpenPanel()
+    panel.title = "导入 Velto 配置"
+    panel.allowedContentTypes = [.json]
+    panel.allowsMultipleSelection = false
+    panel.canChooseDirectories = false
+    guard panel.runModal() == .OK, let url = panel.url else { return }
+    pendingImportURL = url
+    showingImportConfirm = true
+  }
+
+  private func performImport() {
+    guard let url = pendingImportURL else { return }
+    pendingImportURL = nil
+    do {
+      let data = try Data(contentsOf: url)
+      try store.importBackupData(data)
+      statusMessage = "配置已导入:\(url.lastPathComponent)"
+    } catch {
+      errorMessage = error.localizedDescription
+      showingError = true
+    }
+  }
+
+  private func exportConfiguration() {
+    let panel = NSSavePanel()
+    panel.title = "导出 Velto 配置"
+    panel.nameFieldStringValue = "Velto-Backup.json"
+    panel.canCreateDirectories = true
+    panel.allowedContentTypes = [.json]
+    guard panel.runModal() == .OK, let url = panel.url else { return }
+    do {
+      let data = try store.exportBackupData()
+      try data.write(to: url, options: .atomic)
+      statusMessage = "配置已导出:\(url.lastPathComponent)"
+    } catch {
+      errorMessage = error.localizedDescription
+      showingError = true
+    }
+  }
 }

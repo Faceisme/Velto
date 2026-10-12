@@ -410,40 +410,23 @@ struct NetworkMonitorPage: View {
   private let store = GestureStore.shared
 
   var body: some View {
-    ScrollView {
-      VStack(alignment: .leading, spacing: 22) {
-        PageHeader(
-          page: .networkMonitor,
-          subtitle: "菜单栏实时网速,点开查看哪些进程在占用网络。"
-        )
+    SettingsPage {
+      PageHeader(page: .networkMonitor, subtitle: "菜单栏实时网速,点开查看哪些进程在占用网络。")
 
-        VStack(alignment: .leading, spacing: 0) {
-          MGSectionLabel(text: "菜单栏")
-          GroupCard {
-            VStack(spacing: 0) {
-              GroupRow(label: "在菜单栏显示网速", sub: "上行在上、下行在下,单位随网速自动切换;点击查看占用网络的进程") {
-                Toggle("", isOn: Binding(
-                  get: { store.preferences.networkMonitorEnabled },
-                  set: { v in store.updatePreferences { $0.networkMonitorEnabled = v } }
-                ))
-                .labelsHidden()
-                .toggleStyle(.switch)
-                .controlSize(.small)
-                .tint(.mgAccent)
-              }
-              GroupRow(label: "网络面板", sub: "按进程查看实时流量与活动连接", showDivider: true) {
-                Button("打开") { NetworkMonitorController.shared.showDashboard() }
-                  .buttonStyle(.bordered)
-              }
-            }
-          }
+      SettingsSection("菜单栏") {
+        SettingsRow(
+          "在菜单栏显示网速",
+          subtitle: "上行在上、下行在下,单位随网速自动切换;点击查看占用网络的进程。",
+          isOn: Binding(
+            get: { store.preferences.networkMonitorEnabled },
+            set: { v in store.updatePreferences { $0.networkMonitorEnabled = v } }
+          )
+        )
+        SettingsRow(title: "网络面板", subtitle: "按进程查看实时流量与活动连接。") {
+          Button("打开") { NetworkMonitorController.shared.showDashboard() }
+            .buttonStyle(.bordered)
         }
       }
-      .padding(.horizontal, 32)
-      .padding(.top, 28)
-      .padding(.bottom, 32)
-      .frame(maxWidth: .infinity, alignment: .leading)
     }
-    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
   }
 }

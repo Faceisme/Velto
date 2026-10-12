@@ -14,13 +14,8 @@ enum ScreenshotDebugLog {
   static var isEnabled: Bool { stateQueue.sync { _enabled } }
   static func setEnabled(_ enabled: Bool) { stateQueue.sync { _enabled = enabled || envForced } }
 
-  /// 调试日志文件路径(`~/Library/Logs/Velto/screenshot-debug.log`),供设置页"打开日志"用。
-  static var logFileURL: URL? {
-    FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first?
-      .appendingPathComponent("Logs", isDirectory: true)
-      .appendingPathComponent("Velto", isDirectory: true)
-      .appendingPathComponent("screenshot-debug.log")
-  }
+  static let fileURL = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0]
+    .appendingPathComponent("Logs/Velto/screenshot-debug.log")
 
   static func log(_ message: @autoclosure () -> String) {
     guard isEnabled else { return }
@@ -38,11 +33,8 @@ enum ScreenshotDebugLog {
 
   private static func openLogFile() -> FileHandle? {
     let fm = FileManager.default
-    guard let dir = fm.urls(for: .libraryDirectory, in: .userDomainMask).first?
-      .appendingPathComponent("Logs", isDirectory: true)
-      .appendingPathComponent("Velto", isDirectory: true) else { return nil }
-    try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
-    let url = dir.appendingPathComponent("screenshot-debug.log")
+    let url = fileURL
+    try? fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
     if !fm.fileExists(atPath: url.path) { fm.createFile(atPath: url.path, contents: nil) }
     let handle = try? FileHandle(forWritingTo: url)
     _ = try? handle?.seekToEnd()

@@ -35,18 +35,10 @@ enum PermissionManager {
         AXIsProcessTrustedWithOptions(options)
     }
 
-    static func openPrivacySettings() {
-        let candidates = [
-            "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
-            "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent"
-        ]
-
-        for candidate in candidates {
-            guard let url = URL(string: candidate) else {
-                continue
-            }
+    /// `pane`:`Privacy_Accessibility`(辅助功能)/ `Privacy_ScreenCapture`(屏幕录制)。
+    static func openPrivacySettings(_ pane: String = "Privacy_Accessibility") {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)") {
             NSWorkspace.shared.open(url)
-            break
         }
     }
 

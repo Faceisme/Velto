@@ -153,12 +153,21 @@ struct PageHeader: View {
       }
       Spacer(minLength: 12)
       if let isOn {
-        Toggle("", isOn: isOn)
-          .labelsHidden()
-          .toggleStyle(.switch)
-          .controlSize(.small)
+        SettingsSwitch(isOn: isOn)
       }
     }
+  }
+}
+
+/// 设置里统一的小号开关。
+struct SettingsSwitch: View {
+  let isOn: Binding<Bool>
+
+  var body: some View {
+    Toggle("", isOn: isOn)
+      .labelsHidden()
+      .toggleStyle(.switch)
+      .controlSize(.small)
   }
 }
 
@@ -179,19 +188,34 @@ struct SettingsPage<Content: View>: View {
   }
 }
 
-/// 一个分组:小标题 + 卡片,卡片里各行之间自动加分隔线。
-struct SettingsSection<Content: View>: View {
+/// 一个分组:小标题(右侧可放分组级操作)+ 卡片,卡片里各行之间自动加分隔线。
+struct SettingsSection<Content: View, Accessory: View>: View {
   let title: String
   @ViewBuilder var content: () -> Content
+  @ViewBuilder var accessory: () -> Accessory
 
-  init(_ title: String, @ViewBuilder content: @escaping () -> Content) {
+  init(
+    _ title: String,
+    @ViewBuilder content: @escaping () -> Content,
+    @ViewBuilder accessory: @escaping () -> Accessory
+  ) {
     self.title = title
     self.content = content
+    self.accessory = accessory
   }
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
-      MGSectionLabel(text: title)
+      HStack {
+        Text(title)
+          .font(.mgSubLabel)
+          .foregroundStyle(Color.mgText2)
+        Spacer()
+        accessory()
+          .controlSize(.small)
+      }
+      .padding(.leading, 4)
+      .padding(.bottom, 8)
       GroupCard {
         VStack(spacing: 0) {
           Group(subviews: content()) { rows in
@@ -208,6 +232,12 @@ struct SettingsSection<Content: View>: View {
         }
       }
     }
+  }
+}
+
+extension SettingsSection where Accessory == EmptyView {
+  init(_ title: String, @ViewBuilder content: @escaping () -> Content) {
+    self.init(title, content: content) { EmptyView() }
   }
 }
 
@@ -235,6 +265,44 @@ struct SettingsRow<Trailing: View>: View {
     .padding(.horizontal, 16)
     .padding(.vertical, 12)
     .frame(minHeight: 44)
+  }
+}
+
+extension SettingsRow where Trailing == SettingsSwitch {
+  init(_ title: String, subtitle: String? = nil, isOn: Binding<Bool>) {
+    self.init(title: title, subtitle: subtitle) { SettingsSwitch(isOn: isOn) }
+  }
+}
+
+/// 列表为空时卡片里的一行浅色说明。
+struct EmptyRow: View {
+  let text: String
+
+  init(_ text: String) {
+    self.text = text
+  }
+
+  var body: some View {
+    Text(text)
+      .font(.mgBody)
+      .foregroundStyle(Color.mgText3)
+      .padding(.horizontal, 16)
+      .padding(.vertical, 12)
+      .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+  }
+}
+
+/// 列表行尾的删除图标按钮。
+struct DeleteIconButton: View {
+  let action: () -> Void
+
+  var body: some View {
+    Button(action: action) {
+      Image(systemName: "trash")
+    }
+    .buttonStyle(.borderless)
+    .foregroundStyle(Color.mgText3)
+    .help("删除")
   }
 }
 
@@ -311,10 +379,7 @@ struct DebugSection: View {
       SettingsRow(title: "调试日志") {
         Button("在访达中显示", action: reveal)
           .buttonStyle(.bordered)
-        Toggle("", isOn: isOn)
-          .labelsHidden()
-          .toggleStyle(.switch)
-          .controlSize(.small)
+        SettingsSwitch(isOn: isOn)
       }
       .help(help)
     }

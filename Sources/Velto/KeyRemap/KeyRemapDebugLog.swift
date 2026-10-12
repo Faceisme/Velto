@@ -51,14 +51,13 @@ enum KeyRemapDebugLog {
     }
   }
 
+  static let fileURL = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0]
+    .appendingPathComponent("Logs/Velto/key-remap.log")
+
   private static func openLogFile() -> FileHandle? {
     let fm = FileManager.default
-    guard let logsDir = fm.urls(for: .libraryDirectory, in: .userDomainMask).first?
-      .appendingPathComponent("Logs", isDirectory: true)
-      .appendingPathComponent("Velto", isDirectory: true)
-    else { return nil }
-    try? fm.createDirectory(at: logsDir, withIntermediateDirectories: true)
-    let url = logsDir.appendingPathComponent("key-remap.log")
+    let url = fileURL
+    try? fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
     if !fm.fileExists(atPath: url.path) {
       fm.createFile(atPath: url.path, contents: nil)
     }

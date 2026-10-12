@@ -10,23 +10,42 @@ struct KeyRemapPage: View {
   @State private var showImportResult = false
 
   var body: some View {
-    ScrollView {
-      VStack(alignment: .leading, spacing: 22) {
-        PageHeader(
-          page: .keyRemap,
-          subtitle: "手动添加简单映射，或导入 Karabiner 社区规则文件。"
-        )
+    let manual = store.rules.first(where: { $0.isManual })?.manipulators ?? []
+    let imported = store.rules.filter { !$0.isManual }
+    SettingsPage {
+      PageHeader(
+        page: .keyRemap,
+        subtitle: "手动添加简单映射,或导入 Karabiner 社区规则文件。",
+        isOn: Binding(get: { store.masterEnabled }, set: { store.setMasterEnabled($0) })
+      )
+      .help("关闭后所有映射规则（手动 + 导入）暂停生效。")
 
-        masterToggleSection
-        manualSection
-        importedSection
-        debugSection
+      SettingsSection("简单映射") {
+        ForEach(manual) { m in
+          ManualRemapRow(manipulator: m) { store.deleteManualManipulator(id: m.id) }
+        }
+        AddRemapRow { from, to in
+          store.addManualManipulator(KeyRemapManipulator(from: from, to: [to]))
+        }
       }
-      .padding(.horizontal, 32)
-      .padding(.top, 28)
-      .padding(.bottom, 28)
+
+      SettingsSection("导入的规则") {
+        if imported.isEmpty {
+          EmptyRow("还没有导入的规则。从 ke-complex-modifications.pqrs.org 下载 JSON 文件后点「导入…」。")
+        } else {
+          ForEach(imported) { ImportedRuleRow(rule: $0) }
+        }
+      } accessory: {
+        Button("导入…") { showFileImporter = true }
+          .buttonStyle(.bordered)
+      }
+
+      DebugSection(
+        isOn: Binding(get: { store.debugLoggingEnabled }, set: { store.setDebugLoggingEnabled($0) }),
+        logURL: KeyRemapDebugLog.fileURL,
+        help: "排查映射不生效时打开,详尽记录规则编译 / 按键事件 / 合成动作,只写 key-remap.log。"
+      )
     }
-    .frame(maxWidth: .infinity, maxHeight: .infinity)
     .fileImporter(
       isPresented: $showFileImporter,
       allowedContentTypes: [.json]
@@ -37,154 +56,6 @@ struct KeyRemapPage: View {
       Button("好") {}
     } message: {
       Text(importMessage)
-    }
-  }
-
-  // MARK: - 功能总开关
-
-  private var masterToggleSection: some View {
-    GroupCard {
-      HStack(spacing: 12) {
-        Image(systemName: "power")
-          .font(.system(size: 15))
-          .foregroundStyle(Color.mgAccent)
-          .frame(width: 22)
-        VStack(alignment: .leading, spacing: 2) {
-          Text("启用按键映射")
-            .font(.mgBody)
-            .foregroundStyle(Color.mgText1)
-          Text("关闭后所有映射规则（手动 + 导入）暂停生效。")
-            .font(.mgMeta)
-            .foregroundStyle(Color.mgText3)
-        }
-        Spacer()
-        Toggle("", isOn: Binding(
-          get: { store.masterEnabled },
-          set: { store.setMasterEnabled($0) }
-        ))
-        .labelsHidden()
-        .toggleStyle(.switch)
-        .controlSize(.small)
-        .tint(.mgAccent)
-      }
-      .padding(16)
-    }
-  }
-
-  // MARK: - 调试日志
-
-  private var debugSection: some View {
-    VStack(alignment: .leading, spacing: 10) {
-      MGSectionLabel(text: "调试")
-      GroupCard {
-        VStack(spacing: 0) {
-          HStack(spacing: 12) {
-            Image(systemName: "ladybug")
-              .font(.system(size: 15))
-              .foregroundStyle(Color.mgAccent)
-              .frame(width: 22)
-            VStack(alignment: .leading, spacing: 2) {
-              Text("调试日志")
-                .font(.mgBody)
-                .foregroundStyle(Color.mgText1)
-              Text("排查映射不生效时打开,详尽记录规则编译 / 按键事件 / 合成动作,只写 key-remap.log。")
-                .font(.mgMeta)
-                .foregroundStyle(Color.mgText3)
-            }
-            Spacer()
-            Toggle("", isOn: Binding(
-              get: { store.debugLoggingEnabled },
-              set: { store.setDebugLoggingEnabled($0) }
-            ))
-            .labelsHidden()
-            .toggleStyle(.switch)
-            .controlSize(.small)
-            .tint(.mgAccent)
-          }
-          .padding(16)
-
-          Divider().padding(.horizontal, 16)
-
-          HStack(spacing: 12) {
-            Image(systemName: "folder")
-              .font(.system(size: 15))
-              .foregroundStyle(Color.mgAccent)
-              .frame(width: 22)
-            VStack(alignment: .leading, spacing: 2) {
-              Text("打开日志文件夹")
-                .font(.mgBody)
-                .foregroundStyle(Color.mgText1)
-              Text("~/Library/Logs/Velto/key-remap.log")
-                .font(.mgMeta)
-                .foregroundStyle(Color.mgText3)
-            }
-            Spacer()
-            Button("打开") { openLogsFolder() }
-              .buttonStyle(.bordered)
-          }
-          .padding(16)
-        }
-      }
-    }
-  }
-
-  private func openLogsFolder() {
-    let url = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first?
-      .appendingPathComponent("Logs/Velto", isDirectory: true)
-    if let url { NSWorkspace.shared.open(url) }
-  }
-
-  // MARK: - 简单映射区(单卡:添加行在顶,每条映射各自带删除)
-
-  private var manualSection: some View {
-    let manualManipulators = store.rules.first(where: { $0.isManual })?.manipulators ?? []
-    return VStack(alignment: .leading, spacing: 10) {
-      MGSectionLabel(text: "简单映射")
-      GroupCard {
-        VStack(spacing: 0) {
-          // 添加行固定在顶部,新映射往下追加
-          AddRemapRow { from, to in
-            store.addManualManipulator(KeyRemapManipulator(from: from, to: [to]))
-          }
-          ForEach(manualManipulators) { m in
-            Divider().padding(.horizontal, 16)
-            ManualRemapRow(manipulator: m) {
-              store.deleteManualManipulator(id: m.id)
-            }
-          }
-        }
-      }
-    }
-  }
-
-  // MARK: - 导入规则区
-
-  private var importedSection: some View {
-    let imported = store.rules.filter { !$0.isManual }
-    return VStack(alignment: .leading, spacing: 10) {
-      HStack {
-        MGSectionLabel(text: "导入的规则")
-        Spacer()
-        Button {
-          showFileImporter = true
-        } label: {
-          Label("导入 JSON 规则文件", systemImage: "square.and.arrow.down")
-        }
-        .buttonStyle(.bordered)
-      }
-
-      if imported.isEmpty {
-        GroupCard {
-          Text("还没有导入的规则。从 ke-complex-modifications.pqrs.org 下载 JSON 文件后点右上角导入。")
-            .font(.mgBody)
-            .foregroundStyle(Color.mgText3)
-            .padding(16)
-        }
-      } else {
-        ForEach(imported) { rule in
-          ImportedRuleCard(rule: rule)
-        }
-      }
     }
   }
 
@@ -214,7 +85,7 @@ struct KeyRemapPage: View {
   }
 }
 
-// MARK: - 添加行(选择器 + 添加,卡内顶部)
+// MARK: - 添加行(选择器 + 添加,卡内底部)
 
 private struct AddRemapRow: View {
   let onAdd: (KeyRemapFrom, KeyRemapTo) -> Void
@@ -228,7 +99,7 @@ private struct AddRemapRow: View {
   }
 
   var body: some View {
-    HStack {
+    HStack(spacing: 8) {
       Picker("", selection: $fromKeyCode) {
         ForEach(KeyCodeMap.pickerSections, id: \.title) { section in
           Section(section.title) {
@@ -269,7 +140,8 @@ private struct AddRemapRow: View {
       .buttonStyle(.bordered)
     }
     .padding(.horizontal, 16)
-    .padding(.vertical, 10)
+    .padding(.vertical, 12)
+    .frame(minHeight: 44)
   }
 }
 
@@ -285,73 +157,42 @@ private struct ManualRemapRow: View {
       $0.keyCode == 0xFFFF ? "禁用" : (KeyCodeMap.byKeyCode[$0.keyCode]?.displayLabel ?? "#\($0.keyCode)")
     } ?? "—"
 
-    HStack {
-      Text(fromLabel)
-        .font(.mgBody)
-        .frame(minWidth: 120, alignment: .leading)
+    // 左列宽度对齐添加行的选择器(minWidth 150),箭头上下成一列
+    HStack(spacing: 8) {
+      Kbd(keys: [fromLabel])
+        .frame(minWidth: 150, alignment: .leading)
       Image(systemName: "arrow.right")
         .foregroundStyle(Color.mgText3)
-      Text(toLabel)
-        .font(.mgBody)
-        .frame(minWidth: 120, alignment: .leading)
+      Kbd(keys: [toLabel])
       Spacer()
-      Button(role: .destructive) { onDelete() } label: {
-        Image(systemName: "trash")
-          .foregroundStyle(Color.red.opacity(0.8))
-      }
-      .buttonStyle(.plain)
+      DeleteIconButton(action: onDelete)
     }
     .padding(.horizontal, 16)
-    .padding(.vertical, 10)
+    .padding(.vertical, 12)
+    .frame(minHeight: 44)
   }
 }
 
-// MARK: - 导入规则卡片
+// MARK: - 导入规则行(标题 + 开关,下列各条映射摘要)
 
-private struct ImportedRuleCard: View {
+private struct ImportedRuleRow: View {
   let rule: KeyRemapRule
   private let store = KeyRemapStore.shared
 
   var body: some View {
-    GroupCard {
-      VStack(alignment: .leading, spacing: 0) {
-        // 标题行
-        HStack {
-          Text(rule.title)
-            .font(.mgBody.bold())
-            .foregroundStyle(Color.mgText1)
-          Spacer()
-          Toggle("", isOn: Binding(
-            get: { rule.enabled },
-            set: { store.setEnabled($0, ruleID: rule.id) }
-          ))
-          .labelsHidden()
-          .toggleStyle(.switch)
-          .controlSize(.small)
-          .tint(.mgAccent)
-
-          Button(role: .destructive) {
-            store.deleteRule(id: rule.id)
-          } label: {
-            Image(systemName: "trash")
-              .foregroundStyle(Color.red.opacity(0.8))
-          }
-          .buttonStyle(.plain)
-        }
-        .padding(16)
-
-        // manipulator 摘要列表
-        if !rule.manipulators.isEmpty {
-          Divider().padding(.horizontal, 16)
-          VStack(alignment: .leading, spacing: 4) {
-            ForEach(rule.manipulators) { m in
-              ManipulatorSummaryRow(manipulator: m)
-            }
-          }
-          .padding(16)
-        }
+    VStack(alignment: .leading, spacing: 6) {
+      HStack(spacing: 12) {
+        Text(rule.title)
+          .font(.mgBody)
+          .foregroundStyle(Color.mgText1)
+        Spacer(minLength: 8)
+        DeleteIconButton { store.deleteRule(id: rule.id) }
+        SettingsSwitch(isOn: Binding(get: { rule.enabled }, set: { store.setEnabled($0, ruleID: rule.id) }))
       }
+      ForEach(rule.manipulators) { ManipulatorSummaryRow(manipulator: $0) }
     }
+    .padding(.horizontal, 16)
+    .padding(.vertical, 12)
   }
 }
 
@@ -375,13 +216,13 @@ private struct ManipulatorSummaryRow: View {
 
     HStack(spacing: 6) {
       Text(fromDesc)
-        .font(.system(size: 12, design: .monospaced))
+        .font(.mgMeta.monospaced())
         .foregroundStyle(Color.mgText2)
       Image(systemName: "arrow.right")
         .font(.system(size: 10))
         .foregroundStyle(Color.mgText3)
       Text(toLabel)
-        .font(.system(size: 12, design: .monospaced))
+        .font(.mgMeta.monospaced())
         .foregroundStyle(Color.mgText2)
     }
   }

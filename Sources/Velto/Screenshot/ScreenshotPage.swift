@@ -12,31 +12,131 @@ struct ScreenshotPage: View {
   @State private var prefs = GestureStore.shared.preferences.screenshot
   // 屏幕录制权限(非持久,查询实时值)
   @State private var screenRecordingTrusted = PermissionManager.isScreenRecordingTrusted
-  // 触发键校验提示
-  @State private var triggerShortcutWarning = false
 
   var body: some View {
-    ScrollView {
-      VStack(alignment: .leading, spacing: 22) {
-        PageHeader(
-          page: .screenshot,
-          subtitle: "全局触发键唤起截图,支持区域/窗口选择、复制剪贴板、静默保存预设目录。"
-        )
+    SettingsPage {
+      PageHeader(
+        page: .screenshot,
+        subtitle: "全局触发键唤起截图,支持区域/窗口选择、复制剪贴板、静默保存预设目录。",
+        isOn: bind(\.enabled)
+      )
+      .help("关闭后全局触发键不再唤起截图会话。")
 
-        enableSection
-        triggerSection
-        sessionKeysSection
-        saveSection
-        annotationSection
-        magnifierSection
-        debugSection
+      if !screenRecordingTrusted {
+        GroupCard {
+          SettingsRow(title: "需要屏幕录制权限", subtitle: "在系统设置中授权后重启 Velto 生效。") {
+            Button("请求权限") {
+              PermissionManager.requestScreenRecordingPrompt()
+              screenRecordingTrusted = PermissionManager.isScreenRecordingTrusted
+            }
+            .buttonStyle(.borderedProminent)
+            Button("打开隐私设置") { PermissionManager.openPrivacySettings("Privacy_ScreenCapture") }
+              .buttonStyle(.bordered)
+          }
+        }
       }
-      .padding(.horizontal, 32)
-      .padding(.top, 28)
-      .padding(.bottom, 32)
-      .frame(maxWidth: .infinity, alignment: .leading)
+
+      SettingsSection("快捷键") {
+        SettingsRow(title: "触发快捷键", subtitle: "唤起截图会话,须含 ⌘ / ⌥ / ⌃ 之一。") {
+          ShortcutField(shortcut: Binding(
+            get: { prefs.triggerShortcut },
+            set: { newValue in
+              // 不含真修饰键会拦截普通输入,直接忽略(保留旧值);清空允许。
+              if let s = newValue, !s.hasRealModifier { return }
+              updatePrefs { $0.screenshot.triggerShortcut = newValue }
+            }
+          ))
+        }
+      }
+
+      // 复制 / 取消 / 滚动是裸 keyCode,只读展示;保存键可录制。
+      SettingsSection("会话内按键") {
+        SettingsRow(title: "复制到剪贴板") { Kbd(keys: [keyName(for: prefs.copyKeyCode)]) }
+        SettingsRow(title: "保存到目录") {
+          ShortcutField(hasValue: false, clear: {}) {
+            ShortcutRecorderField(
+              shortcut: Binding(
+                get: { prefs.saveShortcut },
+                set: { newValue in
+                  if let s = newValue { updatePrefs { $0.screenshot.saveShortcut = s } }
+                }
+              ),
+              placeholder: "点击录制"
+            )
+          }
+        }
+        SettingsRow(title: "取消截图") { Kbd(keys: [keyName(for: prefs.cancelKeyCode)]) }
+        SettingsRow(title: "滚动长截图", subtitle: "框选后按键进入滚动捕获。") {
+          Kbd(keys: [keyName(for: prefs.scrollKeyCode)])
+        }
+      }
+
+      SettingsSection("保存") {
+        SettingsRow(title: "保存目录") {
+          HStack(spacing: 6) {
+            Image(nsImage: NSWorkspace.shared.icon(forFile: prefs.saveDirectoryPath))
+              .resizable()
+              .frame(width: 16, height: 16)
+            Text(URL(fileURLWithPath: prefs.saveDirectoryPath).lastPathComponent)
+              .font(.mgBody)
+              .foregroundStyle(Color.mgText2)
+            Button("选择…", action: chooseSaveDirectory)
+              .buttonStyle(.bordered)
+          }
+        }
+        .help((prefs.saveDirectoryPath as NSString).abbreviatingWithTildeInPath)
+        SettingsRow("保存时同时复制到剪贴板", isOn: bind(\.saveAlsoCopiesToClipboard))
+      }
+
+      SettingsSection("标注默认样式") {
+        SettingsRow(title: "默认颜色", subtitle: "新建标注的描边与文字颜色。") {
+          ColorPicker("", selection: Binding(
+            get: { Color(prefs.annotationColor.nsColor) },
+            set: { newValue in
+              if let resolved = AnnotationColor(resolving: NSColor(newValue)) {
+                updatePrefs { $0.screenshot.annotationColor = resolved }
+              }
+            }
+          ))
+          .labelsHidden()
+        }
+        SettingsRow(title: "线宽") {
+          segmented(bind(\.annotationLineWidth), [1, 3, 5]) { "\(Int($0))" }
+        }
+        SettingsRow(title: "字号") {
+          segmented(bind(\.annotationFontSize), [14, 18, 24, 32]) { "\(Int($0))" }
+        }
+        SettingsRow(title: "高亮透明度") {
+          opacitySlider(bind(\.annotationHighlightOpacity), in: 0.15...0.65)
+        }
+        SettingsRow(title: "马赛克粒度") {
+          segmented(bind(\.annotationMosaicBlockSize), [8, 12, 16, 24])
+        }
+        SettingsRow(title: "填充透明度", subtitle: "形状内部填充,0 为空心。") {
+          opacitySlider(bind(\.annotationFillOpacity), in: 0...1)
+        }
+      }
+
+      SettingsSection("选区") {
+        SettingsRow(
+          "取色放大镜",
+          subtitle: "截图会话中鼠标附近显示像素放大、HEX 色值与坐标。",
+          isOn: bind(\.showMagnifier)
+        )
+      }
+
+      DebugSection(
+        isOn: Binding(
+          get: { prefs.debugLoggingEnabled },
+          set: { v in
+            updatePrefs { $0.screenshot.debugLoggingEnabled = v }
+            ScreenshotDebugLog.setEnabled(v)
+          }
+        ),
+        logURL: ScreenshotDebugLog.fileURL,
+        help: "把截图会话、窗口识别等细节写入日志文件,排查问题时开启;反馈问题时附上日志更精准。"
+      )
     }
-    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     .onReceive(
       NotificationCenter.default.publisher(for: .gestureStoreDidChange)
     ) { _ in
@@ -45,436 +145,41 @@ struct ScreenshotPage: View {
     }
   }
 
-  // MARK: - 总开关 + 屏幕录制权限
-
-  private var enableSection: some View {
-    GroupCard {
-      VStack(spacing: 0) {
-        row(
-          icon: "power",
-          title: "启用截图",
-          desc: "关闭后全局触发键不再唤起截图会话。",
-          showDivider: !screenRecordingTrusted
-        ) {
-          AnyView(
-            Toggle("", isOn: Binding(
-              get: { prefs.enabled },
-              set: { v in updatePrefs { $0.screenshot.enabled = v } }
-            ))
-            .labelsHidden()
-            .toggleStyle(.switch)
-            .controlSize(.small)
-            .tint(.mgAccent)
-          )
-        }
-
-        if !screenRecordingTrusted {
-          row(
-            icon: "exclamationmark.shield",
-            title: "屏幕录制权限",
-            desc: "截图需要屏幕录制权限。请在系统设置中授权后重启 App。",
-            showDivider: true
-          ) {
-            AnyView(
-              HStack(spacing: 8) {
-                Button("请求权限") {
-                  _ = PermissionManager.requestScreenRecordingPrompt()
-                  screenRecordingTrusted = PermissionManager.isScreenRecordingTrusted
-                }
-                .buttonStyle(.borderedProminent)
-                Button("打开隐私设置") {
-                  PermissionManager.openPrivacySettings()
-                }
-                .buttonStyle(.bordered)
-              }
-            )
-          }
-        }
-      }
+  /// 数字档位分段(线宽 / 字号 / 马赛克粒度)。
+  private func segmented<V: Hashable>(
+    _ selection: Binding<V>,
+    _ values: [V],
+    title: @escaping (V) -> String = { "\($0)" }
+  ) -> some View {
+    Picker("", selection: selection) {
+      ForEach(values, id: \.self) { Text(title($0)).tag($0) }
     }
-  }
-
-  // MARK: - 全局触发键
-
-  private var triggerSection: some View {
-    VStack(alignment: .leading, spacing: 0) {
-      MGSectionLabel(text: "全局触发键")
-      GroupCard {
-        VStack(spacing: 0) {
-          row(
-            icon: "camera.viewfinder",
-            title: "触发快捷键",
-            desc: "按下此键唤起截图会话。必须包含 ⌘/⌥/⌃ 之一,否则会与普通输入冲突。",
-            showDivider: triggerShortcutWarning
-          ) {
-            AnyView(
-              HStack(spacing: 8) {
-                KeyCapSlot(minWidth: 120) {
-                  ShortcutRecorderField(
-                    shortcut: Binding(
-                      get: { prefs.triggerShortcut },
-                      set: { newValue in
-                        if let s = newValue, !s.hasRealModifier {
-                          triggerShortcutWarning = true
-                          return
-                        }
-                        triggerShortcutWarning = false
-                        updatePrefs { $0.screenshot.triggerShortcut = newValue }
-                      }
-                    ),
-                    placeholder: "点击录制"
-                  )
-                }
-                if prefs.triggerShortcut != nil {
-                  Button("清除") {
-                    triggerShortcutWarning = false
-                    updatePrefs { $0.screenshot.triggerShortcut = nil }
-                  }
-                  .buttonStyle(.borderless)
-                  .foregroundStyle(Color.mgText3)
-                }
-              }
-            )
-          }
-
-          if triggerShortcutWarning {
-            HStack(spacing: 6) {
-              Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(Color.red)
-                .font(.system(size: 12))
-              Text("触发键必须包含真实修饰键(⌘/⌥/⌃),否则会拦截普通输入。")
-                .font(.mgMeta)
-                .foregroundStyle(Color.red)
-            }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 10)
-            .frame(maxWidth: .infinity, alignment: .leading)
-          }
-        }
-      }
-    }
-  }
-
-  // MARK: - 会话内按键
-
-  private var sessionKeysSection: some View {
-    VStack(alignment: .leading, spacing: 0) {
-      MGSectionLabel(text: "会话内按键")
-      GroupCard {
-        VStack(spacing: 0) {
-          // 复制到剪贴板:裸 keyCode(默认空格 49),只读展示
-          row(
-            icon: "doc.on.clipboard",
-            title: "复制到剪贴板",
-            desc: nil,
-            showDivider: false
-          ) {
-            AnyView(
-              Text(keyName(for: prefs.copyKeyCode))
-                .font(.mgBody)
-                .foregroundStyle(Color.mgText2)
-            )
-          }
-
-          // 保存到目录:完整 Shortcut,用录制控件
-          row(
-            icon: "square.and.arrow.down",
-            title: "保存到目录",
-            desc: nil,
-            showDivider: true
-          ) {
-            AnyView(
-              HStack(spacing: 8) {
-                KeyCapSlot(minWidth: 100) {
-                  ShortcutRecorderField(
-                    shortcut: Binding(
-                      get: { prefs.saveShortcut },
-                      set: { newValue in
-                        if let s = newValue {
-                          updatePrefs { $0.screenshot.saveShortcut = s }
-                        }
-                      }
-                    ),
-                    placeholder: "点击录制"
-                  )
-                }
-              }
-            )
-          }
-
-          // 取消:裸 keyCode(默认 Esc 53),只读展示
-          row(
-            icon: "xmark.circle",
-            title: "取消截图",
-            desc: nil,
-            showDivider: true
-          ) {
-            AnyView(
-              Text(keyName(for: prefs.cancelKeyCode))
-                .font(.mgBody)
-                .foregroundStyle(Color.mgText2)
-            )
-          }
-
-          // 滚动长截图:裸 keyCode(默认 S 1),只读展示
-          row(
-            icon: "scroll",
-            title: "滚动长截图",
-            desc: "框选后按键进入滚动捕获",
-            showDivider: true
-          ) {
-            AnyView(
-              Text(keyName(for: prefs.scrollKeyCode))
-                .font(.mgBody)
-                .foregroundStyle(Color.mgText2)
-            )
-          }
-        }
-      }
-
-      Text("复制/取消/滚动键为单键(无修饰),暂不支持自定义录制。保存键支持修改。")
-        .font(.mgMeta)
-        .foregroundStyle(Color.mgText3)
-        .padding(.top, 8)
-        .padding(.leading, 4)
-    }
-  }
-
-  // MARK: - 保存目录
-
-  private var saveSection: some View {
-    VStack(alignment: .leading, spacing: 0) {
-      MGSectionLabel(text: "保存")
-      GroupCard {
-        VStack(spacing: 0) {
-          row(
-            icon: "folder",
-            title: "保存目录",
-            desc: prefs.saveDirectoryPath,
-            showDivider: false
-          ) {
-            AnyView(
-              Button("选择…") {
-                chooseSaveDirectory()
-              }
-              .buttonStyle(.bordered)
-            )
-          }
-
-          row(
-            icon: "doc.on.clipboard.fill",
-            title: "保存时同时复制到剪贴板",
-            desc: nil,
-            showDivider: true
-          ) {
-            AnyView(
-              Toggle("", isOn: Binding(
-                get: { prefs.saveAlsoCopiesToClipboard },
-                set: { v in updatePrefs { $0.screenshot.saveAlsoCopiesToClipboard = v } }
-              ))
-              .labelsHidden()
-              .toggleStyle(.switch)
-              .controlSize(.small)
-              .tint(.mgAccent)
-            )
-          }
-        }
-      }
-    }
-  }
-
-  // MARK: - 标注默认样式
-
-  private var annotationSection: some View {
-    VStack(alignment: .leading, spacing: 0) {
-      MGSectionLabel(text: "标注默认样式")
-      GroupCard {
-        VStack(spacing: 0) {
-          row(
-            icon: "paintpalette",
-            title: "默认颜色",
-            desc: "新建标注的描边与文字颜色。",
-            showDivider: false
-          ) {
-            AnyView(
-              ColorPicker("", selection: Binding(
-                get: { Color(prefs.annotationColor.nsColor) },
-                set: { newValue in
-                  if let resolved = AnnotationColor(resolving: NSColor(newValue)) {
-                    updatePrefs { $0.screenshot.annotationColor = resolved }
-                  }
-                }
-              ))
-              .labelsHidden()
-            )
-          }
-
-          row(icon: "pencil.tip", title: "线宽", desc: nil, showDivider: true) {
-            AnyView(
-              Picker("", selection: Binding(
-                get: { prefs.annotationLineWidth },
-                set: { v in updatePrefs { $0.screenshot.annotationLineWidth = v } }
-              )) {
-                ForEach([CGFloat(1), 3, 5], id: \.self) { Text("\(Int($0))").tag($0) }
-              }
-              .pickerStyle(.segmented)
-              .labelsHidden()
-              .fixedSize()
-            )
-          }
-
-          row(icon: "textformat.size", title: "字号", desc: nil, showDivider: true) {
-            AnyView(
-              Picker("", selection: Binding(
-                get: { prefs.annotationFontSize },
-                set: { v in updatePrefs { $0.screenshot.annotationFontSize = v } }
-              )) {
-                ForEach([CGFloat(14), 18, 24, 32], id: \.self) { Text("\(Int($0))").tag($0) }
-              }
-              .pickerStyle(.segmented)
-              .labelsHidden()
-              .fixedSize()
-            )
-          }
-
-          row(
-            icon: "highlighter",
-            title: "高亮透明度",
-            desc: nil,
-            showDivider: true
-          ) {
-            AnyView(opacitySlider(
-              value: prefs.annotationHighlightOpacity, range: 0.15...0.65
-            ) { v in updatePrefs { $0.screenshot.annotationHighlightOpacity = v } })
-          }
-
-          row(icon: "square.grid.3x3", title: "马赛克粒度", desc: nil, showDivider: true) {
-            AnyView(
-              Picker("", selection: Binding(
-                get: { prefs.annotationMosaicBlockSize },
-                set: { v in updatePrefs { $0.screenshot.annotationMosaicBlockSize = v } }
-              )) {
-                ForEach([8, 12, 16, 24], id: \.self) { Text("\($0)").tag($0) }
-              }
-              .pickerStyle(.segmented)
-              .labelsHidden()
-              .fixedSize()
-            )
-          }
-
-          row(
-            icon: "drop",
-            title: "填充透明度",
-            desc: "形状内部填充,0 为空心。",
-            showDivider: true
-          ) {
-            AnyView(opacitySlider(
-              value: prefs.annotationFillOpacity, range: 0...1
-            ) { v in updatePrefs { $0.screenshot.annotationFillOpacity = v } })
-          }
-        }
-      }
-    }
+    .pickerStyle(.segmented)
+    .labelsHidden()
+    .fixedSize()
   }
 
   /// 透明度滑杆 + 百分比读数,供高亮/填充复用。
-  private func opacitySlider(
-    value: CGFloat,
-    range: ClosedRange<CGFloat>,
-    onChange: @escaping @MainActor (CGFloat) -> Void
-  ) -> some View {
+  private func opacitySlider(_ value: Binding<CGFloat>, in range: ClosedRange<CGFloat>) -> some View {
     HStack(spacing: 10) {
-      Slider(value: Binding(get: { value }, set: onChange), in: range)
+      Slider(value: value, in: range)
         .frame(width: 160)
         .controlSize(.small)
-        .tint(.mgAccent)
-      Text(String(format: "%.0f%%", value * 100))
+      Text(String(format: "%.0f%%", value.wrappedValue * 100))
         .font(.mgMeta)
         .foregroundStyle(Color.mgText2)
         .frame(width: 40, alignment: .trailing)
     }
   }
 
-  // MARK: - 放大镜
-
-  private var magnifierSection: some View {
-    GroupCard {
-      VStack(spacing: 0) {
-        row(
-          icon: "magnifyingglass.circle",
-          title: "取色放大镜",
-          desc: "截图会话中鼠标附近显示像素放大、HEX 色值与坐标。",
-          showDivider: false
-        ) {
-          AnyView(
-            Toggle("", isOn: Binding(
-              get: { prefs.showMagnifier },
-              set: { v in updatePrefs { $0.screenshot.showMagnifier = v } }
-            ))
-            .labelsHidden()
-            .toggleStyle(.switch)
-            .controlSize(.small)
-            .tint(.mgAccent)
-          )
-        }
-      }
-    }
-  }
-
-  // MARK: - 调试
-
-  private var debugSection: some View {
-    GroupCard {
-      VStack(spacing: 0) {
-        row(
-          icon: "ladybug",
-          title: "调试日志",
-          desc: "把截图会话、窗口识别等细节写入日志文件,排查问题时开启;反馈问题时附上日志更精准。",
-          showDivider: false
-        ) {
-          AnyView(
-            Toggle("", isOn: Binding(
-              get: { prefs.debugLoggingEnabled },
-              set: { v in
-                updatePrefs { $0.screenshot.debugLoggingEnabled = v }
-                ScreenshotDebugLog.setEnabled(v)
-              }
-            ))
-            .labelsHidden()
-            .toggleStyle(.switch)
-            .controlSize(.small)
-            .tint(.mgAccent)
-          )
-        }
-
-        row(
-          icon: "doc.text.magnifyingglass",
-          title: "日志文件",
-          desc: "~/Library/Logs/Velto/screenshot-debug.log",
-          showDivider: true
-        ) {
-          AnyView(
-            Button("在访达中显示") { revealDebugLog() }
-              .buttonStyle(.bordered)
-          )
-        }
-      }
-    }
-  }
-
-  /// 在访达中定位日志文件;文件还没生成时打开其所在目录。
-  private func revealDebugLog() {
-    guard let url = ScreenshotDebugLog.logFileURL else { return }
-    if FileManager.default.fileExists(atPath: url.path) {
-      NSWorkspace.shared.activateFileViewerSelecting([url])
-    } else {
-      let dir = url.deletingLastPathComponent()
-      try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-      NSWorkspace.shared.open(dir)
-    }
-  }
-
   // MARK: - 辅助
+
+  private func bind<V>(_ keyPath: WritableKeyPath<ScreenshotPreferences, V>) -> Binding<V> {
+    Binding(
+      get: { prefs[keyPath: keyPath] },
+      set: { v in updatePrefs { $0.screenshot[keyPath: keyPath] = v } }
+    )
+  }
 
   private func updatePrefs(_ block: (inout AppPreferences) -> Void) {
     store.updatePreferences(block)
@@ -500,44 +205,6 @@ struct ScreenshotPage: View {
     case 53: return "Esc"
     case 1:  return "S"
     default: return "keyCode \(keyCode)"
-    }
-  }
-
-  // MARK: - 行布局辅助(与 SwitcherSettingsPage 保持一致)
-
-  @ViewBuilder
-  private func row(
-    icon: String,
-    title: String,
-    desc: String?,
-    showDivider: Bool = false,
-    @ViewBuilder trailing: () -> AnyView
-  ) -> some View {
-    VStack(spacing: 0) {
-      if showDivider {
-        Rectangle()
-          .fill(Color.mgHair)
-          .frame(height: 0.5)
-          .padding(.leading, 78)
-      }
-      HStack(spacing: 16) {
-        ActionIcon(systemName: icon)
-        VStack(alignment: .leading, spacing: 2) {
-          Text(title)
-            .font(.system(size: 14, weight: .semibold))
-            .foregroundStyle(Color.mgText1)
-          if let desc {
-            Text(desc)
-              .font(.mgMeta)
-              .foregroundStyle(Color.mgText2)
-              .fixedSize(horizontal: false, vertical: true)
-          }
-        }
-        Spacer(minLength: 12)
-        trailing()
-      }
-      .padding(.horizontal, 20)
-      .padding(.vertical, 14)
     }
   }
 }

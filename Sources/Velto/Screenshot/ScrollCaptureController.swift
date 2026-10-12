@@ -150,8 +150,8 @@ final class ScrollCaptureController {
 
   /// 调试日志开着时把第一对对不上的帧原样存盘,供离线复盘匹配器(每次会话覆盖)。
   private func dumpFrames(_ previous: CGImage, _ current: CGImage) {
-    guard let dir = ScreenshotDebugLog.logFileURL?.deletingLastPathComponent()
-      .appendingPathComponent("scroll-debug", isDirectory: true) else { return }
+    let dir = ScreenshotDebugLog.fileURL.deletingLastPathComponent()
+      .appendingPathComponent("scroll-debug", isDirectory: true)
     // PNG 编码要半秒,放后台,别卡住采样循环。
     Task.detached(priority: .utility) {
       try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
