@@ -54,7 +54,7 @@ enum GestureTargetPolicy: String, Codable, Equatable {
     case activeWindow
 }
 
-/// 鼠标侧键:后退键 / 前进键各发一个按键(默认 PageUp / PageDown)。归手势模块,
+/// 鼠标侧键:后退键 / 前进键各发一个按键(默认 PageDown / PageUp)。归手势模块,
 /// 受手势总开关门控。快捷键为 nil 的那颗键不接管,原样透传给 App。
 /// 用合成的 Codable:用户清空的键编码时省略,解码回 nil,不会被默认值顶回去。
 struct GestureSideButtonPreferences: Codable, Equatable {
@@ -66,8 +66,8 @@ struct GestureSideButtonPreferences: Codable, Equatable {
 
     static let defaults = GestureSideButtonPreferences(
         enabled: true,
-        back: Shortcut(keyCode: VirtualKeyCode.pageUp, modifierFlags: 0, displayName: "PageUp"),
-        forward: Shortcut(keyCode: VirtualKeyCode.pageDown, modifierFlags: 0, displayName: "PageDown")
+        back: Shortcut(keyCode: VirtualKeyCode.pageDown, modifierFlags: 0, displayName: "PageDown"),
+        forward: Shortcut(keyCode: VirtualKeyCode.pageUp, modifierFlags: 0, displayName: "PageUp")
     )
 }
 

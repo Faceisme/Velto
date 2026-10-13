@@ -7,8 +7,9 @@ import Testing
 
 @Test func sideButtonDefaultsMapToPageKeys() {
   let prefs = GestureSideButtonPreferences.defaults
-  #expect(GestureSideButtonController.shortcut(forButton: 3, preferences: prefs)?.keyCode == VirtualKeyCode.pageUp)
-  #expect(GestureSideButtonController.shortcut(forButton: 4, preferences: prefs)?.keyCode == VirtualKeyCode.pageDown)
+  // 后退键(3)= 下一页,前进键(4)= 上一页。
+  #expect(GestureSideButtonController.shortcut(forButton: 3, preferences: prefs)?.keyCode == VirtualKeyCode.pageDown)
+  #expect(GestureSideButtonController.shortcut(forButton: 4, preferences: prefs)?.keyCode == VirtualKeyCode.pageUp)
   // 中键等其它按键不接管。
   #expect(GestureSideButtonController.shortcut(forButton: 2, preferences: prefs) == nil)
   #expect(GestureSideButtonController.shortcut(forButton: 5, preferences: prefs) == nil)
@@ -53,7 +54,7 @@ import Testing
 }
 
 @Test func sideButtonPreferencesSurviveRoundTrip() throws {
-  // 旧配置没有这个字段 → 回退默认(开启,PageUp / PageDown)。
+  // 旧配置没有这个字段 → 回退默认(开启,后退 PageDown / 前进 PageUp)。
   var legacy = try JSONSerialization.jsonObject(
     with: JSONEncoder().encode(AppPreferences.defaults)) as! [String: Any]
   legacy.removeValue(forKey: "gestureSideButtons")
