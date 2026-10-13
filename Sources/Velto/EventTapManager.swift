@@ -13,6 +13,7 @@ import betterfinder
 ///
 /// Sub-controllers:
 /// - `GestureEngine`        right-click gesture state machine
+/// - `GestureSideButtonController` mouse side buttons → keys (page up/down)
 /// - `MouseControlController` smooth scroll / scroll hotkeys / button bindings
 /// - `WindowDragController` modifier+drag move/resize
 /// - `ContentZoomController` modifier+scroll content zoom
@@ -148,12 +149,17 @@ final class EventTapManager: @unchecked Sendable {
     private let keyRemapController = KeyRemapController()
     private let screenshotShortcutController = ScreenshotShortcutController()
     private let inputSourcePunctuationController = InputSourcePunctuationController()
+    private let sideButtonController = GestureSideButtonController()
 
     /// 手势 / 窗口管理是否启用的 tap 线程快照。只在 tap 线程读写(`handle` 与
     /// `performOnTapThread` 块都在 tap 线程;`init` 在 `start()` 之前于主线程设初值,
     /// 此时无并发)。tap 已和功能开关解耦、常驻运行,各分支靠这两个快照决定是否生效。
     private var gesturesEnabledForTap = true
     private var windowManagementEnabledForTap = true
+    /// Velto 自己是否在前台的 tap 线程快照,只在 tap 线程读写(初值同上)。侧键事件
+    /// 没带目标进程时靠它判断「是不是点在 Velto 自己的窗口上」—— 设置页录鼠标按键的
+    /// 输入框要收到原始侧键,不能被翻成翻页键。
+    private var selfIsFrontmostForTap = false
 
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
@@ -190,6 +196,8 @@ final class EventTapManager: @unchecked Sendable {
         applyPreferenceSnapshots(store.preferences)
         gesturesEnabledForTap = store.preferences.gesturesEnabled
         windowManagementEnabledForTap = store.preferences.windowManagementEnabled
+        sideButtonController.updatePreferences(store.preferences.gestureSideButtons)
+        selfIsFrontmostForTap = NSRunningApplication.current.isActive
         // start() 之前于主线程设初值,此时无并发(同上两个快照)。调试日志开关先于
         // setActive 同步,否则 InputSourceSwitchController.start() 还没跑,首条
         // "active=true" 日志会被吞掉,排查时误以为功能没启用。
@@ -218,8 +226,10 @@ final class EventTapManager: @unchecked Sendable {
                   let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else {
                 return
             }
+            let isSelf = app.processIdentifier == ProcessInfo.processInfo.processIdentifier
             self.performOnTapThread { [weak self] in
                 self?.gestureEngine.updateLastFrontmostApplication(app)
+                self?.selfIsFrontmostForTap = isSelf
             }
         }
 
@@ -241,6 +251,7 @@ final class EventTapManager: @unchecked Sendable {
                 self.performOnTapThread { [weak self] in
                     self?.gesturesEnabledForTap = preferences.gesturesEnabled
                     self?.windowManagementEnabledForTap = preferences.windowManagementEnabled
+                    self?.sideButtonController.updatePreferences(preferences.gestureSideButtons)
                     self?.gestureEngine.updatePreferences(preferences)
                     self?.gestureEngine.updateGestures(gestures, version: version)
                     self?.inputSourcePunctuationController.setActive(punctuationActive)
@@ -471,6 +482,7 @@ final class EventTapManager: @unchecked Sendable {
             // 否则它会卡在 .gesturing 半路,导致之后的手势连环判为 abandoned、整片失灵。
             mouseControlController.resetTransientState()
             gestureEngine.abortForTapRestart()
+            sideButtonController.reset()
             // 禁用期间修饰键松开也会丢;拖窗会话靠下一次 flagsChanged 自清,这里只留痕,
             // 方便对照"resize 拖错窗口"是不是赶上了 tap 被禁用。
             WindowManagementDebugLog.log(
@@ -590,12 +602,26 @@ final class EventTapManager: @unchecked Sendable {
                 : Unmanaged.passUnretained(event)
 
         case .leftMouseDown, .leftMouseUp, .otherMouseDown, .otherMouseUp:
+            // 鼠标控制里用户显式绑的按键优先,侧键翻页排在它后面。
             if mouseControlController.handleTriggerEvent(type: type, event: event, normalizedFlags: raw) {
+                return nil
+            }
+            if type == .otherMouseDown || type == .otherMouseUp, handleSideButton(type: type, event: event) {
                 return nil
             }
             // 透传到 App 的鼠标按下会提交/取消 IME 组字,强制英文标点的组字推演跟着归零。
             if type == .leftMouseDown || type == .otherMouseDown {
                 inputSourcePunctuationController.noteMouseDown()
+            }
+            return Unmanaged.passUnretained(event)
+
+        case .otherMouseDragged:
+            // 侧键按下已被吞,按住拖动同右键手势一样降级成 mouseMoved 透传:光标照常跟手,
+            // App 也不会看到一串没有按下的侧键拖动。
+            if sideButtonController.isHolding(button: event.getIntegerValueField(.mouseEventButtonNumber)) {
+                event.type = .mouseMoved
+                event.setIntegerValueField(.mouseEventButtonNumber, value: 0)
+                event.setDoubleValueField(.mouseEventPressure, value: 0)
             }
             return Unmanaged.passUnretained(event)
 
@@ -889,6 +915,30 @@ final class EventTapManager: @unchecked Sendable {
             }
         }
         return pairs
+    }
+
+    /// 鼠标侧键翻页(手势模块)。返回是否吞掉事件。tap 线程。
+    private func handleSideButton(type: CGEventType, event: CGEvent) -> Bool {
+        let button = event.getIntegerValueField(.mouseEventButtonNumber)
+        guard type == .otherMouseDown else {
+            return sideButtonController.release(button: button)
+        }
+        guard gesturesEnabledForTap, !gestureEngine.isHandlingRightMouse else { return false }
+        let targetPID = pid_t(event.getIntegerValueField(.eventTargetUnixProcessID))
+        // 点在 Velto 自己的窗口上(录鼠标按键等)放行原始侧键;事件没带目标进程时按前台判断。
+        let onSelf = targetPID > 1
+            ? targetPID == ProcessInfo.processInfo.processIdentifier
+            : selfIsFrontmostForTap
+        guard !onSelf, let shortcut = sideButtonController.press(button: button) else { return false }
+        if DebugLog.isEnabled {
+            DebugLog.event("sideButton", [
+                "button": Double(button),
+                "shortcut": shortcut.displayName,
+                "targetPID": Double(targetPID)
+            ])
+        }
+        gestureEngine.executeSideButtonShortcut(shortcut, at: event.location, targetPID: targetPID)
+        return true
     }
 
     private func isInRightClickPassThrough(_ event: CGEvent) -> Bool {

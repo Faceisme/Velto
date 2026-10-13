@@ -223,6 +223,23 @@ struct GesturesPage: View {
                 }
             }
 
+            SettingsSection("鼠标侧键") {
+                SettingsRow(
+                    "侧键翻页",
+                    subtitle: "按鼠标侧面的后退键 / 前进键发送下面的按键,清空的键保持原样。",
+                    isOn: pref(\.gestureSideButtons.enabled)
+                )
+                Group {
+                    SettingsRow(title: "后退键") {
+                        ShortcutField(shortcut: pref(\.gestureSideButtons.back))
+                    }
+                    SettingsRow(title: "前进键") {
+                        ShortcutField(shortcut: pref(\.gestureSideButtons.forward))
+                    }
+                }
+                .disabled(!store.preferences.gestureSideButtons.enabled)
+            }
+
             DebugSection(
                 isOn: pref(\.debugLoggingEnabled),
                 logURL: DebugLog.fileURL,

@@ -54,6 +54,23 @@ enum GestureTargetPolicy: String, Codable, Equatable {
     case activeWindow
 }
 
+/// 鼠标侧键:后退键 / 前进键各发一个按键(默认 PageUp / PageDown)。归手势模块,
+/// 受手势总开关门控。快捷键为 nil 的那颗键不接管,原样透传给 App。
+/// 用合成的 Codable:用户清空的键编码时省略,解码回 nil,不会被默认值顶回去。
+struct GestureSideButtonPreferences: Codable, Equatable {
+    var enabled: Bool
+    /// 后退键(靠手腕那颗,CGEvent 按钮号 3)。
+    var back: Shortcut?
+    /// 前进键(靠指尖那颗,CGEvent 按钮号 4)。
+    var forward: Shortcut?
+
+    static let defaults = GestureSideButtonPreferences(
+        enabled: true,
+        back: Shortcut(keyCode: VirtualKeyCode.pageUp, modifierFlags: 0, displayName: "PageUp"),
+        forward: Shortcut(keyCode: VirtualKeyCode.pageDown, modifierFlags: 0, displayName: "PageDown")
+    )
+}
+
 struct AppPreferences: Codable, Equatable {
     var gesturesEnabled: Bool
     /// 窗口管理(拖窗 / 内容缩放 / 窗口快捷键)总开关。关掉只停这三项,不影响手势 /
@@ -74,6 +91,8 @@ struct AppPreferences: Codable, Equatable {
     /// ~/Library/Logs/Velto/,便于排查与迭代;关闭时几乎零开销。
     var debugLoggingEnabled: Bool
     var gestureTargetPolicy: GestureTargetPolicy
+    /// 鼠标侧键翻页。带默认值,旧配置(无此字段)解码时回退到 `.defaults`。
+    var gestureSideButtons: GestureSideButtonPreferences = .defaults
     var windowMoveModifierFlags: UInt64
     var windowResizeModifierFlags: UInt64
     var contentZoomModifierFlags: UInt64
@@ -137,6 +156,7 @@ struct AppPreferences: Codable, Equatable {
         scribbleCancelEnabled = try container.decodeIfPresent(Bool.self, forKey: .scribbleCancelEnabled) ?? Self.defaults.scribbleCancelEnabled
         debugLoggingEnabled = try container.decodeIfPresent(Bool.self, forKey: .debugLoggingEnabled) ?? Self.defaults.debugLoggingEnabled
         gestureTargetPolicy = try container.decodeIfPresent(GestureTargetPolicy.self, forKey: .gestureTargetPolicy) ?? Self.defaults.gestureTargetPolicy
+        gestureSideButtons = try container.decodeIfPresent(GestureSideButtonPreferences.self, forKey: .gestureSideButtons) ?? Self.defaults.gestureSideButtons
         windowMoveModifierFlags = try container.decodeIfPresent(UInt64.self, forKey: .windowMoveModifierFlags) ?? Self.defaults.windowMoveModifierFlags
         windowResizeModifierFlags = try container.decodeIfPresent(UInt64.self, forKey: .windowResizeModifierFlags) ?? Self.defaults.windowResizeModifierFlags
         contentZoomModifierFlags = try container.decodeIfPresent(UInt64.self, forKey: .contentZoomModifierFlags) ?? Self.defaults.contentZoomModifierFlags
@@ -238,6 +258,8 @@ enum VirtualKeyCode {
     static let t: UInt16 = 17
     static let leftBracket: UInt16 = 33
     static let rightBracket: UInt16 = 30
+    static let pageUp: UInt16 = 116
+    static let pageDown: UInt16 = 121
 }
 
 extension CGEventFlags {

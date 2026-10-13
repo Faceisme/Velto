@@ -362,6 +362,31 @@ final class GestureEngine: @unchecked Sendable {
         }
     }
 
+    // MARK: - Mouse side buttons (tap thread)
+
+    /// 侧键按下后发按键,沿用手势的「作用目标」设置。光标下就是前台 App(或策略是活动
+    /// 窗口)时在 tap 线程直接发:翻页常连按,走 AX 定位那条路会被「新的一次顶掉旧的」
+    /// 丢键,也多一跳延迟。光标停在后台 App 上才走手势同款定位,先把那个窗口拱到前台。
+    /// `targetPID` ≤ 1 表示事件没带目标进程,按前台处理。
+    func executeSideButtonShortcut(_ shortcut: Shortcut, at point: CGPoint, targetPID: pid_t) {
+        let policy = preferences.gestureTargetPolicy
+        let frontmostApplication = lastFrontmostApplication
+        if policy == .activeWindow
+            || targetPID <= 1
+            || targetPID == frontmostApplication?.processIdentifier {
+            ShortcutSynthesizer.send(shortcut)
+            return
+        }
+        Task { @MainActor [weak self] in
+            self?.resolveTargetAndExecute(
+                shortcut: shortcut,
+                targetPoint: point,
+                policy: policy,
+                frontmostApplicationAtGestureStart: frontmostApplication
+            )
+        }
+    }
+
     // MARK: - Gesture matching (main actor only)
 
     /// 匹配 + 执行链路全部在主线程上跑。`recognizer` 是 `@MainActor`,target
