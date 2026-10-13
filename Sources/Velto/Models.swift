@@ -71,6 +71,34 @@ struct GestureSideButtonPreferences: Codable, Equatable {
     )
 }
 
+/// 某个 App 专属的一套手势。手势目标(按「手势作用目标」取光标下 / 活动窗口)落在这个
+/// App 上时,先匹配这一套;`includesGlobalGestures` 开着时全局手势也参与,同形状的以
+/// 本 App 的为准(见 `GestureAppScope`)。
+struct GestureAppProfile: Codable, Identifiable, Equatable {
+    var id: UUID
+    var bundleIdentifier: String
+    var displayName: String
+    var path: String
+    var includesGlobalGestures: Bool
+    var gestures: [GestureCommand]
+
+    init(
+        id: UUID = UUID(),
+        bundleIdentifier: String,
+        displayName: String,
+        path: String,
+        includesGlobalGestures: Bool = true,
+        gestures: [GestureCommand] = []
+    ) {
+        self.id = id
+        self.bundleIdentifier = bundleIdentifier
+        self.displayName = displayName
+        self.path = path
+        self.includesGlobalGestures = includesGlobalGestures
+        self.gestures = gestures
+    }
+}
+
 struct AppPreferences: Codable, Equatable {
     var gesturesEnabled: Bool
     /// 窗口管理(拖窗 / 内容缩放 / 窗口快捷键)总开关。关掉只停这三项,不影响手势 /
@@ -194,6 +222,8 @@ struct VeltoBackupFile: Codable {
     var appName: String
     var exportedAt: Date
     var gestures: [GestureCommand]
+    /// 按 App 的手势。旧备份没有这个字段(nil),导入时保留当前的,不清空。
+    var gestureAppProfiles: [GestureAppProfile]?
     var preferences: AppPreferences
     var betterFinderPreferences: BetterFinderPreferences?
     var keyRemapRules: [KeyRemapRule]?
@@ -201,6 +231,7 @@ struct VeltoBackupFile: Codable {
 
     init(
         gestures: [GestureCommand],
+        gestureAppProfiles: [GestureAppProfile]? = nil,
         preferences: AppPreferences,
         betterFinderPreferences: BetterFinderPreferences? = nil,
         keyRemapRules: [KeyRemapRule]? = nil,
@@ -210,6 +241,7 @@ struct VeltoBackupFile: Codable {
         appName = "Velto"
         exportedAt = Date()
         self.gestures = gestures
+        self.gestureAppProfiles = gestureAppProfiles
         self.preferences = preferences
         self.betterFinderPreferences = betterFinderPreferences
         self.keyRemapRules = keyRemapRules
@@ -277,6 +309,7 @@ final class GestureStore {
     static let shared = GestureStore()
 
     private let gesturesKey = "Velto.gestures"
+    private let appProfilesKey = "Velto.gestureAppProfiles"
     private let preferencesKey = "Velto.preferences"
     // `Notification` 的 userInfo 是字符串 key 的 dictionary,extension 上的
     // accessor 必须 nonisolated 才能从任意 actor 读取。
@@ -285,8 +318,10 @@ final class GestureStore {
     private let decoder = JSONDecoder()
 
     private(set) var gestures: [GestureCommand]
+    /// 按 App 的手势,和全局 `gestures` 一起由手势页保存、共用 `gesturesVersion`。
+    private(set) var appProfiles: [GestureAppProfile]
     private(set) var preferences: AppPreferences
-    /// Monotonically incrementing version, bumped every time `gestures` changes.
+    /// Monotonically incrementing version, bumped every time `gestures` or `appProfiles` changes.
     /// Consumers (e.g. GestureRecognizer) use this as a cheap O(1) cache key
     /// instead of doing a deep `==` comparison on the gesture list.
     private(set) var gesturesVersion: UInt64 = 0
@@ -297,6 +332,11 @@ final class GestureStore {
             key: gesturesKey,
             decoder: decoder
         ) ?? Self.defaultGestures()
+        appProfiles = Self.load(
+            [GestureAppProfile].self,
+            key: appProfilesKey,
+            decoder: decoder
+        ) ?? []
         preferences = Self.load(
             AppPreferences.self,
             key: preferencesKey,
@@ -311,8 +351,9 @@ final class GestureStore {
     /// 返回是否成功写盘。失败时内存状态仍已更新并通知(本次会话有效),但调用方应
     /// 据此提示用户"重启后会丢失",而不是像以前那样静默吞掉、UI 仍显示已保存。
     @discardableResult
-    func updateGestures(_ update: (inout [GestureCommand]) -> Void) -> Bool {
-        update(&gestures)
+    func saveGestureSets(global: [GestureCommand], appProfiles: [GestureAppProfile]) -> Bool {
+        gestures = global
+        self.appProfiles = appProfiles
         gesturesVersion &+= 1
         let persisted = saveGestures()
         notifyChanged(reason: .gestures)
@@ -329,6 +370,7 @@ final class GestureStore {
     func exportBackupData() throws -> Data {
         let backup = VeltoBackupFile(
             gestures: gestures,
+            gestureAppProfiles: appProfiles,
             preferences: preferences,
             betterFinderPreferences: BetterFinderPreferencesStore.shared.preferences,
             keyRemapRules: KeyRemapStore.shared.rules,
@@ -353,6 +395,9 @@ final class GestureStore {
         }
 
         gestures = backup.gestures
+        if let profiles = backup.gestureAppProfiles {
+            appProfiles = profiles
+        }
         preferences = backup.preferences
         if let betterFinderPreferences = backup.betterFinderPreferences {
             BetterFinderPreferencesStore.shared.replace(with: betterFinderPreferences)
@@ -370,10 +415,13 @@ final class GestureStore {
         notifyChanged(reason: .backupImport)
     }
 
+    /// 全局手势和按 App 的手势一起写。
     @discardableResult
     private func saveGestures() -> Bool {
-        guard let data = try? encoder.encode(gestures) else { return false }
+        guard let data = try? encoder.encode(gestures),
+              let profilesData = try? encoder.encode(appProfiles) else { return false }
         UserDefaults.standard.set(data, forKey: gesturesKey)
+        UserDefaults.standard.set(profilesData, forKey: appProfilesKey)
         return true
     }
 

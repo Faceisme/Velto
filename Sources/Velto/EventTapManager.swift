@@ -191,6 +191,7 @@ final class EventTapManager: @unchecked Sendable {
         self.gestureEngine = GestureEngine(
             preferences: store.preferences,
             gestures: store.gestures,
+            appProfiles: store.appProfiles,
             gesturesVersion: store.gesturesVersion
         )
         applyPreferenceSnapshots(store.preferences)
@@ -243,6 +244,7 @@ final class EventTapManager: @unchecked Sendable {
                 guard let self else { return }
                 let preferences = store.preferences
                 let gestures = store.gestures
+                let appProfiles = store.appProfiles
                 let version = store.gesturesVersion
                 self.applyPreferenceSnapshots(preferences)
                 // 强制英文标点是全局开关,偏好一变立刻同步快照。
@@ -253,7 +255,7 @@ final class EventTapManager: @unchecked Sendable {
                     self?.windowManagementEnabledForTap = preferences.windowManagementEnabled
                     self?.sideButtonController.updatePreferences(preferences.gestureSideButtons)
                     self?.gestureEngine.updatePreferences(preferences)
-                    self?.gestureEngine.updateGestures(gestures, version: version)
+                    self?.gestureEngine.updateGestures(gestures, appProfiles: appProfiles, version: version)
                     self?.inputSourcePunctuationController.setActive(punctuationActive)
                     self?.inputSourcePunctuationController.setCurrentInputSourceIsCJKV(punctuationSnapshot.isCJKV)
                     self?.inputSourcePunctuationController.setCurrentInputSourceProcessID(punctuationSnapshot.imePID)

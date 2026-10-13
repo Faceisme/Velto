@@ -48,6 +48,7 @@ final class GestureEngine: @unchecked Sendable {
 
     private var preferences: PreferencesSnapshot
     private var gestures: [GestureCommand] = []
+    private var appProfiles: [GestureAppProfile] = []
     private var gesturesVersion: UInt64 = 0
 
     private var state: InputState = .idle
@@ -87,6 +88,10 @@ final class GestureEngine: @unchecked Sendable {
 
     private var frontmostApplicationAtGestureStart: NSRunningApplication?
     private var lastFrontmostApplication: NSRunningApplication?
+    /// 起手那个 rightMouseDown 上光标下的窗口号 / 目标进程。松手匹配时据此判定手势落在
+    /// 哪个 App,挑那个 App 的手势。只记两个整数,归属查询留到主线程的匹配阶段再做。
+    private var windowNumberAtGestureStart: Int64 = 0
+    private var targetPIDAtGestureStart: pid_t = 0
 
     private var gestureTimeoutTimer: CFRunLoopTimer?
     private var safetyTimer: CFRunLoopTimer?
@@ -137,9 +142,15 @@ final class GestureEngine: @unchecked Sendable {
     /// `@MainActor` — 内部要构造 `GestureRecognizer` / `GestureOverlayController`,
     /// 两者都是 `@MainActor`。调用方 (`EventTapManager.init`) 已经在 main actor 上。
     @MainActor
-    init(preferences: AppPreferences, gestures: [GestureCommand], gesturesVersion: UInt64) {
+    init(
+        preferences: AppPreferences,
+        gestures: [GestureCommand],
+        appProfiles: [GestureAppProfile],
+        gesturesVersion: UInt64
+    ) {
         self.preferences = PreferencesSnapshot(from: preferences)
         self.gestures = gestures
+        self.appProfiles = appProfiles
         self.gesturesVersion = gesturesVersion
         self.lastFrontmostApplication = NSWorkspace.shared.frontmostApplication
         self.recognizer = GestureRecognizer()
@@ -164,8 +175,9 @@ final class GestureEngine: @unchecked Sendable {
         self.preferences = PreferencesSnapshot(from: preferences)
     }
 
-    func updateGestures(_ gestures: [GestureCommand], version: UInt64) {
+    func updateGestures(_ gestures: [GestureCommand], appProfiles: [GestureAppProfile], version: UInt64) {
         self.gestures = gestures
+        self.appProfiles = appProfiles
         self.gesturesVersion = version
     }
 
@@ -212,6 +224,8 @@ final class GestureEngine: @unchecked Sendable {
         state = .pending
         pendingRightMouseDown = originalEvent?.copy()
         frontmostApplicationAtGestureStart = lastFrontmostApplication ?? NSWorkspace.shared.frontmostApplication
+        windowNumberAtGestureStart = originalEvent?.getIntegerValueField(.mouseEventWindowUnderMousePointer) ?? 0
+        targetPIDAtGestureStart = originalEvent.map { pid_t($0.getIntegerValueField(.eventTargetUnixProcessID)) } ?? 0
         startPoint = location
         lastPoint = location
         points = [location]
@@ -307,8 +321,11 @@ final class GestureEngine: @unchecked Sendable {
             let capturedPoints = points
             let capturedTargetPoint = startPoint
             let capturedFrontmostApplication = frontmostApplicationAtGestureStart
+            let capturedWindowNumber = windowNumberAtGestureStart
+            let capturedTargetPID = targetPIDAtGestureStart
             let capturedVersion = gesturesVersion
             let capturedGestures = gestures
+            let capturedAppProfiles = appProfiles
             let capturedPreferences = preferences
             let capturedDebugSeq = debugSeq
             let releasePoint = location
@@ -333,7 +350,10 @@ final class GestureEngine: @unchecked Sendable {
                     points: capturedPoints,
                     targetPoint: capturedTargetPoint,
                     frontmostApplicationAtGestureStart: capturedFrontmostApplication,
+                    windowNumberAtGestureStart: capturedWindowNumber,
+                    targetPIDAtGestureStart: capturedTargetPID,
                     gestures: capturedGestures,
+                    appProfiles: capturedAppProfiles,
                     gesturesVersion: capturedVersion,
                     preferences: capturedPreferences,
                     debugSeq: capturedDebugSeq
@@ -397,13 +417,28 @@ final class GestureEngine: @unchecked Sendable {
         points: [CGPoint],
         targetPoint: CGPoint,
         frontmostApplicationAtGestureStart: NSRunningApplication?,
+        windowNumberAtGestureStart: Int64,
+        targetPIDAtGestureStart: pid_t,
         gestures: [GestureCommand],
+        appProfiles: [GestureAppProfile],
         gesturesVersion: UInt64,
         preferences: PreferencesSnapshot,
         debugSeq: Int?
     ) {
         let threshold = CGFloat(preferences.recognitionThreshold)
-        let candidates = recognizer.bestCandidates(points: points, commands: gestures, version: gesturesVersion)
+        // 没配按 App 的手势就不必查手势落在哪个 App(省一次窗口归属查询)。
+        let profile: GestureAppProfile? = appProfiles.isEmpty ? nil : GestureAppScope
+            .targetBundleIdentifier(
+                policy: preferences.gestureTargetPolicy,
+                windowNumber: windowNumberAtGestureStart,
+                targetPID: targetPIDAtGestureStart,
+                frontmostApplication: frontmostApplicationAtGestureStart
+            )
+            .flatMap { bundleID in appProfiles.first { $0.bundleIdentifier == bundleID } }
+        let commands = GestureAppScope.effectiveGestures(global: gestures, profile: profile) {
+            recognizer.signature(for: $0, version: gesturesVersion)
+        }
+        let candidates = recognizer.bestCandidates(points: points, commands: commands, version: gesturesVersion)
         let best = candidates?.best
         let runnerUp = candidates?.runnerUpDistance
 
@@ -424,11 +459,12 @@ final class GestureEngine: @unchecked Sendable {
             let candidate = GestureDirection.signature(from: points)
             let drawn = GestureDirection.displayString(candidate)
             let bestSeq = best.map { match -> String in
-                let sig = recognizer.canonicalSignature(for: match.command)
+                let sig = recognizer.signature(for: match.command, version: gesturesVersion)
                 return GestureDirection.displayString(sig)
             } ?? ""
             DebugLog.event("match", [
                 "seq": debugSeq,
+                "app": profile?.displayName ?? "<全局>",
                 "drawn": drawn,
                 "best": best?.command.name ?? "<无候选>",
                 "bestSeq": bestSeq,
@@ -683,6 +719,8 @@ final class GestureEngine: @unchecked Sendable {
         points = []
         displayPoints = []
         frontmostApplicationAtGestureStart = nil
+        windowNumberAtGestureStart = 0
+        targetPIDAtGestureStart = 0
         startPoint = .zero
         lastPoint = .zero
         lastArmedLocation = .zero

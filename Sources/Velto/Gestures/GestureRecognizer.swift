@@ -25,15 +25,12 @@ struct GestureCandidates: Sendable {
 /// 发生(`GestureEngine.runGesture` 经 `Task { @MainActor }` 进入)。
 @MainActor
 final class GestureRecognizer {
-    private struct CommandSignature {
-        let command: GestureCommand
-        /// 该命令的规范签名(众数)。可能为空(样本全部太短)。
-        let signature: GestureDirection.Signature
-    }
-
-    /// 上次构建缓存所依据的 `GestureStore.gesturesVersion`,`nil` 表示缓存已失效。
+    /// 上次构建缓存所依据的 `GestureStore.gesturesVersion`,版本一变整张表作废。
     private var cachedVersion: UInt64?
-    private var cachedSignatures: [CommandSignature] = []
+    /// 命令 id → 规范签名(众数,可能为空 —— 样本全部太短)。按 id 缓存而不是按整张
+    /// 命令表:每个 App 参与匹配的是不同的子集(App 手势 + 没被覆盖的全局手势),
+    /// 子集各异但同一个命令的签名只算一次。
+    private var cachedSignatures: [UUID: GestureDirection.Signature] = [:]
 
     /// 同时求最近邻 `best` 与次近邻差异度 `runnerUpDistance`(命令 < 2 个时为 nil)。
     /// 调用方据「次近 − 最近」的余量判断手势是否卡在两个命令之间而模糊。
@@ -41,34 +38,27 @@ final class GestureRecognizer {
         let candidate = GestureDirection.signature(from: points)
         guard !candidate.isEmpty else { return nil }
 
-        let ranked = commandSignatures(for: commands, version: version)
-            .filter { !$0.signature.isEmpty }
-            .map { GestureMatch(command: $0.command, distance: GestureDirection.distance(candidate, $0.signature)) }
+        let ranked = commands
+            .map { ($0, signature(for: $0, version: version)) }
+            .filter { !$0.1.isEmpty }
+            .map { GestureMatch(command: $0.0, distance: GestureDirection.distance(candidate, $0.1)) }
             .sorted { $0.distance < $1.distance }
 
         guard let best = ranked.first else { return nil }
         return GestureCandidates(best: best, runnerUpDistance: ranked.count > 1 ? ranked[1].distance : nil)
     }
 
-    /// 单个命令的规范签名。供设置页展示箭头 / 冲突检测、调试日志使用。
-    func canonicalSignature(for command: GestureCommand) -> GestureDirection.Signature {
-        GestureDirection.canonical(for: command.templates.map { $0.map(\.cgPoint) })
-    }
-
-    private func commandSignatures(for commands: [GestureCommand], version: UInt64) -> [CommandSignature] {
-        if cachedVersion == version {
-            return cachedSignatures
+    /// 单个命令的规范签名(走缓存)。供运行时叠加全局 / App 手势、调试日志使用。
+    func signature(for command: GestureCommand, version: UInt64) -> GestureDirection.Signature {
+        if cachedVersion != version {
+            cachedVersion = version
+            cachedSignatures.removeAll(keepingCapacity: true)
         }
-
-        let signatures = commands.map { command in
-            CommandSignature(
-                command: command,
-                signature: GestureDirection.canonical(for: command.templates.map { $0.map(\.cgPoint) })
-            )
+        if let cached = cachedSignatures[command.id] {
+            return cached
         }
-
-        cachedVersion = version
-        cachedSignatures = signatures
-        return signatures
+        let signature = GestureDirection.canonical(for: command.templates.map { $0.map(\.cgPoint) })
+        cachedSignatures[command.id] = signature
+        return signature
     }
 }
