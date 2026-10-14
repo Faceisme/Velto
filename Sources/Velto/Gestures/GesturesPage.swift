@@ -7,7 +7,7 @@ import SwiftUI
 //   手势:左栏「作用范围(全局 / 各 App)+ 这一套的手势列表」| 右栏详情(录制 / 快捷键),
 //         两栏各自滚动;选中某个 App 时左栏再多一组「全局手势」:是否在这个 App 里同时生效、
 //         哪些被专属手势覆盖、一键把形状复制成专属手势。有改动或冲突时底部出现保存栏
-//   设置:行为 / 识别 / 鼠标侧键 / 调试,直接写 store
+//   设置:行为 / 识别 / 调试,直接写 store
 // 手势(全局 + 各 App)整体留草稿:录样本是"编辑文档"式的操作,而且要先过冲突校验才能保存。
 
 struct GesturesPage: View {
@@ -368,23 +368,6 @@ struct GesturesPage: View {
                     .labelsHidden()
                     .fixedSize()
                 }
-            }
-
-            SettingsSection("鼠标侧键") {
-                SettingsRow(
-                    "侧键翻页",
-                    subtitle: "按鼠标侧面的后退键 / 前进键发送下面的按键,清空的键保持原样。",
-                    isOn: pref(\.gestureSideButtons.enabled)
-                )
-                Group {
-                    SettingsRow(title: "后退键") {
-                        ShortcutField(shortcut: pref(\.gestureSideButtons.back))
-                    }
-                    SettingsRow(title: "前进键") {
-                        ShortcutField(shortcut: pref(\.gestureSideButtons.forward))
-                    }
-                }
-                .disabled(!store.preferences.gestureSideButtons.enabled)
             }
 
             DebugSection(
