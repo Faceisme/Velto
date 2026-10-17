@@ -98,3 +98,66 @@ private func movist(includesGlobal: Bool) -> GestureAppProfile {
   #expect(legacy.gestureAppProfiles == nil)
   #expect(legacy.gestures.map(\.id) == [globalBack.id])
 }
+
+// MARK: - 鼠标按钮触发
+
+private let middle = GestureButtonTrigger(button: 2, modifierFlags: 0)
+private let commandMiddle = GestureButtonTrigger(button: 2, modifierFlags: 1 << 20)  // ⌘ + 中键
+private let maximize = GestureCommand(
+  name: "最大化", templates: [], buttonTrigger: middle, shortcut: shortcut(19, "⇧⌘2"))
+private let movistPlay = GestureCommand(
+  name: "播放", templates: [], buttonTrigger: middle, shortcut: shortcut(49, "空格"))
+
+@Test func buttonTriggerDisplay() {
+  #expect(middle.kbdKeys == ["中键"])
+  #expect(commandMiddle.kbdKeys == ["⌘", "中键"])
+  #expect(GestureButtonTrigger(button: 3, modifierFlags: 0).displayName == "后退侧键")
+  #expect(GestureButtonTrigger(button: 6, modifierFlags: 0).displayName == "按钮 7")
+}
+
+@Test func appGestureOverridesSameButtonGlobal() {
+  let overrides = GestureAppScope.overrides(
+    appGestures: [movistPlay], globalGestures: [maximize, globalBack], signature: signature)
+  #expect(overrides == [maximize.id: movistPlay.id])
+}
+
+@Test func buttonMapResolvesPerAppAndGlobal() {
+  let withGlobal = movist(includesGlobal: true)
+  var playOnly = movist(includesGlobal: false)
+  playOnly.bundleIdentifier = "com.example.player"
+  playOnly.gestures = [movistPlay]
+  let map = GestureButtonMap(global: [maximize, globalBack], appProfiles: [withGlobal, playOnly], signature: signature)
+
+  #expect(map.triggers == [middle])
+  // 没配专属手势的 App、或拿不到 App:全局的中键 = 最大化。
+  #expect(map.command(for: middle, bundleID: "com.apple.Safari")?.id == maximize.id)
+  #expect(map.command(for: middle, bundleID: nil)?.id == maximize.id)
+  // Movist 开着全局手势、自己没占中键:沿用全局。
+  #expect(map.command(for: middle, bundleID: "com.example.movist")?.id == maximize.id)
+  // 播放器把中键配成播放:专属的覆盖全局的。
+  #expect(map.command(for: middle, bundleID: "com.example.player")?.id == movistPlay.id)
+  // 修饰键必须完全相同。
+  #expect(map.command(for: commandMiddle, bundleID: nil) == nil)
+}
+
+@Test func buttonMapSkipsGesturesWithoutShortcut() {
+  // 专属手势占了中键却没设快捷键:全局的最大化让位,这个 App 里中键原样放行。
+  var silent = movistPlay
+  silent.shortcut = nil
+  let profile = GestureAppProfile(
+    bundleIdentifier: "com.example.player", displayName: "Player", path: "/Applications/Player.app",
+    gestures: [silent])
+  let map = GestureButtonMap(global: [maximize], appProfiles: [profile], signature: signature)
+  #expect(map.command(for: middle, bundleID: "com.example.player") == nil)
+  #expect(map.command(for: middle, bundleID: "com.apple.Safari")?.id == maximize.id)
+}
+
+@Test func legacyGestureWithoutButtonTriggerDecodes() throws {
+  var json = try JSONSerialization.jsonObject(with: JSONEncoder().encode(globalBack)) as! [String: Any]
+  #expect(json["buttonTrigger"] == nil)  // nil 不编码
+  json.removeValue(forKey: "buttonTrigger")
+  let decoded = try JSONDecoder().decode(GestureCommand.self, from: JSONSerialization.data(withJSONObject: json))
+  #expect(decoded == globalBack)
+  let roundTrip = try JSONDecoder().decode(GestureCommand.self, from: JSONEncoder().encode(maximize))
+  #expect(roundTrip.buttonTrigger == middle)
+}

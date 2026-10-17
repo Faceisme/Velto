@@ -59,8 +59,8 @@ struct GesturesPage: View {
         return result
     }
 
-    /// 同一套里签名差异度过小的手势互相冲突 —— 谁都可能识别不出。返回涉及冲突的全部 id。
-    /// 跨套(App 手势 vs 全局手势)同形状不算冲突,算覆盖。
+    /// 同一套里签名差异度过小(谁都可能识别不出)或鼠标按钮相同(只能触发其一)的手势
+    /// 互相冲突。返回涉及冲突的全部 id。跨套(App 手势 vs 全局手势)相同不算冲突,算覆盖。
     private func conflictSet(in gestures: [GestureCommand], _ signatures: [UUID: GestureDirection.Signature]) -> Set<UUID> {
         let entries = gestures.compactMap { g in signatures[g.id].flatMap { $0.isEmpty ? nil : (g.id, $0) } }
         var conflicting: Set<UUID> = []
@@ -72,33 +72,53 @@ struct GesturesPage: View {
                 }
             }
         }
+        let byButton = Dictionary(grouping: gestures.filter { $0.buttonTrigger != nil }, by: { $0.buttonTrigger! })
+        for group in byButton.values where group.count > 1 {
+            conflicting.formUnion(group.map(\.id))
+        }
         return conflicting
     }
 
+    /// 鼠标控制(全局按钮绑定)已经占用的鼠标按钮。鼠标控制先于手势处理按钮,
+    /// 这些按钮配在手势上不会触发。
+    private var mouseControlButtons: Set<GestureButtonTrigger> {
+        let mouse = store.preferences.mouseControl
+        guard mouse.enabled else { return [] }
+        return Set(mouse.buttonBindings.compactMap { binding in
+            guard binding.isEnabled, binding.trigger.kind == .mouse else { return nil }
+            return GestureButtonTrigger(button: Int(binding.trigger.code), modifierFlags: binding.trigger.modifierFlags)
+        })
+    }
+
     /// 保存前校验,覆盖全局和每个 App 的那一套。`block` 非空时**阻止保存**(同一套里有手势
-    /// 互相重复 —— 存了却谁都不触发,最隐蔽);`warning` 是不阻止保存的提示(半配置手势,
-    /// 有快捷键没样本 / 有样本没快捷键,存下来也不会生效)。App 的手势名前带「App 名 · 」。
+    /// 形状或按钮重复 —— 存了却谁都不触发,最隐蔽);`warning` 是不阻止保存的提示(半配置
+    /// 手势:有快捷键没触发方式 / 有触发方式没快捷键;按钮被鼠标控制占用 —— 存下来也不会
+    /// 生效)。App 的手势名前带「App 名 · 」。
     private func saveValidation(_ signatures: [UUID: GestureDirection.Signature]) -> (block: String?, warning: String?) {
         let sets: [(prefix: String, gestures: [GestureCommand])] =
             [("", draftGlobal)] + draftProfiles.map { ("\($0.displayName) · ", $0.gestures) }
+        let takenByMouseControl = mouseControlButtons
         var conflictNames: [String] = []
         var warnings: [String] = []
         for set in sets {
             let conflicts = conflictSet(in: set.gestures, signatures)
             conflictNames += set.gestures.filter { conflicts.contains($0.id) }.map { set.prefix + $0.name }
             for gesture in set.gestures {
-                let hasTemplate = !(signatures[gesture.id] ?? .empty).isEmpty
+                let hasTrigger = !(signatures[gesture.id] ?? .empty).isEmpty || gesture.buttonTrigger != nil
                 let hasShortcut = gesture.shortcut != nil
-                if hasShortcut, !hasTemplate {
-                    warnings.append("「\(set.prefix)\(gesture.name)」缺少有效样本")
-                } else if hasTemplate, !hasShortcut {
+                if hasShortcut, !hasTrigger {
+                    warnings.append("「\(set.prefix)\(gesture.name)」缺少轨迹样本或鼠标按钮")
+                } else if hasTrigger, !hasShortcut {
                     warnings.append("「\(set.prefix)\(gesture.name)」未设置快捷键")
+                }
+                if let trigger = gesture.buttonTrigger, takenByMouseControl.contains(trigger) {
+                    warnings.append("「\(set.prefix)\(gesture.name)」的\(trigger.displayName)已被鼠标控制占用")
                 }
             }
         }
         let block = conflictNames.isEmpty
             ? nil
-            : "手势重复:\(conflictNames.joined(separator: "、")) —— 改成不同形状后才能保存"
+            : "手势重复:\(conflictNames.joined(separator: "、")) —— 改成不同形状或按钮后才能保存"
         let warning = warnings.isEmpty ? nil : "\(warnings.joined(separator: ";")),不会触发"
         return (block, warning)
     }
@@ -297,7 +317,7 @@ struct GesturesPage: View {
         return SettingsSection("全局手势") {
             SettingsRow(
                 "在 \(profile.displayName) 中同时生效",
-                subtitle: "同形状的以专属手势为准。",
+                subtitle: "同形状或同按钮的以专属手势为准。",
                 isOn: Binding(
                     get: { profile.includesGlobalGestures },
                     set: { v in updateProfile(profile.id) { $0.includesGlobalGestures = v } }
@@ -309,7 +329,7 @@ struct GesturesPage: View {
                     directionArrows: GestureDirection.displayString(signatures[g.id] ?? .empty),
                     active: profile.includesGlobalGestures && overrides[g.id] == nil,
                     overriddenBy: overrides[g.id].flatMap { appNames[$0] },
-                    copyHelp: "复制形状到 \(profile.displayName) 专属手势",
+                    copyHelp: "复制触发方式到 \(profile.displayName) 专属手势",
                     onCopy: { copyGlobalGesture(g) }
                 )
             }
@@ -325,6 +345,7 @@ struct GesturesPage: View {
             GestureDetail(
                 gesture: g,
                 scopeName: profile?.displayName,
+                maximizeShortcut: store.preferences.windowMaximizeShortcut,
                 onDelete: deleteSelectedGesture,
                 updateDraft: updateSelectedDraft
             )
@@ -430,10 +451,16 @@ struct GesturesPage: View {
         selectedID = nextID
     }
 
-    /// 把全局手势的形状复制成当前 App 的专属手势(不带快捷键,等用户设成这个 App 的)。
+    /// 把全局手势的触发方式(轨迹 + 鼠标按钮)复制成当前 App 的专属手势(不带快捷键,
+    /// 等用户设成这个 App 的)。
     private func copyGlobalGesture(_ global: GestureCommand) {
         guard profileIndex != nil else { return }
-        let copy = GestureCommand(name: global.name, templates: global.templates, shortcut: nil)
+        let copy = GestureCommand(
+            name: global.name,
+            templates: global.templates,
+            buttonTrigger: global.buttonTrigger,
+            shortcut: nil
+        )
         editScopeGestures { $0.append(copy) }
         selectedID = copy.id
     }
@@ -548,7 +575,12 @@ private struct GestureRow: View {
                             Text(directionArrows)
                                 .font(.system(size: 12, weight: .semibold))
                         }
-                        Text("\(gesture.templates.count) 个样本")
+                        if !gesture.templates.isEmpty || gesture.buttonTrigger == nil {
+                            Text("\(gesture.templates.count) 个样本")
+                        }
+                        if let trigger = gesture.buttonTrigger {
+                            Text("\(Image(systemName: "computermouse")) \(trigger.displayName)")
+                        }
                         if conflict {
                             Text("冲突")
                                 .foregroundStyle(Color.orange)
@@ -602,6 +634,11 @@ private struct GestureThumbnail: View {
                 // 缩略图只画最后一个样本,免噪
                 GestureTrailView(templates: [last], stroke: 2.5, maxGhosts: 0)
                     .padding(4)
+            } else if gesture.buttonTrigger != nil {
+                // 只用鼠标按钮触发的手势没有轨迹,画个鼠标。
+                Image(systemName: "computermouse")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(Color.mgAccent)
             } else {
                 Image(systemName: "questionmark")
                     .font(.system(size: 11, weight: .medium))
@@ -618,6 +655,8 @@ private struct GestureDetail: View {
     let gesture: GestureCommand
     /// App 专属手势所属 App 的名字;全局手势为 nil。
     let scopeName: String?
+    /// 窗口管理里的「最大化窗口」快捷键,用来提示快捷键也能填 Velto 自己的全局快捷键。
+    let maximizeShortcut: Shortcut?
     let onDelete: () -> Void
     let updateDraft: ((inout GestureCommand) -> Void) -> Void
 
@@ -666,7 +705,7 @@ private struct GestureDetail: View {
                 if editing { DispatchQueue.main.async { nameFocused = true } }
             }
 
-            SettingsSection("录制") {
+            SettingsSection("轨迹") {
                 // 画布画已存的样本;上面叠一层透明的录制视图截右键拖动,松手追加一个样本。
                 GesturePreviewCard(templates: gesture.templates) {
                     GestureCaptureRepresentable { points in
@@ -685,8 +724,17 @@ private struct GestureDetail: View {
                 }
             }
 
+            SettingsSection("鼠标按钮") {
+                SettingsRow(title: "按下触发", subtitle: "中键、侧键等,可带修饰键;和轨迹任设其一或都设。") {
+                    ShortcutField(buttonTrigger: Binding(
+                        get: { gesture.buttonTrigger },
+                        set: { v in updateDraft { $0.buttonTrigger = v } }
+                    ))
+                }
+            }
+
             SettingsSection("快捷键") {
-                SettingsRow(title: "触发") {
+                SettingsRow(title: "发送", subtitle: shortcutHint) {
                     ShortcutField(shortcut: Binding(
                         get: { gesture.shortcut },
                         set: { v in updateDraft { $0.shortcut = v } }
@@ -694,6 +742,10 @@ private struct GestureDetail: View {
                 }
             }
         }
+    }
+
+    private var shortcutHint: String? {
+        maximizeShortcut.map { "也可填 Velto 自己的快捷键,如最大化窗口 \($0.displayName)" }
     }
 
     private var displayName: String {
@@ -777,6 +829,9 @@ private struct InheritedGestureRow: View {
                         Text(directionArrows)
                             .font(.system(size: 12, weight: .semibold))
                     }
+                    if let trigger = gesture.buttonTrigger {
+                        Text("\(Image(systemName: "computermouse")) \(trigger.displayName)")
+                    }
                     if let overriddenBy {
                         Text("被「\(overriddenBy)」覆盖")
                             .foregroundStyle(Color.orange)
@@ -796,7 +851,7 @@ private struct InheritedGestureRow: View {
             }
             .buttonStyle(.borderless)
             .foregroundStyle(Color.mgAccent)
-            .disabled(gesture.templates.isEmpty)
+            .disabled(gesture.templates.isEmpty && gesture.buttonTrigger == nil)
             .help(copyHelp)
         }
         .padding(.horizontal, 16)

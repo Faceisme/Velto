@@ -186,6 +186,7 @@ final class EventTapManager: @unchecked Sendable {
             preferences: store.preferences,
             gestures: store.gestures,
             appProfiles: store.appProfiles,
+            buttonMap: Self.buttonMap(for: store),
             gesturesVersion: store.gesturesVersion
         )
         applyPreferenceSnapshots(store.preferences)
@@ -235,6 +236,7 @@ final class EventTapManager: @unchecked Sendable {
                 let preferences = store.preferences
                 let gestures = store.gestures
                 let appProfiles = store.appProfiles
+                let buttonMap = Self.buttonMap(for: store)
                 let version = store.gesturesVersion
                 self.applyPreferenceSnapshots(preferences)
                 // 强制英文标点是全局开关,偏好一变立刻同步快照。
@@ -244,7 +246,8 @@ final class EventTapManager: @unchecked Sendable {
                     self?.gesturesEnabledForTap = preferences.gesturesEnabled
                     self?.windowManagementEnabledForTap = preferences.windowManagementEnabled
                     self?.gestureEngine.updatePreferences(preferences)
-                    self?.gestureEngine.updateGestures(gestures, appProfiles: appProfiles, version: version)
+                    self?.gestureEngine.updateGestures(
+                        gestures, appProfiles: appProfiles, buttonMap: buttonMap, version: version)
                     self?.inputSourcePunctuationController.setActive(punctuationActive)
                     self?.inputSourcePunctuationController.setCurrentInputSourceIsCJKV(punctuationSnapshot.isCJKV)
                     self?.inputSourcePunctuationController.setCurrentInputSourceProcessID(punctuationSnapshot.imePID)
@@ -592,12 +595,31 @@ final class EventTapManager: @unchecked Sendable {
                 : Unmanaged.passUnretained(event)
 
         case .leftMouseDown, .leftMouseUp, .otherMouseDown, .otherMouseUp:
+            // 鼠标控制里显式绑的按钮优先,手势的鼠标按钮触发排在它后面。
             if mouseControlController.handleTriggerEvent(type: type, event: event, normalizedFlags: raw) {
+                return nil
+            }
+            if type == .otherMouseDown, gesturesEnabledForTap,
+               gestureEngine.handleButtonTriggerDown(event: event, normalizedFlags: raw) {
+                return nil
+            }
+            if type == .otherMouseUp,
+               gestureEngine.handleButtonTriggerUp(button: event.getIntegerValueField(.mouseEventButtonNumber)) {
                 return nil
             }
             // 透传到 App 的鼠标按下会提交/取消 IME 组字,强制英文标点的组字推演跟着归零。
             if type == .leftMouseDown || type == .otherMouseDown {
                 inputSourcePunctuationController.noteMouseDown()
+            }
+            return Unmanaged.passUnretained(event)
+
+        case .otherMouseDragged:
+            // 按钮触发吞了 down,按住拖动同右键手势一样降级成 mouseMoved 透传:光标照常
+            // 跟手,App 也不会看到一串没有按下的按钮拖动。
+            if gestureEngine.isHoldingTriggerButton(event.getIntegerValueField(.mouseEventButtonNumber)) {
+                event.type = .mouseMoved
+                event.setIntegerValueField(.mouseEventButtonNumber, value: 0)
+                event.setDoubleValueField(.mouseEventPressure, value: 0)
             }
             return Unmanaged.passUnretained(event)
 
@@ -641,8 +663,15 @@ final class EventTapManager: @unchecked Sendable {
 
         case .keyDown:
             let kdUserData = event.getIntegerValueField(.eventSourceUserData)
-            if kdUserData == ShortcutSynthesizer.syntheticEventMarker
-                || kdUserData == InputSourcePunctuationController.syntheticEventMarker
+            if kdUserData == ShortcutSynthesizer.syntheticEventMarker {
+                // 手势 / 鼠标绑定发出的快捷键可能正是 Velto 自己的全局快捷键(如窗口管理的
+                // 最大化窗口),交给这几个处理器。它们只执行动作、不再合成按键,不会回环;
+                // 按键映射、强制标点等改写类处理照旧跳过。
+                return handleOwnGlobalShortcut(event: event, normalizedFlags: raw)
+                    ? nil
+                    : Unmanaged.passUnretained(event)
+            }
+            if kdUserData == InputSourcePunctuationController.syntheticEventMarker
                 || InputSourceSwitchSelector.isSyntheticEvent(event) {
                 return Unmanaged.passUnretained(event)
             }
@@ -891,6 +920,27 @@ final class EventTapManager: @unchecked Sendable {
             }
         }
         return pairs
+    }
+
+    /// Velto 自己的全局快捷键(增强 Finder / 截图 / 窗口管理),供合成的快捷键复用。
+    /// 顺序与真实按键路径一致;窗口快捷键受窗口管理总开关门控。
+    private func handleOwnGlobalShortcut(event: CGEvent, normalizedFlags raw: UInt64) -> Bool {
+        if betterFinderShortcutController.handleKeyDown(event: event, normalizedFlags: raw) {
+            return true
+        }
+        if screenshotShortcutController.handleKeyDown(event: event, normalizedFlags: raw) {
+            return true
+        }
+        return windowManagementEnabledForTap
+            && windowShortcutController.handleKeyDown(event: event, normalizedFlags: raw)
+    }
+
+    /// 鼠标按钮触发的查找表。主线程构建(覆盖判定要算轨迹签名),再交给 tap 线程。
+    @MainActor
+    private static func buttonMap(for store: GestureStore) -> GestureButtonMap {
+        GestureButtonMap(global: store.gestures, appProfiles: store.appProfiles) {
+            GestureDirection.canonical(for: $0.templates.map { $0.map(\.cgPoint) })
+        }
     }
 
     private func isInRightClickPassThrough(_ event: CGEvent) -> Bool {

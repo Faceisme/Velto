@@ -239,3 +239,97 @@ struct ModifierRecorderField: View {
         isRecording = false
     }
 }
+
+// MARK: - MouseButtonRecorderField (SwiftUI)
+//
+// 录一个鼠标按钮触发(中键 / 侧键…,可带修饰键),给手势的「鼠标按钮」用。点击进入
+// 录制态后按下鼠标按钮即录入(按下时按着的修饰键一并记下);Esc 取消;左右键点击退出
+// 录制并照常放行(左右键不能作触发:左键是日常点击,右键归画手势);窗口失焦 / app
+// 失活也退出。按钮能走到这里,是因为 tap 对落在 Velto 自己窗口上的按钮一律放行。
+
+struct MouseButtonRecorderField: View {
+    @Binding var trigger: GestureButtonTrigger?
+    var placeholder: String = "点击录制"
+
+    @State private var isRecording = false
+    @State private var monitor: Any?
+    @State private var resignObservers: [NSObjectProtocol] = []
+
+    var body: some View {
+        Button {
+            if !isRecording { beginRecording() }
+        } label: {
+            HStack(spacing: 8) {
+                if isRecording {
+                    Text("按下鼠标按钮…")
+                        .font(.mgMeta)
+                        .foregroundStyle(Color.mgAccent)
+                } else if let trigger {
+                    Kbd(keys: trigger.kbdKeys, size: .sm)
+                } else {
+                    Text(placeholder)
+                        .font(.mgMeta)
+                        .foregroundStyle(Color.mgText3)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .preference(key: RecordingKey.self, value: isRecording)
+        .onDisappear { endRecording() }
+    }
+
+    private func beginRecording() {
+        guard monitor == nil else { return }
+        isRecording = true
+        monitor = NSEvent.addLocalMonitorForEvents(
+            matching: [.otherMouseDown, .leftMouseDown, .rightMouseDown, .keyDown]
+        ) { event in
+            switch event.type {
+            case .otherMouseDown where event.buttonNumber >= GestureButtonTrigger.minimumButton:
+                trigger = GestureButtonTrigger(
+                    button: event.buttonNumber,
+                    modifierFlags: ModifierFormatter.normalizedRawValue(from: event.modifierFlags)
+                )
+                endRecording()
+                return nil
+            case .keyDown:
+                // 录制中吞掉按键;Esc 取消。
+                if event.keyCode == VirtualKeyCode.escape { endRecording() }
+                return nil
+            default:
+                endRecording()
+                return event
+            }
+        }
+
+        let nc = NotificationCenter.default
+        let o1 = nc.addObserver(forName: NSWindow.didResignKeyNotification, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { endRecording() }
+        }
+        let o2 = nc.addObserver(forName: NSApplication.didResignActiveNotification, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { endRecording() }
+        }
+        resignObservers = [o1, o2]
+    }
+
+    private func endRecording() {
+        if let monitor {
+            NSEvent.removeMonitor(monitor)
+            self.monitor = nil
+        }
+        for observer in resignObservers {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        resignObservers = []
+        isRecording = false
+    }
+}
+
+extension ShortcutField where Recorder == MouseButtonRecorderField {
+    init(buttonTrigger: Binding<GestureButtonTrigger?>) {
+        self.init(hasValue: buttonTrigger.wrappedValue != nil, clear: { buttonTrigger.wrappedValue = nil }) {
+            MouseButtonRecorderField(trigger: buttonTrigger, placeholder: "点击录制")
+        }
+    }
+}

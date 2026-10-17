@@ -50,6 +50,10 @@ final class GestureEngine: @unchecked Sendable {
     private var gestures: [GestureCommand] = []
     private var appProfiles: [GestureAppProfile] = []
     private var gesturesVersion: UInt64 = 0
+    /// 鼠标按钮触发的查找表(主线程随手势保存构建,见 `GestureButtonMap`)。
+    private var buttonMap = GestureButtonMap.empty
+    /// 按下时被按钮触发吞掉、还没抬起的按钮号;对应的 dragged / up 也要一并认领。
+    private var heldTriggerButtons: Set<Int64> = []
 
     private var state: InputState = .idle
     private var points: [CGPoint] = []
@@ -146,11 +150,13 @@ final class GestureEngine: @unchecked Sendable {
         preferences: AppPreferences,
         gestures: [GestureCommand],
         appProfiles: [GestureAppProfile],
+        buttonMap: GestureButtonMap,
         gesturesVersion: UInt64
     ) {
         self.preferences = PreferencesSnapshot(from: preferences)
         self.gestures = gestures
         self.appProfiles = appProfiles
+        self.buttonMap = buttonMap
         self.gesturesVersion = gesturesVersion
         self.lastFrontmostApplication = NSWorkspace.shared.frontmostApplication
         self.recognizer = GestureRecognizer()
@@ -175,9 +181,15 @@ final class GestureEngine: @unchecked Sendable {
         self.preferences = PreferencesSnapshot(from: preferences)
     }
 
-    func updateGestures(_ gestures: [GestureCommand], appProfiles: [GestureAppProfile], version: UInt64) {
+    func updateGestures(
+        _ gestures: [GestureCommand],
+        appProfiles: [GestureAppProfile],
+        buttonMap: GestureButtonMap,
+        version: UInt64
+    ) {
         self.gestures = gestures
         self.appProfiles = appProfiles
+        self.buttonMap = buttonMap
         self.gesturesVersion = version
     }
 
@@ -199,6 +211,8 @@ final class GestureEngine: @unchecked Sendable {
     /// `.gesturing` / `.pending` 半路,之后每个新手势都会把它判为 abandoned、连环失灵。
     /// 这里强制收尾回到 idle(不执行任何手势)。tap 线程调用。
     func abortForTapRestart() {
+        // 禁用期间按钮的 up 也会丢,清掉记账,免得之后那颗按钮透传时 up 被误吞。
+        heldTriggerButtons.removeAll()
         guard state != .idle else { return }
         if debugThisSession {
             debugTrace.flush(reason: "tapRestart")
@@ -380,6 +394,64 @@ final class GestureEngine: @unchecked Sendable {
         case .idle:
             return false
         }
+    }
+
+    // MARK: - Mouse button triggers (tap thread)
+
+    /// 按下鼠标按钮(中键 / 侧键…):命中某个手势的按钮触发就吞掉并执行它的快捷键,目标
+    /// 窗口与画手势一样按「手势作用目标」定。返回是否吞掉。画手势途中不接管。
+    func handleButtonTriggerDown(event: CGEvent, normalizedFlags: UInt64) -> Bool {
+        guard state == .idle else { return false }
+        let button = event.getIntegerValueField(.mouseEventButtonNumber)
+        guard button >= GestureButtonTrigger.minimumButton else { return false }
+        let trigger = GestureButtonTrigger(button: Int(button), modifierFlags: normalizedFlags)
+        // 快速放行:没有任何作用范围用到这个按钮,就不必查 App 归属。
+        guard buttonMap.triggers.contains(trigger) else { return false }
+
+        let policy = preferences.gestureTargetPolicy
+        let frontmostApplication = lastFrontmostApplication ?? NSWorkspace.shared.frontmostApplication
+        let bundleID = GestureAppScope.targetBundleIdentifier(
+            policy: policy,
+            windowNumber: event.getIntegerValueField(.mouseEventWindowUnderMousePointer),
+            targetPID: pid_t(event.getIntegerValueField(.eventTargetUnixProcessID)),
+            frontmostApplication: frontmostApplication
+        )
+        // 点在 Velto 自己的窗口上(设置页录按钮)放行原始按钮。
+        guard bundleID != Bundle.main.bundleIdentifier,
+              let command = buttonMap.command(for: trigger, bundleID: bundleID),
+              let shortcut = command.shortcut else { return false }
+
+        heldTriggerButtons.insert(button)
+        if DebugLog.isEnabled {
+            DebugLog.event("buttonTrigger", [
+                "button": Double(button),
+                "mods": Double(normalizedFlags),
+                "app": bundleID ?? "",
+                "command": command.name,
+                "shortcut": shortcut.displayName
+            ])
+        }
+        onGestureMatch?(GestureMatch(command: command, distance: 0))
+        let targetPoint = event.location
+        Task { @MainActor [weak self] in
+            self?.resolveTargetAndExecute(
+                shortcut: shortcut,
+                targetPoint: targetPoint,
+                policy: policy,
+                frontmostApplicationAtGestureStart: frontmostApplication
+            )
+        }
+        return true
+    }
+
+    /// 按钮抬起:按下时吞过的才吞。不看开关 —— 按住期间关掉手势,抬起也得一并吞掉,
+    /// 不然 App 会收到一个没有按下的抬起。
+    func handleButtonTriggerUp(button: Int64) -> Bool {
+        heldTriggerButtons.remove(button) != nil
+    }
+
+    func isHoldingTriggerButton(_ button: Int64) -> Bool {
+        heldTriggerButtons.contains(button)
     }
 
     // MARK: - Gesture matching (main actor only)

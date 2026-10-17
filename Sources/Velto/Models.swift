@@ -35,16 +35,62 @@ struct Shortcut: Codable, Equatable {
     }
 }
 
+/// 手势的鼠标按钮触发:按下这个按钮(+ 修饰键)即发手势的快捷键。按钮号同 CGEvent 的
+/// `mouseEventButtonNumber`:2 中键、3 后退侧键、4 前进侧键、5+ 其它按钮。左右键不可用 ——
+/// 左键是日常点击,右键归画手势。
+struct GestureButtonTrigger: Codable, Hashable, Sendable {
+    var button: Int
+    /// 修饰键,`ModifierFormatter.normalizedRawValue` 规整过,判定时要求完全相等。
+    var modifierFlags: UInt64
+
+    /// 可用作触发的最小按钮号(中键)。
+    static let minimumButton = 2
+
+    var buttonName: String {
+        switch button {
+        case 2: "中键"
+        case 3: "后退侧键"
+        case 4: "前进侧键"
+        default: "按钮 \(button + 1)"
+        }
+    }
+
+    /// 键帽式展示:修饰键各一枚 + 按钮名(修饰键顺序同 `Shortcut.kbdKeys`)。
+    var kbdKeys: [String] {
+        let flags = CGEventFlags(rawValue: CGEventFlags.RawValue(modifierFlags))
+        var keys: [String] = []
+        if flags.contains(.maskControl) { keys.append("⌃") }
+        if flags.contains(.maskAlternate) { keys.append("⌥") }
+        if flags.contains(.maskShift) { keys.append("⇧") }
+        if flags.contains(.maskCommand) { keys.append("⌘") }
+        if flags.contains(.maskSecondaryFn) { keys.append("Fn") }
+        return keys + [buttonName]
+    }
+
+    var displayName: String {
+        kbdKeys.joined()
+    }
+}
+
 struct GestureCommand: Codable, Identifiable, Equatable {
     var id: UUID
     var name: String
     var templates: [[StrokePoint]]
+    /// 鼠标按钮触发,和轨迹二选一或并存。旧配置没有这个字段,解码为 nil。
+    var buttonTrigger: GestureButtonTrigger?
     var shortcut: Shortcut?
 
-    init(id: UUID = UUID(), name: String, templates: [[StrokePoint]], shortcut: Shortcut?) {
+    init(
+        id: UUID = UUID(),
+        name: String,
+        templates: [[StrokePoint]],
+        buttonTrigger: GestureButtonTrigger? = nil,
+        shortcut: Shortcut?
+    ) {
         self.id = id
         self.name = name
         self.templates = templates
+        self.buttonTrigger = buttonTrigger
         self.shortcut = shortcut
     }
 }
