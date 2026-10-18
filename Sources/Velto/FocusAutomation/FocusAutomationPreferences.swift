@@ -33,6 +33,8 @@ struct FocusAutomationPreferences: Codable, Equatable {
   var apps: [FocusAutomationApp] = [FocusAutomationApp(bundleID: "com.movist.MovistPro")]
   var onShortcutName: String = "勿扰开"
   var offShortcutName: String = "勿扰关"
+  /// 优先用系统「打开/关闭勿扰模式」快捷键切换(无提示),用不了再走快捷指令。
+  var preferSystemHotkey: Bool = true
 
   static let defaults = FocusAutomationPreferences()
 
@@ -46,5 +48,6 @@ struct FocusAutomationPreferences: Codable, Equatable {
     apps = try c.decodeIfPresent([FocusAutomationApp].self, forKey: .apps) ?? d.apps
     onShortcutName = try c.decodeIfPresent(String.self, forKey: .onShortcutName) ?? d.onShortcutName
     offShortcutName = try c.decodeIfPresent(String.self, forKey: .offShortcutName) ?? d.offShortcutName
+    preferSystemHotkey = try c.decodeIfPresent(Bool.self, forKey: .preferSystemHotkey) ?? d.preferSystemHotkey
   }
 }

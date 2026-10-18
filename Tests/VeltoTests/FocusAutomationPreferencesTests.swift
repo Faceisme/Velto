@@ -28,4 +28,5 @@ import Testing
     FocusAutomationPreferences.self, from: Data(#"{"enabled":true}"#.utf8))
   #expect(partial.enabled)
   #expect(partial.offShortcutName == "勿扰关")
+  #expect(partial.preferSystemHotkey)
 }

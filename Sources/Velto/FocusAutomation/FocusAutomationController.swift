@@ -14,8 +14,10 @@ final class FocusAutomationController {
   private(set) var activeBundleIDs: [String] = []
   /// 「打开」快捷指令已由我们跑过,还没跑「关闭」。
   private(set) var focusApplied = false
-  /// 最近一次快捷指令失败的原因;成功后清空。
+  /// 最近一次开关勿扰失败的原因;成功后清空。
   private(set) var lastError: String?
+  /// 最近一次开关勿扰用的方式(系统快捷键 / 快捷指令)。
+  private(set) var lastMethod: String?
   /// 「快捷指令」App 里已有的快捷指令名;nil = 还没读到。
   private(set) var shortcutNames: [String]?
 
@@ -29,6 +31,8 @@ final class FocusAutomationController {
   @ObservationIgnored private var running = false
   /// 跑快捷指令是阻塞调用,放串行队列保证「打开」「关闭」按顺序执行。
   @ObservationIgnored private let shortcutQueue = DispatchQueue(label: "com.velto.focus.shortcuts")
+  /// 只在 shortcutQueue 上用。
+  @ObservationIgnored private let dndSwitch = DoNotDisturbSwitch()
 
   private static let pollInterval: TimeInterval = 1
   private static let retryDelay: TimeInterval = 30
@@ -75,8 +79,11 @@ final class FocusAutomationController {
     onRetryAt = nil
     if focusApplied {
       focusApplied = false
-      let name = prefs.offShortcutName
-      shortcutQueue.sync { _ = Self.runShortcut(name) }
+      let p = prefs
+      let dnd = dndSwitch
+      shortcutQueue.sync {
+        _ = dnd.turnOff(preferKeyboard: p.preferSystemHotkey, shortcut: p.offShortcutName)
+      }
     }
   }
 
@@ -171,13 +178,13 @@ final class FocusAutomationController {
       attemptedOn = true
       onRetryAt = nil
       focusApplied = true
-      run(p.onShortcutName, turningOn: true)
+      switchFocus(on: true)
     } else if active.isEmpty, attemptedOn {
       attemptedOn = false
       onRetryAt = nil
       if focusApplied {
         focusApplied = false
-        run(p.offShortcutName, turningOn: false)
+        switchFocus(on: false)
       }
     }
   }
@@ -265,30 +272,50 @@ final class FocusAutomationController {
     return result
   }
 
-  // MARK: - 快捷指令
+  // MARK: - 开关勿扰
 
-  private func run(_ name: String, turningOn: Bool) {
-    FocusAutomationDebugLog.log("运行快捷指令「\(name)」")
+  private func switchFocus(on: Bool) {
+    let p = prefs
+    let dnd = dndSwitch
+    FocusAutomationDebugLog.log(on ? "打开勿扰" : "关闭勿扰")
     shortcutQueue.async {
-      let error = Self.runShortcut(name)
+      let outcome = on
+        ? dnd.turnOn(preferKeyboard: p.preferSystemHotkey, shortcut: p.onShortcutName)
+        : dnd.turnOff(preferKeyboard: p.preferSystemHotkey, shortcut: p.offShortcutName)
+      FocusAutomationDebugLog.log("\(on ? "打开" : "关闭")勿扰结果: \(outcome)")
       DispatchQueue.main.async {
         MainActor.assumeIsolated {
-          let controller = FocusAutomationController.shared
-          controller.lastError = error
-          // 打开失败就当没开过,后面不跑关闭;这一轮还在用就过一会儿重试。
-          if error != nil, turningOn {
-            controller.focusApplied = false
-            if controller.attemptedOn {
-              controller.onRetryAt = Date().addingTimeInterval(Self.retryDelay)
-            }
-          }
+          FocusAutomationController.shared.handle(outcome, turningOn: on)
         }
       }
     }
   }
 
+  private func handle(_ outcome: DoNotDisturbSwitch.Outcome, turningOn: Bool) {
+    switch outcome {
+    case .done(let via):
+      lastError = nil
+      lastMethod = via
+    case .alreadyOn:
+      // 本来就开着的不归我们管,结束时也不关。
+      lastError = nil
+      if turningOn { focusApplied = false }
+    case .skipped:
+      lastError = nil
+    case .failed(let error):
+      lastError = error
+      // 打开失败就当没开过,后面不跑关闭;这一轮还在用就过一会儿重试。
+      if turningOn {
+        focusApplied = false
+        if attemptedOn { onRetryAt = Date().addingTimeInterval(Self.retryDelay) }
+      }
+    }
+  }
+
+  // MARK: - 快捷指令
+
   /// 同步跑 `shortcuts run`;返回 nil 表示成功,否则是错误描述。
-  nonisolated private static func runShortcut(_ name: String) -> String? {
+  nonisolated static func runShortcut(_ name: String) -> String? {
     let result = runShortcutsCLI(["run", name])
     let error: String? = switch result {
     case .success: nil
