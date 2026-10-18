@@ -2,7 +2,7 @@ import AppKit
 import CoreGraphics
 import IOKit.pwr_mgt
 
-/// 专注自动化:轮询指定 App 的窗口 / 播放状态,有 App 在用时跑「打开」快捷指令,
+/// 专注自动化:每秒检查指定 App 的窗口 / 载入文件 / 播放状态,有 App 在用时跑「打开」快捷指令,
 /// 全部结束后跑「关闭」快捷指令。单例,AppDelegate 启停。
 ///
 /// 只关自己打开的:我们没跑过「打开」(用户手动开的勿扰)就不跑「关闭」。
@@ -30,7 +30,7 @@ final class FocusAutomationController {
   /// 跑快捷指令是阻塞调用,放串行队列保证「打开」「关闭」按顺序执行。
   @ObservationIgnored private let shortcutQueue = DispatchQueue(label: "com.velto.focus.shortcuts")
 
-  private static let pollInterval: TimeInterval = 2
+  private static let pollInterval: TimeInterval = 1
   private static let retryDelay: TimeInterval = 30
   /// 小于这个尺寸的窗口(工具条、浮动面板)不算。
   private static let minWindowSide: CGFloat = 200
@@ -129,17 +129,27 @@ final class FocusAutomationController {
           NSRunningApplication.runningApplications(withBundleIdentifier: app.bundleID)
             .map(\.processIdentifier))
         guard !pids.isEmpty else {
-          diagnosis[app.bundleID] = "未运行"
+          if logging { diagnosis[app.bundleID] = "未运行" }
           continue
         }
         let windowed = Self.hasWindow(pids: pids)
-        // 只在开了调试日志时多查一次播放状态,方便看清没判成在用的原因。
-        let playingNote = logging ? " 播放=\(playing(pids) ? "是" : "否")" : ""
-        diagnosis[app.bundleID] = "pid=\(pids.sorted()) 窗口=\(windowed ? "有" : "无")\(playingNote)"
+        let inSession = activeBundleIDs.contains(app.bundleID)
+        var loaded: String?
+        func mediaLoaded() -> Bool {
+          if loaded == nil { loaded = pids.lazy.compactMap(Self.loadedMediaName).first ?? "" }
+          return !(loaded ?? "").isEmpty
+        }
         let inUse = switch app.trigger {
         case .window: windowed
-        // 开始播放就算在用;暂停后只要窗口还在仍算,窗口关掉才结束。
-        case .playing: playing(pids) || (windowed && activeBundleIDs.contains(app.bundleID))
+        // 窗口载入了视频或开始播放就算在用;暂停后只要窗口还在仍算,窗口关掉才结束。
+        // 不能只等播放断言:Movist Pro 开始播放 5~6 秒后才申请,载入文件是立刻的。
+        case .playing: playing(pids) || (windowed && (inSession || mediaLoaded()))
+        }
+        // 只在开了调试日志时把各项都查一遍,方便看清没判成在用的原因。
+        if logging {
+          let media = app.trigger == .playing && windowed && mediaLoaded() ? loaded ?? "" : "无"
+          diagnosis[app.bundleID] =
+            "pid=\(pids.sorted()) 窗口=\(windowed ? "有" : "无") 文件=\(media) 播放=\(playing(pids) ? "是" : "否")"
         }
         if inUse { active.append(app.bundleID) }
       }
@@ -207,6 +217,36 @@ final class FocusAutomationController {
       return AXUIElementCopyAttributeValue(window, kAXMinimizedAttribute as CFString, &minimized) == .success
         && (minimized as? Bool) == true
     }
+  }
+
+  /// 窗口里载入的文件名;没有返回 nil。优先读 AXDocument(文件 URL),App 没提供时
+  /// 退回看窗口标题:Movist Pro 空播放窗口标题是 App 名,载入后是文件名。
+  private static func loadedMediaName(pid: pid_t) -> String? {
+    guard !AxDeadPids.isDead(pid),
+          let appName = NSRunningApplication(processIdentifier: pid)?.localizedName
+    else { return nil }
+    let app = AXUIElementCreateApplication(pid)
+    AXUIElementSetMessagingTimeout(app, 0.25)
+    var value: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &value) == .success,
+          let windows = value as? [AXUIElement]
+    else { return nil }
+    for window in windows {
+      if let document = stringAttribute(window, kAXDocumentAttribute), !document.isEmpty {
+        return URL(string: document)?.lastPathComponent ?? document
+      }
+      if stringAttribute(window, kAXSubroleAttribute) == kAXStandardWindowSubrole as String,
+         let title = stringAttribute(window, kAXTitleAttribute), !title.isEmpty, title != appName {
+        return title
+      }
+    }
+    return nil
+  }
+
+  private static func stringAttribute(_ element: AXUIElement, _ attribute: String) -> String? {
+    var value: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success else { return nil }
+    return value as? String
   }
 
   /// 持有「防止显示器睡眠」断言的进程 —— 视频播放器播放时会持有,暂停后释放。
