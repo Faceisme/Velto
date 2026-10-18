@@ -81,12 +81,12 @@ struct GesturesPage: View {
 
     /// 鼠标控制(全局按钮绑定)已经占用的鼠标按钮。鼠标控制先于手势处理按钮,
     /// 这些按钮配在手势上不会触发。
-    private var mouseControlButtons: Set<GestureButtonTrigger> {
+    private var mouseControlButtons: Set<MouseButtonTrigger> {
         let mouse = store.preferences.mouseControl
         guard mouse.enabled else { return [] }
         return Set(mouse.buttonBindings.compactMap { binding in
             guard binding.isEnabled, binding.trigger.kind == .mouse else { return nil }
-            return GestureButtonTrigger(button: Int(binding.trigger.code), modifierFlags: binding.trigger.modifierFlags)
+            return MouseButtonTrigger(button: Int(binding.trigger.code), modifierFlags: binding.trigger.modifierFlags)
         })
     }
 
@@ -247,6 +247,7 @@ struct GesturesPage: View {
         } accessory: {
             AddAppMenu(
                 excludedBundleIDs: Set(draftProfiles.map(\.bundleIdentifier)),
+                panelTitle: "选择要单独配置手势的 App",
                 onPick: { addProfile(appURL: $0) }
             )
         }
@@ -857,78 +858,6 @@ private struct InheritedGestureRow: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
         .frame(maxWidth: .infinity, alignment: .leading)
-    }
-}
-
-// MARK: - 添加 App 菜单
-
-/// 「添加应用」:先列正在运行的 App(配手势时目标 App 多半开着,一点即加),
-/// 再兜底从「应用程序」里选。已加过的不再列出。
-private struct AddAppMenu: View {
-    let excludedBundleIDs: Set<String>
-    let onPick: (URL) -> Void
-
-    var body: some View {
-        Menu {
-            let apps = runningApps
-            if !apps.isEmpty {
-                Section("正在运行") {
-                    ForEach(apps, id: \.processIdentifier) { app in
-                        Button {
-                            if let url = app.bundleURL { onPick(url) }
-                        } label: {
-                            Label {
-                                Text(app.localizedName ?? app.bundleIdentifier ?? "")
-                            } icon: {
-                                Image(nsImage: Self.menuIcon(app.icon))
-                            }
-                        }
-                    }
-                }
-            }
-            Button("从「应用程序」中选择…", action: chooseFromApplications)
-        } label: {
-            Label("添加应用", systemImage: "plus")
-        }
-        .menuStyle(.button)
-        .buttonStyle(.bordered)
-        .fixedSize()
-    }
-
-    private var runningApps: [NSRunningApplication] {
-        let selfPID = ProcessInfo.processInfo.processIdentifier
-        return NSWorkspace.shared.runningApplications
-            .filter { app in
-                guard app.activationPolicy == .regular,
-                      app.processIdentifier != selfPID,
-                      app.bundleURL != nil,
-                      let bundleID = app.bundleIdentifier else { return false }
-                return !excludedBundleIDs.contains(bundleID)
-            }
-            .sorted {
-                ($0.localizedName ?? "").localizedStandardCompare($1.localizedName ?? "") == .orderedAscending
-            }
-    }
-
-    private func chooseFromApplications() {
-        let panel = NSOpenPanel()
-        panel.title = "选择要单独配置手势的 App"
-        panel.allowedContentTypes = [.applicationBundle]
-        panel.allowsMultipleSelection = false
-        panel.canChooseDirectories = false
-        panel.directoryURL = URL(fileURLWithPath: "/Applications")
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        onPick(url)
-    }
-
-    /// 菜单项图标要自己缩到 16pt,否则按原图尺寸撑开菜单行。
-    private static func menuIcon(_ icon: NSImage?) -> NSImage {
-        let source = icon ?? NSWorkspace.shared.icon(for: .application)
-        let resized = NSImage(size: NSSize(width: 16, height: 16), flipped: false) { rect in
-            source.draw(in: rect)
-            return true
-        }
-        return resized
     }
 }
 

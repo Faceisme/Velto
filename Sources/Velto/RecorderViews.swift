@@ -248,7 +248,7 @@ struct ModifierRecorderField: View {
 // 失活也退出。按钮能走到这里,是因为 tap 对落在 Velto 自己窗口上的按钮一律放行。
 
 struct MouseButtonRecorderField: View {
-    @Binding var trigger: GestureButtonTrigger?
+    @Binding var trigger: MouseButtonTrigger?
     var placeholder: String = "点击录制"
 
     @State private var isRecording = false
@@ -286,8 +286,8 @@ struct MouseButtonRecorderField: View {
             matching: [.otherMouseDown, .leftMouseDown, .rightMouseDown, .keyDown]
         ) { event in
             switch event.type {
-            case .otherMouseDown where event.buttonNumber >= GestureButtonTrigger.minimumButton:
-                trigger = GestureButtonTrigger(
+            case .otherMouseDown where event.buttonNumber >= MouseButtonTrigger.minimumButton:
+                trigger = MouseButtonTrigger(
                     button: event.buttonNumber,
                     modifierFlags: ModifierFormatter.normalizedRawValue(from: event.modifierFlags)
                 )
@@ -327,7 +327,7 @@ struct MouseButtonRecorderField: View {
 }
 
 extension ShortcutField where Recorder == MouseButtonRecorderField {
-    init(buttonTrigger: Binding<GestureButtonTrigger?>) {
+    init(buttonTrigger: Binding<MouseButtonTrigger?>) {
         self.init(hasValue: buttonTrigger.wrappedValue != nil, clear: { buttonTrigger.wrappedValue = nil }) {
             MouseButtonRecorderField(trigger: buttonTrigger, placeholder: "点击录制")
         }

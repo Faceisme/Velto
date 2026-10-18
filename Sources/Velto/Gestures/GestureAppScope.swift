@@ -84,10 +84,10 @@ enum GestureAppScope {
 /// 覆盖判定要算轨迹签名,不能放在按下按钮的热路径上。只收有快捷键的手势 —— 没快捷键
 /// 的按钮放行给 App,不白吞一次点击。
 struct GestureButtonMap: Sendable {
-    private var global: [GestureButtonTrigger: GestureCommand] = [:]
-    private var apps: [String: [GestureButtonTrigger: GestureCommand]] = [:]
+    private var global: [MouseButtonTrigger: GestureCommand] = [:]
+    private var apps: [String: [MouseButtonTrigger: GestureCommand]] = [:]
     /// 所有作用范围里出现过的按钮触发。按下的按钮不在其中就直接放行,免去查 App 归属。
-    private(set) var triggers: Set<GestureButtonTrigger> = []
+    private(set) var triggers: Set<MouseButtonTrigger> = []
 
     static let empty = GestureButtonMap()
 
@@ -98,8 +98,8 @@ struct GestureButtonMap: Sendable {
         appProfiles: [GestureAppProfile],
         signature: (GestureCommand) -> GestureDirection.Signature
     ) {
-        func table(_ commands: [GestureCommand]) -> [GestureButtonTrigger: GestureCommand] {
-            var result: [GestureButtonTrigger: GestureCommand] = [:]
+        func table(_ commands: [GestureCommand]) -> [MouseButtonTrigger: GestureCommand] {
+            var result: [MouseButtonTrigger: GestureCommand] = [:]
             for command in commands where command.shortcut != nil {
                 guard let trigger = command.buttonTrigger, result[trigger] == nil else { continue }
                 result[trigger] = command
@@ -116,7 +116,7 @@ struct GestureButtonMap: Sendable {
     }
 
     /// `bundleID` 所在 App 里这个按钮对应的手势;这个 App 没配专属手势就查全局表。
-    func command(for trigger: GestureButtonTrigger, bundleID: String?) -> GestureCommand? {
+    func command(for trigger: MouseButtonTrigger, bundleID: String?) -> GestureCommand? {
         if let bundleID, let appTable = apps[bundleID] {
             return appTable[trigger]
         }

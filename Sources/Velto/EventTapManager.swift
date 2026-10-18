@@ -476,6 +476,7 @@ final class EventTapManager: @unchecked Sendable {
             // 否则它会卡在 .gesturing 半路,导致之后的手势连环判为 abandoned、整片失灵。
             mouseControlController.resetTransientState()
             gestureEngine.abortForTapRestart()
+            windowShortcutController.resetTransientState()
             // 禁用期间修饰键松开也会丢;拖窗会话靠下一次 flagsChanged 自清,这里只留痕,
             // 方便对照"resize 拖错窗口"是不是赶上了 tap 被禁用。
             WindowManagementDebugLog.log(
@@ -603,9 +604,18 @@ final class EventTapManager: @unchecked Sendable {
                gestureEngine.handleButtonTriggerDown(event: event, normalizedFlags: raw) {
                 return nil
             }
-            if type == .otherMouseUp,
-               gestureEngine.handleButtonTriggerUp(button: event.getIntegerValueField(.mouseEventButtonNumber)) {
+            // 窗口管理的「最大化鼠标按钮」排在手势后面:某个 App 给同一按钮配了专属手势时,
+            // 在那个 App 里以手势为准。
+            if type == .otherMouseDown, windowManagementEnabledForTap,
+               windowShortcutController.handleMouseDown(event: event, normalizedFlags: raw) {
                 return nil
+            }
+            if type == .otherMouseUp {
+                let button = event.getIntegerValueField(.mouseEventButtonNumber)
+                if gestureEngine.handleButtonTriggerUp(button: button)
+                    || windowShortcutController.handleMouseUp(button: button) {
+                    return nil
+                }
             }
             // 透传到 App 的鼠标按下会提交/取消 IME 组字,强制英文标点的组字推演跟着归零。
             if type == .leftMouseDown || type == .otherMouseDown {
@@ -614,9 +624,11 @@ final class EventTapManager: @unchecked Sendable {
             return Unmanaged.passUnretained(event)
 
         case .otherMouseDragged:
-            // 按钮触发吞了 down,按住拖动同右键手势一样降级成 mouseMoved 透传:光标照常
+            // 按钮触发(手势 / 最大化窗口)吞了 down,按住拖动同右键手势一样降级成 mouseMoved 透传:光标照常
             // 跟手,App 也不会看到一串没有按下的按钮拖动。
-            if gestureEngine.isHoldingTriggerButton(event.getIntegerValueField(.mouseEventButtonNumber)) {
+            let draggedButton = event.getIntegerValueField(.mouseEventButtonNumber)
+            if gestureEngine.isHoldingTriggerButton(draggedButton)
+                || windowShortcutController.isHoldingButton(draggedButton) {
                 event.type = .mouseMoved
                 event.setIntegerValueField(.mouseEventButtonNumber, value: 0)
                 event.setDoubleValueField(.mouseEventPressure, value: 0)
@@ -886,6 +898,10 @@ final class EventTapManager: @unchecked Sendable {
         )
         contentZoomController.updateModifierFlag(preferences.contentZoomModifierFlags)
         windowShortcutController.updateShortcut(preferences.windowMaximizeShortcut)
+        windowShortcutController.updateMaximizeButton(
+            preferences.windowMaximizeButton,
+            excludedApps: Set(preferences.windowMaximizeButtonExcludedApps)
+        )
         screenshotShortcutController.updateShortcut(preferences.screenshot.triggerShortcut)
     }
 

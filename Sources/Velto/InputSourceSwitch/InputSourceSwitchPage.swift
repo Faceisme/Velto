@@ -170,7 +170,7 @@ struct InputSourceSwitchPage: View {
       }
       if members.isEmpty { EmptyRow("还没有应用。") }
       ForEach(members, id: \.self) { bid in
-        BundleAppRow(bundleID: bid, title: appDisplayName(forBundleID: bid)) {
+        BundleAppRow(bundleID: bid, title: InstalledApp.displayName(forBundleID: bid)) {
           DeleteIconButton { removeAppFromGroup(bid, role: role) }
         }
       }
@@ -303,14 +303,6 @@ struct InputSourceSwitchPage: View {
   }
 
   /// 由 bundleId 解析友好显示名(取不到就回退 bundleId)。
-  private func appDisplayName(forBundleID bundleID: String) -> String {
-    guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID),
-          let b = Bundle(url: url) else { return bundleID }
-    return (b.infoDictionary?["CFBundleDisplayName"] as? String)
-      ?? (b.infoDictionary?["CFBundleName"] as? String)
-      ?? url.deletingPathExtension().lastPathComponent
-  }
-
   private func updateBrowserRule(_ id: UUID, _ mutate: (inout InputSourceBrowserRule) -> Void) {
     store.updatePreferences { p in
       if let idx = p.inputSourceSwitch.browserRules.firstIndex(where: { $0.id == id }) {
@@ -321,26 +313,5 @@ struct InputSourceSwitchPage: View {
 
   private func deleteBrowserRule(_ id: UUID) {
     store.updatePreferences { $0.inputSourceSwitch.browserRules.removeAll { $0.id == id } }
-  }
-}
-
-/// 只存了 bundleId 的 App 行(分组成员、浏览器):图标按 bundleId 现查,查不到用通用 App 图标。
-private struct BundleAppRow<Trailing: View>: View {
-  let bundleID: String
-  let title: String
-  @ViewBuilder var trailing: () -> Trailing
-  @State private var icon: NSImage?
-
-  var body: some View {
-    SettingsRow(title: title, subtitle: bundleID, icon: icon, trailing: trailing)
-      .onAppear { if icon == nil { icon = loadIcon() } }
-      .onChange(of: bundleID) { _, _ in icon = loadIcon() }
-  }
-
-  private func loadIcon() -> NSImage {
-    guard let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else {
-      return NSWorkspace.shared.icon(for: .application)
-    }
-    return NSWorkspace.shared.icon(forFile: appURL.path)
   }
 }

@@ -101,8 +101,8 @@ private func movist(includesGlobal: Bool) -> GestureAppProfile {
 
 // MARK: - 鼠标按钮触发
 
-private let middle = GestureButtonTrigger(button: 2, modifierFlags: 0)
-private let commandMiddle = GestureButtonTrigger(button: 2, modifierFlags: 1 << 20)  // ⌘ + 中键
+private let middle = MouseButtonTrigger(button: 2, modifierFlags: 0)
+private let commandMiddle = MouseButtonTrigger(button: 2, modifierFlags: 1 << 20)  // ⌘ + 中键
 private let maximize = GestureCommand(
   name: "最大化", templates: [], buttonTrigger: middle, shortcut: shortcut(19, "⇧⌘2"))
 private let movistPlay = GestureCommand(
@@ -111,8 +111,8 @@ private let movistPlay = GestureCommand(
 @Test func buttonTriggerDisplay() {
   #expect(middle.kbdKeys == ["中键"])
   #expect(commandMiddle.kbdKeys == ["⌘", "中键"])
-  #expect(GestureButtonTrigger(button: 3, modifierFlags: 0).displayName == "后退侧键")
-  #expect(GestureButtonTrigger(button: 6, modifierFlags: 0).displayName == "按钮 7")
+  #expect(MouseButtonTrigger(button: 3, modifierFlags: 0).displayName == "后退侧键")
+  #expect(MouseButtonTrigger(button: 6, modifierFlags: 0).displayName == "按钮 7")
 }
 
 @Test func appGestureOverridesSameButtonGlobal() {

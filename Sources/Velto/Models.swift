@@ -35,10 +35,10 @@ struct Shortcut: Codable, Equatable {
     }
 }
 
-/// 手势的鼠标按钮触发:按下这个按钮(+ 修饰键)即发手势的快捷键。按钮号同 CGEvent 的
-/// `mouseEventButtonNumber`:2 中键、3 后退侧键、4 前进侧键、5+ 其它按钮。左右键不可用 ——
-/// 左键是日常点击,右键归画手势。
-struct GestureButtonTrigger: Codable, Hashable, Sendable {
+/// 鼠标按钮触发:按下这个按钮(+ 修饰键)即执行动作 —— 手势发快捷键、窗口管理最大化窗口。
+/// 按钮号同 CGEvent 的 `mouseEventButtonNumber`:2 中键、3 后退侧键、4 前进侧键、5+ 其它
+/// 按钮。左右键不可用 —— 左键是日常点击,右键归画手势。
+struct MouseButtonTrigger: Codable, Hashable, Sendable {
     var button: Int
     /// 修饰键,`ModifierFormatter.normalizedRawValue` 规整过,判定时要求完全相等。
     var modifierFlags: UInt64
@@ -77,14 +77,14 @@ struct GestureCommand: Codable, Identifiable, Equatable {
     var name: String
     var templates: [[StrokePoint]]
     /// 鼠标按钮触发,和轨迹二选一或并存。旧配置没有这个字段,解码为 nil。
-    var buttonTrigger: GestureButtonTrigger?
+    var buttonTrigger: MouseButtonTrigger?
     var shortcut: Shortcut?
 
     init(
         id: UUID = UUID(),
         name: String,
         templates: [[StrokePoint]],
-        buttonTrigger: GestureButtonTrigger? = nil,
+        buttonTrigger: MouseButtonTrigger? = nil,
         shortcut: Shortcut?
     ) {
         self.id = id
@@ -152,6 +152,11 @@ struct AppPreferences: Codable, Equatable {
     var windowResizeModifierFlags: UInt64
     var contentZoomModifierFlags: UInt64
     var windowMaximizeShortcut: Shortcut?
+    /// 按下此鼠标按钮 → 最大化光标下的窗口。带默认值,旧配置(无此字段)解码为 nil。
+    var windowMaximizeButton: MouseButtonTrigger? = nil
+    /// 最大化鼠标按钮的例外 App(bundle id):光标下是这些 App 时按钮原样交给 App
+    /// (如 Movist Pro 自己把中键配成全屏播放)。旧配置解码为空。
+    var windowMaximizeButtonExcludedApps: [String] = []
     var mouseControl: MouseControlPreferences
     /// 窗口切换器的全部配置 —— 子结构定义在 Switcher/SwitcherPreferences.swift。
     /// 嵌进来跟手势/窗口管理共享一份 JSON 持久化。
@@ -215,6 +220,8 @@ struct AppPreferences: Codable, Equatable {
         windowResizeModifierFlags = try container.decodeIfPresent(UInt64.self, forKey: .windowResizeModifierFlags) ?? Self.defaults.windowResizeModifierFlags
         contentZoomModifierFlags = try container.decodeIfPresent(UInt64.self, forKey: .contentZoomModifierFlags) ?? Self.defaults.contentZoomModifierFlags
         windowMaximizeShortcut = try container.decodeIfPresent(Shortcut.self, forKey: .windowMaximizeShortcut) ?? Self.defaults.windowMaximizeShortcut
+        windowMaximizeButton = try container.decodeIfPresent(MouseButtonTrigger.self, forKey: .windowMaximizeButton)
+        windowMaximizeButtonExcludedApps = try container.decodeIfPresent([String].self, forKey: .windowMaximizeButtonExcludedApps) ?? []
         mouseControl = try container.decodeIfPresent(MouseControlPreferences.self, forKey: .mouseControl) ?? Self.defaults.mouseControl
         switcher = try container.decodeIfPresent(SwitcherPreferences.self, forKey: .switcher) ?? Self.defaults.switcher
         inputSourceSwitch = try container.decodeIfPresent(InputSourceSwitchPreferences.self, forKey: .inputSourceSwitch) ?? Self.defaults.inputSourceSwitch

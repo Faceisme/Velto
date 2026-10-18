@@ -403,8 +403,8 @@ final class GestureEngine: @unchecked Sendable {
     func handleButtonTriggerDown(event: CGEvent, normalizedFlags: UInt64) -> Bool {
         guard state == .idle else { return false }
         let button = event.getIntegerValueField(.mouseEventButtonNumber)
-        guard button >= GestureButtonTrigger.minimumButton else { return false }
-        let trigger = GestureButtonTrigger(button: Int(button), modifierFlags: normalizedFlags)
+        guard button >= MouseButtonTrigger.minimumButton else { return false }
+        let trigger = MouseButtonTrigger(button: Int(button), modifierFlags: normalizedFlags)
         // 快速放行:没有任何作用范围用到这个按钮,就不必查 App 归属。
         guard buttonMap.triggers.contains(trigger) else { return false }
 
