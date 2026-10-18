@@ -36,6 +36,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 启动输入法自动切换:监听前台 App/浏览器上下文 → 按规则切输入法。
         InputSourceSwitchController.shared.start()
 
+        // 启动专注自动化:指定 App 在用时跑快捷指令开勿扰,结束后关掉。
+        FocusAutomationController.shared.start()
+
         // 预热 ScreenCaptureKit,减少首次截图延迟。
         ScreenshotCapturer.prewarm()
     }
@@ -46,6 +49,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 开机系统切换器都是关的。
         SwitcherController.shared.stop()
         InputSourceSwitchController.shared.stop()
+        // 我们打开的勿扰要在退出前关掉,否则 Velto 退了勿扰还一直开着。
+        FocusAutomationController.shared.stop()
         // ⚠️ 同理:Caps Lock 的 hidutil 重映射是会话级全局状态,退出必须同步清掉,
         // 否则 Velto 关了 caps 还是改键的。
         KeyRemapHIDRemap.resetSync()

@@ -1,0 +1,259 @@
+import AppKit
+import CoreGraphics
+import IOKit.pwr_mgt
+
+/// 专注自动化:轮询指定 App 的窗口 / 播放状态,有 App 在用时跑「打开」快捷指令,
+/// 全部结束后跑「关闭」快捷指令。单例,AppDelegate 启停。
+///
+/// 只关自己打开的:我们没跑过「打开」(用户手动开的勿扰)就不跑「关闭」。
+@MainActor @Observable
+final class FocusAutomationController {
+  static let shared = FocusAutomationController()
+
+  /// 当前算「在用」的 App(bundle id)。
+  private(set) var activeBundleIDs: [String] = []
+  /// 「打开」快捷指令已由我们跑过,还没跑「关闭」。
+  private(set) var focusApplied = false
+  /// 最近一次快捷指令失败的原因;成功后清空。
+  private(set) var lastError: String?
+  /// 「快捷指令」App 里已有的快捷指令名;nil = 还没读到。
+  private(set) var shortcutNames: [String]?
+
+  @ObservationIgnored private var timer: Timer?
+  /// 这一轮「在用」已经试过跑「打开」。失败时 focusApplied 回落,但不每 2 秒重试,
+  /// 等这一轮结束或用户改了设置再试。
+  @ObservationIgnored private var attemptedOn = false
+  @ObservationIgnored private var running = false
+  /// 跑快捷指令是阻塞调用,放串行队列保证「打开」「关闭」按顺序执行。
+  @ObservationIgnored private let shortcutQueue = DispatchQueue(label: "com.velto.focus.shortcuts")
+
+  private static let pollInterval: TimeInterval = 2
+  /// 小于这个尺寸的窗口(工具条、浮动面板)不算。
+  private static let minWindowSide: CGFloat = 200
+  /// 播放器防止显示器睡眠时持有的断言类型(Movist Pro 叫 "Movist Playing")。
+  private static let playbackAssertionTypes: Set<String> = [
+    kIOPMAssertionTypePreventUserIdleDisplaySleep as String,
+    kIOPMAssertionTypeNoDisplaySleep as String,
+  ]
+
+  private init() {}
+
+  private var prefs: FocusAutomationPreferences { GestureStore.shared.preferences.focusAutomation }
+
+  // MARK: - 生命周期
+
+  func start() {
+    guard !running else { return }
+    running = true
+    FocusAutomationDebugLog.setEnabled(prefs.debugLoggingEnabled)
+    NotificationCenter.default.addObserver(
+      self, selector: #selector(preferencesChanged),
+      name: .gestureStoreDidChange, object: GestureStore.shared
+    )
+    // App 退出时立刻评估,不等下一次轮询。
+    NSWorkspace.shared.notificationCenter.addObserver(
+      self, selector: #selector(appTerminated),
+      name: NSWorkspace.didTerminateApplicationNotification, object: nil
+    )
+    applyPreferences()
+  }
+
+  /// 退出 Velto 时调用:同步跑完「关闭」,避免勿扰一直开着。
+  func stop() {
+    guard running else { return }
+    running = false
+    NotificationCenter.default.removeObserver(self)
+    NSWorkspace.shared.notificationCenter.removeObserver(self)
+    timer?.invalidate()
+    timer = nil
+    activeBundleIDs = []
+    attemptedOn = false
+    if focusApplied {
+      focusApplied = false
+      let name = prefs.offShortcutName
+      shortcutQueue.sync { _ = Self.runShortcut(name) }
+    }
+  }
+
+  @objc private func preferencesChanged() {
+    FocusAutomationDebugLog.setEnabled(prefs.debugLoggingEnabled)
+    // 改了设置(比如换了快捷指令名)就允许失败的「打开」再试一次。
+    if !focusApplied { attemptedOn = false }
+    applyPreferences()
+  }
+
+  @objc private func appTerminated() {
+    if timer != nil { evaluate() }
+  }
+
+  private func applyPreferences() {
+    let p = prefs
+    let shouldPoll = p.enabled && !p.apps.isEmpty
+    if shouldPoll, timer == nil {
+      timer = Timer.scheduledTimer(withTimeInterval: Self.pollInterval, repeats: true) { _ in
+        MainActor.assumeIsolated { FocusAutomationController.shared.evaluate() }
+      }
+      timer?.tolerance = 0.5
+      FocusAutomationDebugLog.log("开始轮询 apps=\(p.apps.map(\.bundleID))")
+    } else if !shouldPoll, let t = timer {
+      t.invalidate()
+      timer = nil
+      FocusAutomationDebugLog.log("停止轮询")
+    }
+    evaluate()
+  }
+
+  // MARK: - 评估
+
+  private func evaluate() {
+    let p = prefs
+    var active: [String] = []
+    if p.enabled {
+      var assertionPIDs: Set<pid_t>?
+      for app in p.apps {
+        let pids = Set(
+          NSRunningApplication.runningApplications(withBundleIdentifier: app.bundleID)
+            .map(\.processIdentifier))
+        guard !pids.isEmpty, Self.hasWindow(pids: pids) else { continue }
+        switch app.trigger {
+        case .window:
+          active.append(app.bundleID)
+        case .playing:
+          // 已在用的 App 暂停后仍算在用,直到窗口关掉。
+          if activeBundleIDs.contains(app.bundleID) {
+            active.append(app.bundleID)
+            continue
+          }
+          if assertionPIDs == nil { assertionPIDs = Self.playbackAssertionPIDs() }
+          if !pids.isDisjoint(with: assertionPIDs ?? []) {
+            active.append(app.bundleID)
+          }
+        }
+      }
+    }
+
+    if active != activeBundleIDs {
+      FocusAutomationDebugLog.log("在用 App: \(activeBundleIDs) -> \(active)")
+      activeBundleIDs = active
+    }
+    if !active.isEmpty, !attemptedOn {
+      attemptedOn = true
+      focusApplied = true
+      run(p.onShortcutName, turningOn: true)
+    } else if active.isEmpty, attemptedOn {
+      attemptedOn = false
+      if focusApplied {
+        focusApplied = false
+        run(p.offShortcutName, turningOn: false)
+      }
+    }
+  }
+
+  /// 指定进程有没有像样的普通窗口。最小化的窗口不在屏幕上但 alpha > 0,算有;
+  /// 关掉但进程还留着的窗口 alpha 为 0,不算。
+  private static func hasWindow(pids: Set<pid_t>) -> Bool {
+    guard let infos = CGWindowListCopyWindowInfo(
+      [.optionAll, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]
+    else { return false }
+    return infos.contains { info in
+      guard let pid = info[kCGWindowOwnerPID as String] as? pid_t, pids.contains(pid),
+            (info[kCGWindowLayer as String] as? Int) == 0,
+            let bounds = info[kCGWindowBounds as String] as? [String: CGFloat],
+            let w = bounds["Width"], let h = bounds["Height"],
+            w >= minWindowSide, h >= minWindowSide
+      else { return false }
+      let onscreen = info[kCGWindowIsOnscreen as String] as? Bool ?? false
+      let alpha = info[kCGWindowAlpha as String] as? Double ?? 1
+      return onscreen || alpha > 0
+    }
+  }
+
+  /// 持有「防止显示器睡眠」断言的进程 —— 视频播放器播放时会持有,暂停后释放。
+  private static func playbackAssertionPIDs() -> Set<pid_t> {
+    var ref: Unmanaged<CFDictionary>?
+    guard IOPMCopyAssertionsByProcess(&ref) == kIOReturnSuccess,
+          let byPID = ref?.takeRetainedValue() as? [NSNumber: [[String: Any]]]
+    else { return [] }
+    var result = Set<pid_t>()
+    for (pid, assertions) in byPID
+    where assertions.contains(where: {
+      ($0[kIOPMAssertionTypeKey] as? String).map(playbackAssertionTypes.contains) ?? false
+    }) {
+      result.insert(pid.int32Value)
+    }
+    return result
+  }
+
+  // MARK: - 快捷指令
+
+  private func run(_ name: String, turningOn: Bool) {
+    FocusAutomationDebugLog.log("运行快捷指令「\(name)」")
+    shortcutQueue.async {
+      let error = Self.runShortcut(name)
+      DispatchQueue.main.async {
+        MainActor.assumeIsolated {
+          let controller = FocusAutomationController.shared
+          controller.lastError = error
+          // 打开失败就当没开过,后面不再跑关闭。
+          if error != nil, turningOn { controller.focusApplied = false }
+        }
+      }
+    }
+  }
+
+  /// 同步跑 `shortcuts run`;返回 nil 表示成功,否则是错误描述。
+  nonisolated private static func runShortcut(_ name: String) -> String? {
+    let result = runShortcutsCLI(["run", name])
+    let error: String? = switch result {
+    case .success: nil
+    case .failure(let message): message.isEmpty ? "运行快捷指令「\(name)」失败" : "「\(name)」:\(message)"
+    }
+    FocusAutomationDebugLog.log("快捷指令「\(name)」\(error.map { "失败 \($0)" } ?? "完成")")
+    return error
+  }
+
+  /// 读「快捷指令」App 里已有的快捷指令名,供设置页校验名字。
+  func refreshShortcutNames() {
+    shortcutQueue.async {
+      let names: [String]? = switch Self.runShortcutsCLI(["list"]) {
+      case .success(let out): out.split(separator: "\n").map(String.init)
+      case .failure: nil
+      }
+      DispatchQueue.main.async {
+        MainActor.assumeIsolated { FocusAutomationController.shared.shortcutNames = names }
+      }
+    }
+  }
+
+  private enum CLIResult {
+    case success(String)
+    case failure(String)
+  }
+
+  nonisolated private static func runShortcutsCLI(_ arguments: [String]) -> CLIResult {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/shortcuts")
+    process.arguments = arguments
+    let out = Pipe()
+    let err = Pipe()
+    // 不给输入:`shortcuts run` 在 stdin 不是终端时会等着读输入。
+    process.standardInput = FileHandle.nullDevice
+    process.standardOutput = out
+    process.standardError = err
+    do {
+      try process.run()
+    } catch {
+      return .failure(error.localizedDescription)
+    }
+    let output = out.fileHandleForReading.readDataToEndOfFile()
+    let errorOutput = err.fileHandleForReading.readDataToEndOfFile()
+    process.waitUntilExit()
+    if process.terminationStatus == 0 {
+      return .success(String(decoding: output, as: UTF8.self))
+    }
+    let message = String(decoding: errorOutput, as: UTF8.self)
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+      .replacingOccurrences(of: "Error: ", with: "")
+    return .failure(message)
+  }
+}

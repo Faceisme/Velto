@@ -166,6 +166,8 @@ struct AppPreferences: Codable, Equatable {
     var inputSourceSwitch: InputSourceSwitchPreferences
     /// 截图模块配置 —— 子结构在 Screenshot/ScreenshotPreferences.swift。
     var screenshot: ScreenshotPreferences
+    /// 专注自动化 —— 子结构在 FocusAutomation/FocusAutomationPreferences.swift。
+    var focusAutomation: FocusAutomationPreferences = .defaults
 
     init(
         gesturesEnabled: Bool,
@@ -226,6 +228,7 @@ struct AppPreferences: Codable, Equatable {
         switcher = try container.decodeIfPresent(SwitcherPreferences.self, forKey: .switcher) ?? Self.defaults.switcher
         inputSourceSwitch = try container.decodeIfPresent(InputSourceSwitchPreferences.self, forKey: .inputSourceSwitch) ?? Self.defaults.inputSourceSwitch
         screenshot = try container.decodeIfPresent(ScreenshotPreferences.self, forKey: .screenshot) ?? Self.defaults.screenshot
+        focusAutomation = try container.decodeIfPresent(FocusAutomationPreferences.self, forKey: .focusAutomation) ?? Self.defaults.focusAutomation
     }
 
     static let defaults = AppPreferences(
