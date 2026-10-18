@@ -20,14 +20,18 @@ final class FocusAutomationController {
   private(set) var shortcutNames: [String]?
 
   @ObservationIgnored private var timer: Timer?
-  /// 这一轮「在用」已经试过跑「打开」。失败时 focusApplied 回落,但不每 2 秒重试,
-  /// 等这一轮结束或用户改了设置再试。
+  /// 这一轮「在用」已经试过跑「打开」。失败时 focusApplied 回落,不每 2 秒重试,
+  /// 而是到 onRetryAt 再试(比如先开着视频、后建的快捷指令)。
   @ObservationIgnored private var attemptedOn = false
+  @ObservationIgnored private var onRetryAt: Date?
+  /// 每个 App 上一次的判断依据,变了才写日志。
+  @ObservationIgnored private var lastDiagnosis: [String: String] = [:]
   @ObservationIgnored private var running = false
   /// 跑快捷指令是阻塞调用,放串行队列保证「打开」「关闭」按顺序执行。
   @ObservationIgnored private let shortcutQueue = DispatchQueue(label: "com.velto.focus.shortcuts")
 
   private static let pollInterval: TimeInterval = 2
+  private static let retryDelay: TimeInterval = 30
   /// 小于这个尺寸的窗口(工具条、浮动面板)不算。
   private static let minWindowSide: CGFloat = 200
   /// 播放器防止显示器睡眠时持有的断言类型(Movist Pro 叫 "Movist Playing")。
@@ -68,6 +72,7 @@ final class FocusAutomationController {
     timer = nil
     activeBundleIDs = []
     attemptedOn = false
+    onRetryAt = nil
     if focusApplied {
       focusApplied = false
       let name = prefs.offShortcutName
@@ -78,7 +83,10 @@ final class FocusAutomationController {
   @objc private func preferencesChanged() {
     FocusAutomationDebugLog.setEnabled(prefs.debugLoggingEnabled)
     // 改了设置(比如换了快捷指令名)就允许失败的「打开」再试一次。
-    if !focusApplied { attemptedOn = false }
+    if !focusApplied {
+      attemptedOn = false
+      onRetryAt = nil
+    }
     applyPreferences()
   }
 
@@ -107,41 +115,56 @@ final class FocusAutomationController {
 
   private func evaluate() {
     let p = prefs
+    let logging = FocusAutomationDebugLog.isEnabled
     var active: [String] = []
+    var diagnosis: [String: String] = [:]
     if p.enabled {
       var assertionPIDs: Set<pid_t>?
+      func playing(_ pids: Set<pid_t>) -> Bool {
+        if assertionPIDs == nil { assertionPIDs = Self.playbackAssertionPIDs() }
+        return !pids.isDisjoint(with: assertionPIDs ?? [])
+      }
       for app in p.apps {
         let pids = Set(
           NSRunningApplication.runningApplications(withBundleIdentifier: app.bundleID)
             .map(\.processIdentifier))
-        guard !pids.isEmpty, Self.hasWindow(pids: pids) else { continue }
-        switch app.trigger {
-        case .window:
-          active.append(app.bundleID)
-        case .playing:
-          // 已在用的 App 暂停后仍算在用,直到窗口关掉。
-          if activeBundleIDs.contains(app.bundleID) {
-            active.append(app.bundleID)
-            continue
-          }
-          if assertionPIDs == nil { assertionPIDs = Self.playbackAssertionPIDs() }
-          if !pids.isDisjoint(with: assertionPIDs ?? []) {
-            active.append(app.bundleID)
-          }
+        guard !pids.isEmpty else {
+          diagnosis[app.bundleID] = "未运行"
+          continue
         }
+        let windowed = Self.hasWindow(pids: pids)
+        // 只在开了调试日志时多查一次播放状态,方便看清没判成在用的原因。
+        let playingNote = logging ? " 播放=\(playing(pids) ? "是" : "否")" : ""
+        diagnosis[app.bundleID] = "pid=\(pids.sorted()) 窗口=\(windowed ? "有" : "无")\(playingNote)"
+        let inUse = switch app.trigger {
+        case .window: windowed
+        // 开始播放就算在用;暂停后只要窗口还在仍算,窗口关掉才结束。
+        case .playing: playing(pids) || (windowed && activeBundleIDs.contains(app.bundleID))
+        }
+        if inUse { active.append(app.bundleID) }
       }
     }
 
+    if logging, diagnosis != lastDiagnosis {
+      for (bundleID, note) in diagnosis.sorted(by: { $0.key < $1.key }) where lastDiagnosis[bundleID] != note {
+        FocusAutomationDebugLog.log("\(bundleID): \(note)")
+      }
+    }
+    lastDiagnosis = diagnosis
     if active != activeBundleIDs {
       FocusAutomationDebugLog.log("在用 App: \(activeBundleIDs) -> \(active)")
       activeBundleIDs = active
     }
-    if !active.isEmpty, !attemptedOn {
+    let retryDue = !focusApplied && (onRetryAt.map { Date() >= $0 } ?? false)
+    if !active.isEmpty, !attemptedOn || retryDue {
+      if retryDue { FocusAutomationDebugLog.log("上次打开失败,重试") }
       attemptedOn = true
+      onRetryAt = nil
       focusApplied = true
       run(p.onShortcutName, turningOn: true)
     } else if active.isEmpty, attemptedOn {
       attemptedOn = false
+      onRetryAt = nil
       if focusApplied {
         focusApplied = false
         run(p.offShortcutName, turningOn: false)
@@ -149,22 +172,40 @@ final class FocusAutomationController {
     }
   }
 
-  /// 指定进程有没有像样的普通窗口。最小化的窗口不在屏幕上但 alpha > 0,算有;
-  /// 关掉但进程还留着的窗口 alpha 为 0,不算。
+  /// 指定进程有没有像样的普通窗口:在屏幕上的,或被最小化到程序坞的。
+  ///
+  /// 不能只看 CGWindowList:关掉后被 App 藏起来复用的窗口(Movist Pro 就有一个
+  /// 500×500 的)和最小化的窗口一样都是 onscreen=false、alpha=1,分不出来。
+  /// 所以屏幕上没有时,再用辅助功能问一次有没有 AXMinimized 的窗口。
+  /// 别的桌面空间(比如全屏播放所在的空间)上的窗口不算;播放中由播放状态兜着。
   private static func hasWindow(pids: Set<pid_t>) -> Bool {
-    guard let infos = CGWindowListCopyWindowInfo(
-      [.optionAll, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]
+    if let infos = CGWindowListCopyWindowInfo(
+      [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]],
+      infos.contains(where: { info in
+        guard let pid = info[kCGWindowOwnerPID as String] as? pid_t, pids.contains(pid),
+              (info[kCGWindowLayer as String] as? Int) == 0,
+              let bounds = info[kCGWindowBounds as String] as? [String: CGFloat],
+              let w = bounds["Width"], let h = bounds["Height"]
+        else { return false }
+        return w >= minWindowSide && h >= minWindowSide
+      }) {
+      return true
+    }
+    return pids.contains(where: hasMinimizedWindow)
+  }
+
+  private static func hasMinimizedWindow(pid: pid_t) -> Bool {
+    guard !AxDeadPids.isDead(pid) else { return false }
+    let app = AXUIElementCreateApplication(pid)
+    AXUIElementSetMessagingTimeout(app, 0.25)
+    var value: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &value) == .success,
+          let windows = value as? [AXUIElement]
     else { return false }
-    return infos.contains { info in
-      guard let pid = info[kCGWindowOwnerPID as String] as? pid_t, pids.contains(pid),
-            (info[kCGWindowLayer as String] as? Int) == 0,
-            let bounds = info[kCGWindowBounds as String] as? [String: CGFloat],
-            let w = bounds["Width"], let h = bounds["Height"],
-            w >= minWindowSide, h >= minWindowSide
-      else { return false }
-      let onscreen = info[kCGWindowIsOnscreen as String] as? Bool ?? false
-      let alpha = info[kCGWindowAlpha as String] as? Double ?? 1
-      return onscreen || alpha > 0
+    return windows.contains { window in
+      var minimized: CFTypeRef?
+      return AXUIElementCopyAttributeValue(window, kAXMinimizedAttribute as CFString, &minimized) == .success
+        && (minimized as? Bool) == true
     }
   }
 
@@ -194,8 +235,13 @@ final class FocusAutomationController {
         MainActor.assumeIsolated {
           let controller = FocusAutomationController.shared
           controller.lastError = error
-          // 打开失败就当没开过,后面不再跑关闭。
-          if error != nil, turningOn { controller.focusApplied = false }
+          // 打开失败就当没开过,后面不跑关闭;这一轮还在用就过一会儿重试。
+          if error != nil, turningOn {
+            controller.focusApplied = false
+            if controller.attemptedOn {
+              controller.onRetryAt = Date().addingTimeInterval(Self.retryDelay)
+            }
+          }
         }
       }
     }

@@ -2,7 +2,7 @@ import Foundation
 
 /// 什么时候算「正在用这个 App」。
 enum FocusAutomationTrigger: String, Codable, CaseIterable, Hashable {
-  /// 有窗口且开始播放过;直到窗口全部关闭才结束(暂停不结束)。
+  /// 开始播放就算;暂停不结束,窗口全部关闭才结束。
   /// 只开着空窗口不算 —— Movist Pro 单独启动会弹一个空播放窗口。
   case playing
   /// 有窗口就算。
