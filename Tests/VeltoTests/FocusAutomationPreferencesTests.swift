@@ -29,4 +29,5 @@ import Testing
   #expect(partial.enabled)
   #expect(partial.offShortcutName == "勿扰关")
   #expect(partial.preferSystemHotkey)
+  #expect(partial.blockDockInFullScreen)
 }

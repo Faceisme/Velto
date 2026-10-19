@@ -15,7 +15,7 @@ struct FocusAutomationPage: View {
     SettingsPage {
       PageHeader(
         page: .focusAutomation,
-        subtitle: "指定 App 在用时自动打开勿扰模式,用完自动关闭。",
+        subtitle: "指定 App 在用时自动打开勿扰模式、全屏时不弹出程序坞,用完自动恢复。",
         isOn: bind(\.enabled)
       )
       .help("关闭后不再自动开关勿扰;若此时勿扰是 Velto 打开的,会顺手关掉。")
@@ -60,6 +60,14 @@ struct FocusAutomationPage: View {
           excludedBundleIDs: Set(prefs.apps.map(\.bundleID)),
           panelTitle: "选择在用时开勿扰的 App",
           onPick: addApp
+        )
+      }
+
+      SettingsSection("程序坞") {
+        SettingsRow(
+          "全屏时不弹出程序坞",
+          subtitle: "列表里的 App 全屏且在最前面时,指针碰不到程序坞那条屏幕边,拖底部进度条不会误触弹出。要用程序坞先切到别的 App 或退出全屏。",
+          isOn: bind(\.blockDockInFullScreen)
         )
       }
 

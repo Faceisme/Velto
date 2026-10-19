@@ -63,6 +63,19 @@ final class FocusAutomationController {
       self, selector: #selector(appTerminated),
       name: NSWorkspace.didTerminateApplicationNotification, object: nil
     )
+    // 上次是 Velto 开的勿扰、没来得及关就被重装 / 强退:接着认领。第一次评估时
+    // App 还在用就等用完再关,已经不在用了就马上关。
+    let dnd = dndSwitch
+    if shortcutQueue.sync(execute: { dnd.restoreOwnership() }) {
+      FocusAutomationDebugLog.log("沿用重启前由 Velto 打开的勿扰")
+      attemptedOn = true
+      focusApplied = true
+    }
+    // 切到别的 App 立刻放开程序坞,不等下一次轮询。
+    NSWorkspace.shared.notificationCenter.addObserver(
+      self, selector: #selector(appActivated),
+      name: NSWorkspace.didActivateApplicationNotification, object: nil
+    )
     applyPreferences()
   }
 
@@ -74,6 +87,7 @@ final class FocusAutomationController {
     NSWorkspace.shared.notificationCenter.removeObserver(self)
     timer?.invalidate()
     timer = nil
+    DockRevealGuard.shared.setRegion(nil)
     activeBundleIDs = []
     attemptedOn = false
     onRetryAt = nil
@@ -99,6 +113,10 @@ final class FocusAutomationController {
 
   @objc private func appTerminated() {
     if timer != nil { evaluate() }
+  }
+
+  @objc private func appActivated() {
+    updateDockGuard()
   }
 
   private func applyPreferences() {
@@ -168,6 +186,7 @@ final class FocusAutomationController {
       }
     }
     lastDiagnosis = diagnosis
+    updateDockGuard()
     if active != activeBundleIDs {
       FocusAutomationDebugLog.log("在用 App: \(activeBundleIDs) -> \(active)")
       activeBundleIDs = active
@@ -186,6 +205,25 @@ final class FocusAutomationController {
         focusApplied = false
         switchFocus(on: false)
       }
+    }
+  }
+
+  /// 列表里的 App 在最前面且窗口铺满屏幕时,挡住程序坞那条边。
+  private func updateDockGuard() {
+    let p = prefs
+    var region: DockRevealGuard.Region?
+    if p.enabled, p.blockDockInFullScreen,
+       let front = NSWorkspace.shared.frontmostApplication,
+       let bundleID = front.bundleIdentifier,
+       p.apps.contains(where: { $0.bundleID == bundleID }),
+       let display = DockRevealGuard.fullScreenDisplay(pid: front.processIdentifier) {
+      let edge = DockRevealGuard.dockEdge()
+      if DockRevealGuard.edgeIsOuter(edge, of: display, among: DockRevealGuard.activeDisplayBounds()) {
+        region = .init(displayBounds: display, edge: edge)
+      }
+    }
+    if DockRevealGuard.shared.setRegion(region) {
+      FocusAutomationDebugLog.log(region.map { "挡住程序坞: 屏幕 \($0.displayBounds) \($0.edge.rawValue) 边" } ?? "放开程序坞")
     }
   }
 

@@ -20,13 +20,28 @@ final class DoNotDisturbSwitch: @unchecked Sendable {
     case failed(String)
   }
 
-  /// 勿扰是不是我们打开的;只关自己开的。
-  private var ownedByUs = false
+  /// 勿扰是不是我们打开的;只关自己开的。存盘:Velto 被重装 / 强退(不走
+  /// applicationWillTerminate)后重启,还认得出那次勿扰是自己开的。
+  private var ownedByUs: Bool {
+    get { UserDefaults.standard.bool(forKey: Self.ownedKey) }
+    set { UserDefaults.standard.set(newValue, forKey: Self.ownedKey) }
+  }
+  private static let ownedKey = "Velto.focusAutomation.ownsFocus"
 
   private static let assertionsURL = FileManager.default.homeDirectoryForCurrentUser
     .appendingPathComponent("Library/DoNotDisturb/DB/Assertions.json")
   /// 按下快捷键后等专注状态文件变化的最长时间。
   private static let confirmTimeout: TimeInterval = 1.5
+
+  /// 启动时调用:上次退出前勿扰是我们开的、现在也还开着,就继续认领;否则清掉记号。
+  func restoreOwnership() -> Bool {
+    guard ownedByUs else { return false }
+    if Self.focusActive() == false {
+      ownedByUs = false
+      return false
+    }
+    return true
+  }
 
   func turnOn(preferKeyboard: Bool, shortcut: String) -> Outcome {
     if preferKeyboard, let hotkey = Self.systemHotkey(), let active = Self.focusActive() {

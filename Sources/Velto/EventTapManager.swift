@@ -497,6 +497,7 @@ final class EventTapManager: @unchecked Sendable {
         switch type {
         case .mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged:
             ScreenshotHotCornerGuard.shared.rewriteLocationIfNeeded(in: event)
+            DockRevealGuard.shared.rewriteLocationIfNeeded(in: event)
         default:
             break
         }

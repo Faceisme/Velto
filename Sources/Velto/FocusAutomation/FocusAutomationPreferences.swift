@@ -35,6 +35,8 @@ struct FocusAutomationPreferences: Codable, Equatable {
   var offShortcutName: String = "勿扰关"
   /// 优先用系统「打开/关闭勿扰模式」快捷键切换(无提示),用不了再走快捷指令。
   var preferSystemHotkey: Bool = true
+  /// 列表里的 App 全屏且在最前面时,不让指针碰到程序坞那条屏幕边,程序坞就不会弹出。
+  var blockDockInFullScreen: Bool = true
 
   static let defaults = FocusAutomationPreferences()
 
@@ -49,5 +51,6 @@ struct FocusAutomationPreferences: Codable, Equatable {
     onShortcutName = try c.decodeIfPresent(String.self, forKey: .onShortcutName) ?? d.onShortcutName
     offShortcutName = try c.decodeIfPresent(String.self, forKey: .offShortcutName) ?? d.offShortcutName
     preferSystemHotkey = try c.decodeIfPresent(Bool.self, forKey: .preferSystemHotkey) ?? d.preferSystemHotkey
+    blockDockInFullScreen = try c.decodeIfPresent(Bool.self, forKey: .blockDockInFullScreen) ?? d.blockDockInFullScreen
   }
 }
