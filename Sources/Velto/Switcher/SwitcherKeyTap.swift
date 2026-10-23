@@ -1,3 +1,4 @@
+import Carbon.HIToolbox
 import Cocoa
 @preconcurrency import CoreFoundation
 
@@ -117,6 +118,7 @@ final class SwitcherKeyTap: @unchecked Sendable {
             setNativeCommandTabEnabled(false, occupied)
         }
         didDisableSystemHotkey = !occupied.isEmpty
+        refreshSecureInputHotKeys()
     }
 
     /// 触发键实际占用哪些系统符号热键 —— 只有真正冲突时才关对应系统 hotkey,
@@ -242,6 +244,7 @@ final class SwitcherKeyTap: @unchecked Sendable {
         ready.wait()
 
         CGEvent.tapEnable(tap: tap, enable: true)
+        refreshSecureInputHotKeys()
         return true
     }
 
@@ -261,6 +264,11 @@ final class SwitcherKeyTap: @unchecked Sendable {
         runLoopSource = nil
         tapRunLoop = nil
         tapThread = nil
+        refreshSecureInputHotKeys()   // tap 已置 nil → 只注销
+        if let hotKeyHandler {
+            RemoveEventHandler(hotKeyHandler)
+            self.hotKeyHandler = nil
+        }
 
         if didDisableSystemHotkey {
             setNativeCommandTabEnabled(true)
@@ -269,6 +277,97 @@ final class SwitcherKeyTap: @unchecked Sendable {
     }
 
     deinit { stop() }
+
+    // MARK: - 安全输入兜底(Carbon 热键)
+
+    /// 安全输入(密码框、终端「安全键盘输入」等)开着时,系统把 keyDown 从**所有** event tap
+    /// 里滤掉(flagsChanged 不滤),而原生 ⌘Tab 又被我们关了 → 按了毫无反应。
+    /// Carbon 热键不受安全输入影响,且在会话层 tap **之后**才匹配:平时 tap 已吞掉 keyDown,
+    /// 热键根本不会响,两条路天然互斥(实测;alt-tab 同款)。松开照旧靠 tap 的 flagsChanged。
+    /// 只在主线程读写(start / stop / 偏好同步都在 main)。
+    private var hotKeyRefs: [EventHotKeyRef] = []
+    private var hotKeyHandler: EventHandlerRef?
+    private static let hotKeySignature: OSType = 0x5653_5754   // "VSWT"
+
+    /// 触发键要注册的 Carbon 热键:(Carbon 修饰位, 是否反向)。与 tap 的匹配规则一致 ——
+    /// 多按 ⇧ = 反向;触发键本身带 ⇧ 时两种都算正向。Carbon 没有 Fn 位,带 Fn 的注册了
+    /// 会误吃不带 Fn 的组合,干脆不兜底。
+    static func secureInputHotKeys(modifierFlags: UInt64) -> [(modifiers: UInt32, reverse: Bool)] {
+        let flags = modifierFlags & modifierMask
+        guard flags & UInt64(CGEventFlags.maskSecondaryFn.rawValue) == 0 else { return [] }
+        let shift = UInt64(CGEventFlags.maskShift.rawValue)
+        func carbon(_ f: UInt64) -> UInt32 {
+            var m = 0
+            if f & UInt64(CGEventFlags.maskCommand.rawValue) != 0 { m |= cmdKey }
+            if f & shift != 0 { m |= shiftKey }
+            if f & UInt64(CGEventFlags.maskAlternate.rawValue) != 0 { m |= optionKey }
+            if f & UInt64(CGEventFlags.maskControl.rawValue) != 0 { m |= controlKey }
+            return UInt32(m)
+        }
+        return [(carbon(flags & ~shift), false), (carbon(flags | shift), flags & shift == 0)]
+    }
+
+    /// 按当前 (tap 在跑?, 启用?, 触发键) 重注册。切换器关着时绝不能占着热键 ——
+    /// 那会把 ⌘Tab 从系统原生切换器手里抢走。
+    private func refreshSecureInputHotKeys() {
+        hotKeyRefs.forEach { UnregisterEventHotKey($0) }
+        hotKeyRefs = []
+        guard tap != nil, switcherEnabled else { return }
+        if hotKeyHandler == nil {
+            var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
+            InstallEventHandler(GetEventDispatcherTarget(), Self.hotKeyCallback, 1, &spec,
+                                Unmanaged.passUnretained(self).toOpaque(), &hotKeyHandler)
+        }
+        let trigger = triggerSnapshot
+        for hotKey in Self.secureInputHotKeys(modifierFlags: trigger.modifierFlags) {
+            var ref: EventHotKeyRef?
+            let status = RegisterEventHotKey(
+                UInt32(trigger.keyCode), hotKey.modifiers,
+                EventHotKeyID(signature: Self.hotKeySignature, id: hotKey.reverse ? 1 : 0),
+                GetEventDispatcherTarget(), 0, &ref)
+            if status == noErr, let ref {
+                hotKeyRefs.append(ref)
+            } else {
+                SwitcherDebugLog.log("安全输入兜底热键注册失败 status=\(status) modifiers=\(hotKey.modifiers)")
+            }
+        }
+    }
+
+    private static let hotKeyCallback: EventHandlerUPP = { _, event, refcon in
+        var id = EventHotKeyID()
+        guard let event, let refcon,
+              GetEventParameter(event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID),
+                                nil, MemoryLayout<EventHotKeyID>.size, nil, &id) == noErr,
+              id.signature == SwitcherKeyTap.hotKeySignature else { return OSStatus(eventNotHandledErr) }
+        Unmanaged<SwitcherKeyTap>.fromOpaque(refcon).takeUnretainedValue()
+            .handleSecureInputHotKey(reverse: id.id == 1)
+        return noErr
+    }
+
+    /// 只有 tap 没吞到 keyDown(安全输入期间)才会走到这里。在主线程。
+    private func handleSecureInputHotKey(reverse: Bool) {
+        let trigger = triggerSnapshot
+        // 热键走主线程,可能晚于 tap 线程上的「修饰键松开」:那次 release 因为当时还没有排队的
+        // trigger 被丢掉,面板会挂住等不到确认 —— 按实时修饰键状态在这里补发。
+        let live = UInt64(CGEventSource.flagsState(.combinedSessionState).rawValue)
+        stateLock.lock()
+        state.noteTriggerQueued()
+        let release = state.shouldEmitRelease(
+            triggerModifiersStillPressed: live & trigger.modifierFlags == trigger.modifierFlags
+        )
+        stateLock.unlock()
+        SwitcherDebugLog.log("trigger 走 Carbon 兜底(安全输入开着 \(Self.secureInputOwner()))")
+        onEvent?(.trigger(reverse: reverse))
+        if release { onEvent?(.releaseModifier) }
+    }
+
+    /// 谁开着安全输入 —— 方便事后揪出「开了不关」的 App。
+    private static func secureInputOwner() -> String {
+        let dict = CGSessionCopyCurrentDictionary() as? [String: Any]
+        guard let pid = dict?["kCGSSessionSecureInputPID"] as? Int else { return "pid=?" }
+        let name = NSRunningApplication(processIdentifier: pid_t(truncatingIfNeeded: pid))?.localizedName
+        return "pid=\(pid) app=\(name ?? "?")"
+    }
 
     // MARK: - Tap 回调
 
