@@ -161,7 +161,8 @@ final class FocusAutomationController {
         let inSession = activeBundleIDs.contains(app.bundleID)
         var loaded: String?
         func mediaLoaded() -> Bool {
-          if loaded == nil { loaded = pids.lazy.compactMap(Self.loadedMediaName).first ?? "" }
+          // 不能用 lazy.compactMap(...).first:同一个 pid 会问两次 AX,第二次变 nil 就崩(见 firstNonNil)。
+          if loaded == nil { loaded = pids.firstNonNil(Self.loadedMediaName) ?? "" }
           return !(loaded ?? "").isEmpty
         }
         let inUse = switch app.trigger {
