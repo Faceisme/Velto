@@ -10,8 +10,9 @@ set -euo pipefail
 #
 # 同时这个脚本还顺手:
 #   - `xattr -cr` 清掉 Dropbox 留下的扩展属性,否则 codesign 拒签
-#   - `pkill` 干掉旧实例,免得 cp 时把还在跑的 binary 替换出问题
-#   - 重新签名 /Applications/ 副本(签名对内容敏感,不重签会 SIGKILL)
+#   - `pkill` 干掉旧实例,免得把还在跑的 binary 替换出问题
+#   - 安装副本先在 /Applications/ 外的暂存目录重新签名(签名对内容敏感,不重签会 SIGKILL),
+#     再整个 mv 进 /Applications/,进去以后不再原地改动
 #
 # 用法:
 #   ./scripts/build-app.sh              # 构建 + 部署 + 同步 /Applications/
@@ -47,6 +48,9 @@ FINDER_EXT_MACOS_DIR="$FINDER_EXT_CONTENTS_DIR/MacOS"
 FINDER_EXT_RESOURCES_DIR="$FINDER_EXT_CONTENTS_DIR/Resources"
 INSTALLED_APP="/Applications/Velto.app"
 INSTALLED_FINDER_EXT="$INSTALLED_APP/Contents/PlugIns/BetterFinderExtension.appex"
+INSTALL_STAGE_DIR="$BUILD_ROOT/install-stage"
+STAGED_APP="$INSTALL_STAGE_DIR/Velto.app"
+STAGED_FINDER_EXT="$STAGED_APP/Contents/PlugIns/BetterFinderExtension.appex"
 LEGACY_INSTALLED_APP="/Applications/VibeGestures.app"
 BUILD_HOME="$BUILD_ROOT/home"
 APP_ENTITLEMENTS="$ROOT_DIR/Resources/Velto.entitlements"
@@ -224,21 +228,35 @@ if [ "${SKIP_INSTALL:-0}" = "1" ]; then
     exit 0
 fi
 
-# 干掉旧实例,免得 cp 时撞文件锁
+# 安装副本在暂存目录里签好、校验过,再整个 mv 进 /Applications/,进去以后不再改动。
+# 不能先拷进 /Applications/ 再原地重签:包一出现,Finder 就会从里面拉起 Finder 扩展,
+# 赶上 launchd 正在 spawn 扩展时对它 codesign --force 会报 Input/output error,脚本中途
+# 退出、app 没启动(2026-10-26 实测,偶发)。暂存目录在 $BUILD_ROOT 下:在 Dropbox 外,
+# 扩展属性清掉后不会再被挂回来;和 /Applications/ 同一个卷,mv 就是一次 rename。
+# 签名或校验失败时 /Applications/ 里的旧版本原样不动,也还在跑。
+rm -rf "$INSTALL_STAGE_DIR"
+install -d "$INSTALL_STAGE_DIR"
+cp -R "$APP_DIR" "$STAGED_APP"
+
+if command -v codesign >/dev/null 2>&1; then
+    xattr -cr "$STAGED_APP" 2>/dev/null || true
+    sign_with_cert "$STAGED_FINDER_EXT" "$FINDER_EXT_ENTITLEMENTS"
+    sign_with_cert "$STAGED_APP" "$APP_ENTITLEMENTS"
+    if ! codesign --verify --deep --strict "$STAGED_APP"; then
+        echo "错误:$STAGED_APP 签名校验没通过,/Applications/ 未改动。" >&2
+        exit 1
+    fi
+fi
+
+# 干掉旧实例,免得替换时撞文件锁
 pkill -f "$INSTALLED_APP/Contents/MacOS/Velto" 2>/dev/null || true
 pkill -f "$LEGACY_INSTALLED_APP/Contents/MacOS/VibeGestures" 2>/dev/null || true
 # 等一下让 OS 收尾
 sleep 0.3
 
-# 全删重拷,免得旧文件残留(改名 / 删文件这类变化用 cp 增量更新可能漏)
+# 全删再整个换上新包,免得旧文件残留(改名 / 删文件这类变化用 cp 增量更新可能漏)
 rm -rf "$INSTALLED_APP" "$LEGACY_INSTALLED_APP"
-cp -R "$APP_DIR" "$INSTALLED_APP"
-
-if command -v codesign >/dev/null 2>&1; then
-    xattr -cr "$INSTALLED_APP" 2>/dev/null || true
-    sign_with_cert "$INSTALLED_FINDER_EXT" "$FINDER_EXT_ENTITLEMENTS"
-    sign_with_cert "$INSTALLED_APP" "$APP_ENTITLEMENTS"
-fi
+mv "$STAGED_APP" "$INSTALLED_APP"
 
 if [ "${SKIP_FINDER_EXTENSION_REGISTER:-0}" != "1" ] && command -v pluginkit >/dev/null 2>&1; then
     pluginkit -a "$INSTALLED_FINDER_EXT" >/dev/null 2>&1 || true
