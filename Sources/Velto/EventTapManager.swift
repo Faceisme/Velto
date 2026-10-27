@@ -177,7 +177,6 @@ final class EventTapManager: @unchecked Sendable {
     private var storeObserver: NSObjectProtocol?
     private var betterFinderObserver: NSObjectProtocol?
     private var keyRemapObserver: NSObjectProtocol?
-    private var inputSourceObserver: NSObjectProtocol?
 
     @MainActor
     init(store: GestureStore = .shared) {
@@ -203,13 +202,16 @@ final class EventTapManager: @unchecked Sendable {
         inputSourcePunctuationController.setCurrentInputSourceIsCJKV(punctuationSnapshot.isCJKV)
         inputSourcePunctuationController.setCurrentInputSourceProcessID(punctuationSnapshot.imePID)
 
-        inputSourceObserver = DistributedNotificationCenter.default().addObserver(
-            forName: Notification.Name(kTISNotifySelectedKeyboardInputSourceChanged as String),
+        // 必须 deliverImmediately:block 版 addObserver 默认 coalesce,而 AppKit 在 Velto 失活时
+        // 挂起分布式通知 —— 打开过一次设置窗口再切走,输入法变更就再也收不到,CJKV 快照冻结在
+        // 旧值,强制英文标点时灵时不灵(2026-10 探针实测)。回调在注册所在的主线程。
+        DistributedNotificationCenter.default().addObserver(
+            self,
+            selector: #selector(syncPunctuationInputSourceSnapshot),
+            name: Notification.Name(kTISNotifySelectedKeyboardInputSourceChanged as String),
             object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            self?.syncPunctuationInputSourceSnapshot()
-        }
+            suspensionBehavior: .deliverImmediately
+        )
 
         activationObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification,
@@ -316,9 +318,7 @@ final class EventTapManager: @unchecked Sendable {
         if let keyRemapObserver {
             NotificationCenter.default.removeObserver(keyRemapObserver)
         }
-        if let inputSourceObserver {
-            DistributedNotificationCenter.default().removeObserver(inputSourceObserver)
-        }
+        DistributedNotificationCenter.default().removeObserver(self)
         stop()
     }
 
@@ -883,7 +883,7 @@ final class EventTapManager: @unchecked Sendable {
         return (true, pid)
     }
 
-    private func syncPunctuationInputSourceSnapshot() {
+    @objc private func syncPunctuationInputSourceSnapshot() {
         let snapshot = Self.currentPunctuationSnapshot()
         performOnTapThread { [weak self] in
             self?.inputSourcePunctuationController.setCurrentInputSourceIsCJKV(snapshot.isCJKV)

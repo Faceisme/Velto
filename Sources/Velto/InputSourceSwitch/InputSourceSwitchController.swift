@@ -51,10 +51,13 @@ final class InputSourceSwitchController {
     monitor.start()
 
     // 用户手动切换输入法 → 更新当前上下文 cache(用于 restorePreviouslyUsed)。
+    // 必须 deliverImmediately:默认 coalesce 在 Velto 失活时被 AppKit 挂起,通知攒到下次激活才到,
+    // 既漏记用户手动切换,又会把迟到的程序化切换(已过 0.6s 抑制窗)误记成手动。
     DistributedNotificationCenter.default().addObserver(
       self, selector: #selector(systemInputSourceChanged),
       name: NSNotification.Name(kTISNotifySelectedKeyboardInputSourceChanged as String),
-      object: nil
+      object: nil,
+      suspensionBehavior: .deliverImmediately
     )
     // 偏好变化 → 同步调试开关 + 重新评估。
     NotificationCenter.default.addObserver(
