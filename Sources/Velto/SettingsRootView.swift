@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 enum MGPage: String, CaseIterable, Identifiable, Hashable {
-    case gestures, mouseControl, window, switcher, inputSourceSwitch, keyRemap, betterFinder, screenshot, networkMonitor, focusAutomation, general
+    case gestures, mouseControl, window, switcher, inputSourceSwitch, keyRemap, betterFinder, screenshot, networkMonitor, focusAutomation, macAssistant, general
 
     var id: String { rawValue }
 
@@ -18,6 +18,7 @@ enum MGPage: String, CaseIterable, Identifiable, Hashable {
         case .screenshot: "截图"
         case .networkMonitor: "网络监控"
         case .focusAutomation: "专注自动化"
+        case .macAssistant: "Mac小助手"
         case .general:  "通用设置"
         }
     }
@@ -34,6 +35,7 @@ enum MGPage: String, CaseIterable, Identifiable, Hashable {
         case .screenshot: "camera.viewfinder"
         case .networkMonitor: "network"
         case .focusAutomation: "moon.fill"
+        case .macAssistant: "wand.and.stars"
         case .general:  "gearshape"
         }
     }
@@ -51,6 +53,7 @@ enum MGPage: String, CaseIterable, Identifiable, Hashable {
         case .screenshot: .pink
         case .networkMonitor: .green
         case .focusAutomation: .mint
+        case .macAssistant: .red
         case .general: .gray
         }
     }
@@ -177,6 +180,8 @@ private final class SettingsPageHostController: NSViewController {
             AnyView(NetworkMonitorPage())
         case .focusAutomation:
             AnyView(FocusAutomationPage())
+        case .macAssistant:
+            AnyView(MacAssistantPage())
         case .general:
             AnyView(GeneralSettingsPage())
         }

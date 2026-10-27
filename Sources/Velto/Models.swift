@@ -168,6 +168,8 @@ struct AppPreferences: Codable, Equatable {
     var screenshot: ScreenshotPreferences
     /// 专注自动化 —— 子结构在 FocusAutomation/FocusAutomationPreferences.swift。
     var focusAutomation: FocusAutomationPreferences = .defaults
+    /// Mac小助手 —— 子结构在 MacAssistant/MacAssistantPreferences.swift。
+    var macAssistant: MacAssistantPreferences = .defaults
 
     init(
         gesturesEnabled: Bool,
@@ -229,6 +231,7 @@ struct AppPreferences: Codable, Equatable {
         inputSourceSwitch = try container.decodeIfPresent(InputSourceSwitchPreferences.self, forKey: .inputSourceSwitch) ?? Self.defaults.inputSourceSwitch
         screenshot = try container.decodeIfPresent(ScreenshotPreferences.self, forKey: .screenshot) ?? Self.defaults.screenshot
         focusAutomation = try container.decodeIfPresent(FocusAutomationPreferences.self, forKey: .focusAutomation) ?? Self.defaults.focusAutomation
+        macAssistant = try container.decodeIfPresent(MacAssistantPreferences.self, forKey: .macAssistant) ?? Self.defaults.macAssistant
     }
 
     static let defaults = AppPreferences(
