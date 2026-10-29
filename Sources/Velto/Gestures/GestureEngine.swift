@@ -674,14 +674,16 @@ final class GestureEngine: @unchecked Sendable {
         }
     }
 
-    /// 目标 app 当前有几个 layer0 在屏窗口 —— 用来判定关窗快捷键有没有真的生效。
+    /// 目标 app 当前有几个 layer0 / 置顶浮动在屏窗口 —— 用来判定关窗快捷键有没有真的生效。
+    /// 浮动层也得数:Movist 播放时窗口在 layer 3,只数 layer 0 永远是「0→0 没变」。
     static func onScreenWindowCount(pid: pid_t) -> Int {
         let list = CGWindowListCopyWindowInfo(
             [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID
         ) as? [[String: Any]] ?? []
         return list.filter {
-            ($0[kCGWindowOwnerPID as String] as? pid_t) == pid
-                && ($0[kCGWindowLayer as String] as? Int) == 0
+            guard ($0[kCGWindowOwnerPID as String] as? pid_t) == pid,
+                  let layer = $0[kCGWindowLayer as String] as? Int else { return false }
+            return layer == 0 || GestureTargetController.floatingWindowLayers.contains(layer)
         }.count
     }
 

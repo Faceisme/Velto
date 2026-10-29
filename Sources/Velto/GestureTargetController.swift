@@ -18,12 +18,14 @@ struct GestureExecutionTarget: @unchecked Sendable {
 }
 
 enum GestureTargetController {
-    private struct WindowCandidate {
+    struct WindowCandidate {
         let pid: pid_t
         let ownerName: String
         let bounds: CGRect
         /// 0 = 这个 candidate 不是直接从 CGWindowList 来的,没有可用的 wid。
         let wid: CGWindowID
+        /// 0 = 普通窗口;落在 `floatingWindowLayers` 里的是置顶浮动窗口。
+        let layer: Int
     }
 
     /// Velto 自己的 pid。所有"鼠标下的目标"查询都必须先 skip 这个 pid ——
@@ -33,6 +35,11 @@ enum GestureTargetController {
     /// background queue)同步跑 SwiftUI view graph update,撞到 MainActor
     /// 隔离的 Binding 闭包时 Swift 6 runtime executor 校验直接 SIGTRAP。
     private static let selfPid: pid_t = getpid()
+
+    /// 「置顶」浮动窗口所在的层级段:比普通窗口(0)高、比程序坞(20)低 ——
+    /// `kCGFloatingWindowLevel`(3)/ 模态面板(8)/ 工具面板(19)都在这段。
+    /// 程序坞那张 layer 20 全屏穿透窗口、菜单栏、通知横幅都在段外。
+    static let floatingWindowLayers = 1..<Int(CGWindowLevelForKey(.dockWindow))
 
     static func executionTarget(
         at point: CGPoint,
@@ -173,6 +180,17 @@ enum GestureTargetController {
 
         if WindowManagementDebugLog.isEnabled {
             logWindowStack(point: point, candidatePoints: candidatePoints, windowList: cachedWindowList)
+        }
+
+        // 置顶浮动窗口压在最上层 → 直接按 CGWindowList 定位,不做 AX 命中测试。
+        // 后面各路径只认 layer 0,AX 明明命中了它也会被「以 CG 栈顶为准」校正走
+        // (见 floatingWindowOnTop)。它的 wid、几何都在列表里,target(from:) 按 frame
+        // 配 AX 窗口就够了;也就不用担心命中测试穿过它落进下面 Velto 自己的窗口。
+        if let floating = floatingWindowOnTop(in: cachedWindowList, at: point) {
+            if WindowManagementDebugLog.isEnabled {
+                WindowManagementDebugLog.log("  最上层是浮动窗口 layer=\(floating.layer) app=\"\(floating.ownerName)\" pid=\(floating.pid) → 直接按 CGWindowList 定位")
+            }
+            return target(from: floating)
         }
 
         // 鼠标下最上层是 Velto 自己时,**绝对**不能再调
@@ -391,6 +409,10 @@ enum GestureTargetController {
         let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
         let windowList = (CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]]) ?? []
 
+        if let floating = floatingWindowOnTop(in: windowList, at: point), floating.wid != 0 {
+            return (floating.wid, floating.bounds)
+        }
+
         for p in targetLookupPoints(for: point) {
             for info in windowList {
                 guard (info[kCGWindowLayer as String] as? NSNumber)?.intValue == 0,
@@ -439,11 +461,61 @@ enum GestureTargetController {
                 pid: pid,
                 ownerName: info[kCGWindowOwnerName as String] as? String ?? "",
                 bounds: bounds,
-                wid: (info[kCGWindowNumber as String] as? NSNumber)?.uint32Value ?? 0
+                wid: (info[kCGWindowNumber as String] as? NSNumber)?.uint32Value ?? 0,
+                layer: layer
             )
         }
 
         return nil
+    }
+
+    /// 光标下最上层是**常规 App 的浮动窗口**时返回它,否则 nil。
+    ///
+    /// Movist Pro「播放时置顶」把播放窗口提到 layer 3,而其余定位只认 layer 0:
+    /// AX 命中了 Movist,却被「以 CG 栈顶为准」校正到压在下面的访达 / Claude,
+    /// 手势穿透过去把后面的窗口 ⌘W 关了(2026-10-29)。
+    ///
+    /// 只收常规(程序坞里有图标的)App:CGWindowList 看不出谁鼠标穿透,后台 /
+    /// 辅助 App 的浮动窗口多是 HUD、遮罩,算进来会把手势吸走。
+    /// 从上往下走,先碰到 Velto 自己(任何层级)或别家 layer 0 窗口就停,交回原来的路径。
+    static func floatingWindowOnTop(
+        in windowList: [[String: Any]],
+        at point: CGPoint,
+        isRegularApp: (pid_t) -> Bool = ownerIsRegularApp
+    ) -> WindowCandidate? {
+        for info in windowList {
+            guard let layer = (info[kCGWindowLayer as String] as? NSNumber)?.intValue,
+                  let onscreen = info[kCGWindowIsOnscreen as String] as? Bool,
+                  onscreen,
+                  let alpha = (info[kCGWindowAlpha as String] as? NSNumber)?.doubleValue,
+                  alpha > 0.01,
+                  let pidNumber = info[kCGWindowOwnerPID as String] as? NSNumber,
+                  let boundsDictionary = info[kCGWindowBounds as String] as? NSDictionary,
+                  let bounds = CGRect(dictionaryRepresentation: boundsDictionary),
+                  bounds.contains(point)
+            else { continue }
+
+            let pid = pid_t(pidNumber.intValue)
+            if pid == selfPid || layer == 0 { return nil }
+            guard floatingWindowLayers.contains(layer),
+                  bounds.width >= 40,
+                  bounds.height >= 40,
+                  isRegularApp(pid)
+            else { continue }
+
+            return WindowCandidate(
+                pid: pid,
+                ownerName: info[kCGWindowOwnerName as String] as? String ?? "",
+                bounds: bounds,
+                wid: (info[kCGWindowNumber as String] as? NSNumber)?.uint32Value ?? 0,
+                layer: layer
+            )
+        }
+        return nil
+    }
+
+    static func ownerIsRegularApp(_ pid: pid_t) -> Bool {
+        NSRunningApplication(processIdentifier: pid)?.activationPolicy == .regular
     }
 
     /// `windowCandidate` 的 self-only 版本:用于"鼠标停在 Velto 自己窗口上"分支,
@@ -469,7 +541,8 @@ enum GestureTargetController {
                 pid: selfPid,
                 ownerName: info[kCGWindowOwnerName as String] as? String ?? "",
                 bounds: bounds,
-                wid: 0
+                wid: 0,
+                layer: 0
             )
         }
         return nil
@@ -728,8 +801,8 @@ enum GestureTargetController {
         return NSRunningApplication(processIdentifier: pid)?.localizedName ?? "pid \(pid)"
     }
 
-    /// 转储光标各查询点下的 layer-0 窗口栈(上→下序),含被尺寸/可见性过滤的项,
-    /// 用来判断"光标下最上层到底是谁"——bug 的第一现场。
+    /// 转储光标各查询点下的 layer-0 + 浮动层窗口栈(上→下序),含被尺寸/可见性
+    /// 过滤的项,用来判断"光标下最上层到底是谁"——bug 的第一现场。
     private static func logWindowStack(
         point: CGPoint,
         candidatePoints: [CGPoint],
@@ -741,7 +814,8 @@ enum GestureTargetController {
             var lines: [String] = []
             var idx = 0
             for info in windowList {
-                guard let layer = (info[kCGWindowLayer as String] as? NSNumber)?.intValue, layer == 0,
+                guard let layer = (info[kCGWindowLayer as String] as? NSNumber)?.intValue,
+                      layer == 0 || floatingWindowLayers.contains(layer),
                       let bd = info[kCGWindowBounds as String] as? NSDictionary,
                       let bounds = CGRect(dictionaryRepresentation: bd),
                       bounds.contains(p) else { continue }
@@ -751,6 +825,7 @@ enum GestureTargetController {
                 let owner = info[kCGWindowOwnerName as String] as? String ?? ""
                 let tooSmall = bounds.width < 40 || bounds.height < 40
                 var flags = ""
+                if layer != 0 { flags += " [浮动 layer=\(layer)]" }
                 if pidN == Int(selfPid) { flags += " [self]" }
                 if !onscreen { flags += " [非onscreen]" }
                 if alpha <= 0.01 { flags += " [透明]" }
@@ -759,7 +834,7 @@ enum GestureTargetController {
                 idx += 1
             }
             WindowManagementDebugLog.log(
-                "  查询点 \(fmt(p)) 命中的 layer0 窗口栈(上→下):\(lines.isEmpty ? " 无" : "\n" + lines.joined(separator: "\n"))")
+                "  查询点 \(fmt(p)) 命中的 layer0+浮动层 窗口栈(上→下):\(lines.isEmpty ? " 无" : "\n" + lines.joined(separator: "\n"))")
         }
     }
 
