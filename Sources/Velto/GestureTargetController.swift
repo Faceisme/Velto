@@ -24,7 +24,7 @@ enum GestureTargetController {
         let bounds: CGRect
         /// 0 = 这个 candidate 不是直接从 CGWindowList 来的,没有可用的 wid。
         let wid: CGWindowID
-        /// 0 = 普通窗口;落在 `floatingWindowLayers` 里的是置顶浮动窗口。
+        /// 0 = 普通窗口;落在 `AppWindowLayer.floating` 里的是置顶浮动窗口。
         let layer: Int
     }
 
@@ -35,11 +35,6 @@ enum GestureTargetController {
     /// background queue)同步跑 SwiftUI view graph update,撞到 MainActor
     /// 隔离的 Binding 闭包时 Swift 6 runtime executor 校验直接 SIGTRAP。
     private static let selfPid: pid_t = getpid()
-
-    /// 「置顶」浮动窗口所在的层级段:比普通窗口(0)高、比程序坞(20)低 ——
-    /// `kCGFloatingWindowLevel`(3)/ 模态面板(8)/ 工具面板(19)都在这段。
-    /// 程序坞那张 layer 20 全屏穿透窗口、菜单栏、通知横幅都在段外。
-    static let floatingWindowLayers = 1..<Int(CGWindowLevelForKey(.dockWindow))
 
     static func executionTarget(
         at point: CGPoint,
@@ -497,7 +492,7 @@ enum GestureTargetController {
 
             let pid = pid_t(pidNumber.intValue)
             if pid == selfPid || layer == 0 { return nil }
-            guard floatingWindowLayers.contains(layer),
+            guard AppWindowLayer.floating.contains(layer),
                   bounds.width >= 40,
                   bounds.height >= 40,
                   isRegularApp(pid)
@@ -815,7 +810,7 @@ enum GestureTargetController {
             var idx = 0
             for info in windowList {
                 guard let layer = (info[kCGWindowLayer as String] as? NSNumber)?.intValue,
-                      layer == 0 || floatingWindowLayers.contains(layer),
+                      AppWindowLayer.contains(layer),
                       let bd = info[kCGWindowBounds as String] as? NSDictionary,
                       let bounds = CGRect(dictionaryRepresentation: bd),
                       bounds.contains(p) else { continue }

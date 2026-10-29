@@ -235,19 +235,23 @@ final class FocusAutomationController {
   /// 所以屏幕上没有时,再用辅助功能问一次有没有 AXMinimized 的窗口。
   /// 别的桌面空间(比如全屏播放所在的空间)上的窗口不算;播放中由播放状态兜着。
   private static func hasWindow(pids: Set<pid_t>) -> Bool {
-    if let infos = CGWindowListCopyWindowInfo(
-      [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]],
-      infos.contains(where: { info in
-        guard let pid = info[kCGWindowOwnerPID as String] as? pid_t, pids.contains(pid),
-              (info[kCGWindowLayer as String] as? Int) == 0,
-              let bounds = info[kCGWindowBounds as String] as? [String: CGFloat],
-              let w = bounds["Width"], let h = bounds["Height"]
-        else { return false }
-        return w >= minWindowSide && h >= minWindowSide
-      }) {
-      return true
+    let infos = CGWindowListCopyWindowInfo(
+      [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+    return hasOnScreenWindow(pids: pids, in: infos) || pids.contains(where: hasMinimizedWindow)
+  }
+
+  /// 屏幕上有没有够大的窗口。置顶浮动窗口也算:Movist Pro「播放时置顶」一开播就把
+  /// 窗口提到 layer 3,只认 layer 0 会判成「窗口=无」,刚开的勿扰两秒后又被关掉
+  /// (2026-10-29;之前没露馅是因为它的「通用」设置窗口一直开着撑住了 layer 0)。
+  static func hasOnScreenWindow(pids: Set<pid_t>, in infos: [[String: Any]]) -> Bool {
+    infos.contains { info in
+      guard let pid = info[kCGWindowOwnerPID as String] as? pid_t, pids.contains(pid),
+            let layer = info[kCGWindowLayer as String] as? Int, AppWindowLayer.contains(layer),
+            let bounds = info[kCGWindowBounds as String] as? [String: CGFloat],
+            let w = bounds["Width"], let h = bounds["Height"]
+      else { return false }
+      return w >= minWindowSide && h >= minWindowSide
     }
-    return pids.contains(where: hasMinimizedWindow)
   }
 
   private static func hasMinimizedWindow(pid: pid_t) -> Bool {

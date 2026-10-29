@@ -683,7 +683,7 @@ final class GestureEngine: @unchecked Sendable {
         return list.filter {
             guard ($0[kCGWindowOwnerPID as String] as? pid_t) == pid,
                   let layer = $0[kCGWindowLayer as String] as? Int else { return false }
-            return layer == 0 || GestureTargetController.floatingWindowLayers.contains(layer)
+            return AppWindowLayer.contains(layer)
         }.count
     }
 

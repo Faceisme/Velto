@@ -51,7 +51,7 @@ import Testing
 }
 
 @Test func floatingWindowLayersExcludeNormalAndDock() {
-    let layers = GestureTargetController.floatingWindowLayers
+    let layers = AppWindowLayer.floating
     #expect(!layers.contains(NSWindow.Level.normal.rawValue))
     #expect(layers.contains(NSWindow.Level.floating.rawValue))
     #expect(layers.contains(NSWindow.Level.modalPanel.rawValue))
