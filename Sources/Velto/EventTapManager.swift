@@ -903,7 +903,10 @@ final class EventTapManager: @unchecked Sendable {
             preferences.windowMaximizeButton,
             excludedApps: Set(preferences.windowMaximizeButtonExcludedApps)
         )
-        screenshotShortcutController.updateShortcut(preferences.screenshot.triggerShortcut)
+        // 截图关着就别占触发键:tap 白吞、安全输入兜底的 Carbon 热键也会抢走别人的组合键。
+        screenshotShortcutController.updateShortcut(
+            preferences.screenshot.enabled ? preferences.screenshot.triggerShortcut : nil
+        )
     }
 
     private func prewarmCaches() {
