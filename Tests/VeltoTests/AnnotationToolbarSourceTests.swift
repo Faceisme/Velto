@@ -91,7 +91,12 @@ import VeltoAnnotationCore
     property.mouseMoved(with: event)
   }
   try hover(1)
-  try await Task.sleep(for: .milliseconds(400))
+  // 提示由 300ms 延迟 Task 弹出。别用固定 sleep 等它:全量并行跑时 MainActor 被
+  // 其他 @MainActor 用例占着,两个定时器各自 overshoot,400ms 的余量会被反超 ——
+  // 实测并行跑 5/5 假红,串行跑全绿。
+  for _ in 0..<60 where host.presentedHelp == nil {
+    try await Task.sleep(for: .milliseconds(50))
+  }
   let help = try #require(host.presentedHelp)
   #expect(host.helpOrdering == .above)
   #expect(help.level.rawValue > host.level.rawValue)

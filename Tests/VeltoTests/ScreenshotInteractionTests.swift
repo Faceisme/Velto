@@ -167,3 +167,24 @@ private func screenshotTestImage(width: Int = 1000, height: Int = 720) -> CGImag
   #expect(actions.region == CGRect(x: 125, y: 270, width: 300, height: 200))
   #expect(overlay.currentSelectionGlobal == actions.region)
 }
+
+@Test @MainActor func screenshotConfirmBeforeResizeMouseUpUsesLiveSelectionCanvas() throws {
+  // 三指拖移抬指后 mouseUp 会延迟:手柄还没松开就按空格,导出文档必须跟上实时选区,否则底图被拉伸。
+  let overlay = ScreenshotOverlayView(frame: CGRect(x: 0, y: 0, width: 1000, height: 720))
+  overlay.scale = 1
+  overlay.snapshotImage = screenshotTestImage()
+  let actions = CaptureActions()
+  overlay.delegate = actions
+  overlay.mouseDown(with: pointer(.leftMouseDown, 100, 400))
+  overlay.mouseDragged(with: pointer(.leftMouseDragged, 400, 700))
+  overlay.mouseUp(with: pointer(.leftMouseUp, 400, 700))
+  overlay.mouseDown(with: pointer(.leftMouseDown, 250, 400))
+  overlay.mouseDragged(with: pointer(.leftMouseDragged, 250, 100))
+  let space = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+    timestamp: 0, windowNumber: 0, context: nil, characters: " ", charactersIgnoringModifiers: " ",
+    isARepeat: false, keyCode: 49))
+  #expect(overlay.handleCaptureKey(space))
+  #expect(actions.actions == [.copy])
+  #expect(actions.region == CGRect(x: 100, y: 100, width: 300, height: 600))
+  #expect(actions.document?.canvasSize == CGSize(width: 300, height: 600))
+}

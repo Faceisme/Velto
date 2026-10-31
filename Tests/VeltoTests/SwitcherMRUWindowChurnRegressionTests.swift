@@ -35,7 +35,7 @@ private func switcherSource(_ file: String) throws -> String {
   let source = try switcherSource("SwitcherWindowList.swift")
   // 移除时记住 MRU 位,短期内加回来要恢复,不能无脑排末尾
   #expect(source.contains("rememberRemovedOrder(of: window)"))
-  #expect(source.contains("initialFocusOrder(forNew: probe.wid)"))
+  #expect(source.contains("initialFocusOrder(forNew: probe.wid, pid: pid)"))
   #expect(!source.contains("win.lastFocusOrder = windows.count"))
   #expect(source.contains("removedOrderTTL"))
 }

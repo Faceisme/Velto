@@ -37,6 +37,7 @@ struct AXCallQueueConcurrencyTests {
   }
 
   private func waitUntil(
+    _ label: String,
     timeout: TimeInterval = 5.0,
     _ condition: () -> Bool
   ) async {
@@ -45,27 +46,33 @@ struct AXCallQueueConcurrencyTests {
       if condition() { return }
       try? await Task.sleep(nanoseconds: 5_000_000)
     }
-    Issue.record("等待条件超时(\(timeout)s)")
+    Issue.record("等待条件超时(\(timeout)s): \(label)")
   }
 
   @Test("同 key 绝不重叠 —— 靠 addDependency 把并发槽上的同 key 拉回串行")
   func sameKeyNeverOverlaps() async {
     let trace = Mutex(Trace())
     let key = "velto-test-same-\(UUID().uuidString)"
+    // 后面那 7 个必须在第一个「还在执行」时排进来 —— 那正是 cancel 失效、只能靠
+    // 依赖的窗口期。用闸门而不是 sleep 挂住这个窗口:sleep 版本只存在 50ms,全量
+    // 并行跑时 5ms 轮询会整段错过,`inFlight == 1` 永远看不到 → 白等 5s 超时,
+    // 还顺手把要测的竞态跳过了。
+    let gate = DispatchSemaphore(value: 0)
     let body: @Sendable () -> Void = {
       trace.withLock { $0.enter() }
-      Thread.sleep(forTimeInterval: 0.05)
+      gate.wait()
+      gate.signal()  // 令牌传给下一个执行者:放行一次就够整条链过完
       trace.withLock { $0.leave() }
     }
 
     AXCallQueue.shared.schedule(key, body)
-    // 等第一个真正进入执行 —— 这正是 cancel 失效、只能靠依赖的那个窗口期。
-    await waitUntil { trace.withLock { $0.inFlight == 1 } }
+    await waitUntil("op1 进入执行") { trace.withLock { $0.inFlight == 1 } }
     for _ in 0..<7 {
       AXCallQueue.shared.schedule(key, body)
     }
+    gate.signal()
 
-    await waitUntil { trace.withLock { $0.inFlight == 0 && $0.completed >= 2 } }
+    await waitUntil("同 key 批次收敛") { trace.withLock { $0.inFlight == 0 && $0.completed >= 2 } }
     #expect(trace.withLock { $0.overlapped } == false)
     #expect(trace.withLock { $0.peak } == 1)
   }
@@ -81,7 +88,7 @@ struct AXCallQueueConcurrencyTests {
       }
     }
 
-    await waitUntil { trace.withLock { $0.completed == 4 } }
+    await waitUntil("4 个不同 key 跑完") { trace.withLock { $0.completed == 4 } }
     // 不断言 == 4,调度抖动会让它偶尔只叠到 2、3;> 1 就证明串行锁已经解开。
     #expect(trace.withLock { $0.peak } > 1)
   }
@@ -98,7 +105,7 @@ struct AXCallQueueConcurrencyTests {
       }
     }
 
-    await waitUntil { trace.withLock { $0.inFlight == 0 && $0.completed >= 1 } }
+    await waitUntil("节流批次收敛") { trace.withLock { $0.inFlight == 0 && $0.completed >= 1 } }
     #expect(trace.withLock { $0.completed } < 8)
   }
 }

@@ -157,4 +157,25 @@ final class InputSourcePunctuationTests: XCTestCase {
     let decoded = try JSONDecoder().decode(InputSourceSwitchPreferences.self, from: data)
     XCTAssertTrue(decoded.forceEnglishPunctuationEnabled)
   }
+
+  /// AppKit 在 Velto 失活时挂起分布式通知,默认 coalesce 的观察者收不到输入法变更 →
+  /// CJKV 快照冻结在旧值,强制英文标点时灵时不灵。两处后台监听都必须 deliverImmediately。
+  func testInputSourceChangeObserversDeliverImmediately() throws {
+    let root = URL(fileURLWithPath: #filePath)
+      .deletingLastPathComponent()  // VeltoTests
+      .deletingLastPathComponent()  // Tests
+      .deletingLastPathComponent()  // 仓库根
+    for path in [
+      "Sources/Velto/EventTapManager.swift",
+      "Sources/Velto/InputSourceSwitch/InputSourceSwitchController.swift",
+    ] {
+      let text = try String(contentsOf: root.appendingPathComponent(path), encoding: .utf8)
+      guard let name = text.range(of: "kTISNotifySelectedKeyboardInputSourceChanged as String") else {
+        return XCTFail("\(path) 找不到输入法变更监听")
+      }
+      XCTAssertTrue(
+        text[name.upperBound...].prefix(120).contains("suspensionBehavior: .deliverImmediately"),
+        "\(path) 的输入法变更监听必须 deliverImmediately")
+    }
+  }
 }

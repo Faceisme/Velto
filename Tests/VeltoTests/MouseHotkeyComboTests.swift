@@ -66,8 +66,29 @@ private let comboOption = MouseInputTrigger(
     contentsOf: root.appendingPathComponent(
       "Sources/Velto/WindowManagement/WindowDragController.swift"), encoding: .utf8)
   #expect(source.contains("private static let lookupBackoff"))
-  // applyUpdate 与 prewarm 两条入口都必须过闸,并在失败时记账。
+  // applyUpdate 与按下时建会话两条入口都必须过闸,并在失败时记账。
   #expect(source.contains("guard lookupAllowed() else { return false }"))
   #expect(source.contains("self.lookupAllowed()"))
-  #expect(source.components(separatedBy: "noteLookupFailure()").count - 1 == 2)
+  #expect(source.components(separatedBy: "noteLookupFailure(source: \"").count - 1 == 2)
+}
+
+/// 拖窗目标只按「按下修饰键时的光标点」定位:冷却后重试若改查光标当前位置,
+/// 用户已拖出原窗口,会话就绑到下面的窗口(终端 resize 穿透到 DBeaver)。
+/// 每次 flagsChanged 先清旧会话,漏掉的松开不会让下一次按住沿用旧窗口。
+@Test func windowDragTargetsAnchorPointOnly() throws {
+  let root = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+  let source = try String(
+    contentsOf: root.appendingPathComponent(
+      "Sources/Velto/WindowManagement/WindowDragController.swift"), encoding: .utf8)
+  let apply = try #require(source.range(of: "private func applyUpdate("))
+  let applyBody = source[apply.upperBound...].prefix(700)
+  #expect(applyBody.contains("session = beginDrag(mode: mode, at: anchor)"))
+  #expect(!applyBody.contains("beginDrag(mode: mode, at: location)"))
+
+  let flags = try #require(source.range(of: "func handleFlagsChanged("))
+  let flagsBody = source[flags.upperBound...].prefix(400)
+  let reset = try #require(flagsBody.range(of: "resetSession()"))
+  let begin = try #require(flagsBody.range(of: "beginSession(mode: mode"))
+  #expect(reset.lowerBound < begin.lowerBound)
 }

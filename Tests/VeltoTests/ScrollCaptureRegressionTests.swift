@@ -214,8 +214,17 @@ private func framedScrollImage(_ document: CGImage, offset: Int, bodyHeight: Int
   var offset = 0
   let screen = CGRect(x: 0, y: 0, width: 320, height: 800)
   let rect = CGRect(x: 0, y: 500, width: 320, height: 240)
+  // 首帧之后原选区一律不供帧:采样循环会抢在下面的手动 process 之前拼上,打乱时序。
+  // 扩大选区的请求来自 extendBottom,照常供。
+  var opening = true
   let controller = ScrollCaptureController(snapshot: DisplaySnapshot(displayID: 0, image: document, frame: screen, scale: 1),
-    captureRect: rect, frameCapture: { region in scrollFrame(document, at: offset, height: Int(region.height)) })
+    captureRect: rect, frameCapture: { region in
+      if region.height <= rect.height {
+        guard opening else { return nil }
+        opening = false
+      }
+      return scrollFrame(document, at: offset, height: Int(region.height))
+    })
   #expect(await controller.startSession())
   offset = 80
   #expect(await controller.process(currentFrame: scrollFrame(document, at: offset), isSettled: true))
@@ -230,7 +239,13 @@ private func framedScrollImage(_ document: CGImage, offset: Int, bodyHeight: Int
 }
 
 @Test @MainActor func scrollCaptureCancelledStartCannotResurrectSession() async {
-  let controller = scrollController(first: scrollFrame(scrollDocument(), at: 0))
+  // 首帧抓取要慢到取消能落在 startSession 途中,否则它瞬间就返回了,测不到复活。
+  let frame = scrollFrame(scrollDocument(), at: 0)
+  let rect = CGRect(x: 0, y: 0, width: frame.width, height: frame.height)
+  let controller = ScrollCaptureController(
+    snapshot: DisplaySnapshot(displayID: 0, image: frame, frame: rect, scale: 1),
+    captureRect: rect,
+    frameCapture: { _ in try? await Task.sleep(for: .milliseconds(80)); return frame })
   let task = Task { await controller.startSession() }
   try? await Task.sleep(for: .milliseconds(10))
   controller.cancelSession()
@@ -309,8 +324,9 @@ private func framedScrollImage(_ document: CGImage, offset: Int, bodyHeight: Int
     })
   #expect(await controller.startSession())
   animating = true
-  #expect(await controller.finishSession()?.height == 240)
-  #expect(controller.issue == .capture)
+  // 收尾时画面还在动不再判失败:末帧只要过得了像素重叠校验就照样接上。
+  #expect(await controller.finishSession()?.height ?? 0 >= 240)
+  #expect(controller.issue == nil)
   #expect(!controller.isActive)
 }
 
@@ -355,6 +371,22 @@ private func framedScrollImage(_ document: CGImage, offset: Int, bodyHeight: Int
   context.setFillColor(CGColor(gray: 1, alpha: 1))
   context.fill(CGRect(x: 0, y: 160, width: 320, height: 35))
   #expect(ScrollFrameMatcher.match(current: context.makeImage()!, previous: previous) == nil)
+}
+
+@Test func scrollCaptureToleratesAnimatedStickerInOverlap() {
+  // 聊天里的动图表情只占几列,两帧之间换了画面:其余内容严格吻合就该接上,而不是整帧拒掉。
+  let document = scrollDocument()
+  let previous = scrollFrame(document, at: 0)
+  func animated(_ frame: CGImage) -> CGImage {
+    let context = scrollContext(width: frame.width, height: frame.height)
+    context.draw(frame, in: CGRect(x: 0, y: 0, width: frame.width, height: frame.height))
+    context.setFillColor(CGColor(red: 0.9, green: 0.2, blue: 0.1, alpha: 1))
+    context.fill(CGRect(x: 200, y: 60, width: 80, height: 90))
+    return context.makeImage()!
+  }
+  #expect(ScrollFrameMatcher.match(current: animated(scrollFrame(document, at: 80)), previous: previous)?.offset == 80)
+  // 没滚、只有动图在动:认成静止,不报对不上。
+  #expect(ScrollFrameMatcher.match(current: animated(previous), previous: previous)?.offset == 0)
 }
 
 @Test @MainActor func scrollCaptureHeightLimitKeepsContinuousPrefix() async {
@@ -528,6 +560,9 @@ private func framedScrollImage(_ document: CGImage, offset: Int, bodyHeight: Int
     #expect(event.getDoubleValueField(.scrollWheelEventPointDeltaAxis2) == 0)
   }
   animator.processing(dt: 1.0 / 60)
+  if delivered <= beforeEnter {
+    print("DBG531 delivered=\(delivered) beforeEnter=\(beforeEnter) currentIsFirst=\(ScrollCaptureKeyTap.current === first) flags=\(ModifierFormatter.normalizedRawValue(from: wheel.flags)) handleNil=\(first.handle(type: .scrollWheel, event: wheel) == nil)")
+  }
   #expect(delivered > beforeEnter)
   let beforeCancel = delivered
   first.stop()
@@ -541,6 +576,9 @@ private func framedScrollImage(_ document: CGImage, offset: Int, bodyHeight: Int
   #expect(delivered == beforeCancel, "新会话不能恢复前一会话的惯性")
   submit()
   animator.processing(dt: 1.0 / 60)
+  if delivered <= beforeCancel {
+    print("DBG544 delivered=\(delivered) beforeCancel=\(beforeCancel) currentIsSecond=\(ScrollCaptureKeyTap.current === second) handleNil=\(second.handle(type: .scrollWheel, event: wheel) == nil)")
+  }
   #expect(delivered > beforeCancel, "新会话仍可正常向下滚动")
 }
 
@@ -619,7 +657,11 @@ private func framedScrollImage(_ document: CGImage, offset: Int, bodyHeight: Int
   #expect(await controller.startSession())
   defer { controller.cancelSession() }
   offset = 80
-  for _ in 0..<40 where controller.stitchedPixelSize.height == 240 {
+  // 等的是采样循环(50ms 一帧 + 一次拼接)落地。别用固定次数的轮询上限:全量并行跑
+  // 时每次 sleep 都被拖长,40 次早早耗尽而拼接还没轮到,断言当场假红(CPU 压满时实测
+  // 复现)。改成挂钟兜底,正常路径仍是拼上就走。
+  let deadline = Date().addingTimeInterval(5)
+  while controller.stitchedPixelSize.height == 240, Date() < deadline {
     try? await Task.sleep(for: .milliseconds(25))
   }
   #expect(controller.stitchedPixelSize.height == 320)
@@ -737,4 +779,127 @@ func scrollCaptureFractionalSelectionUsesOriginalPixelGrid(_ scale: Double) thro
   for rect in [CGRect.zero, CGRect.infinite, CGRect(x: 2000, y: 2000, width: 20, height: 20)] {
     #expect(ScreenshotCapturer.regionConfiguration(in: snapshot, globalRect: rect) == nil)
   }
+}
+
+private func scrollImageWithCaret(_ image: CGImage) -> CGImage {
+  let ctx = scrollContext(width: image.width, height: image.height)
+  ctx.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+  ctx.setFillColor(CGColor(gray: 0, alpha: 1))
+  ctx.fill(CGRect(x: 12, y: 20, width: 2, height: 16))
+  return ctx.makeImage()!
+}
+
+@MainActor private func blinkingController(_ a: CGImage, _ b: CGImage) -> ScrollCaptureController {
+  let rect = CGRect(x: 0, y: 0, width: a.width, height: a.height)
+  var flip = false
+  return ScrollCaptureController(
+    snapshot: DisplaySnapshot(displayID: 0, image: a, frame: rect, scale: 1),
+    captureRect: rect,
+    frameCapture: { _ in flip.toggle(); return flip ? a : b })
+}
+
+@Test @MainActor func scrollCaptureStartsWhileCaretBlinks() async {
+  // 抓帧有逐帧噪声、插入点会闪:要求两帧逐字节全等就永远取不到首帧,滚动截图直接起不来。
+  let base = scrollFrame(scrollDocument(), at: 0)
+  let controller = blinkingController(base, scrollImageWithCaret(base))
+  #expect(await controller.startSession())
+  controller.cancelSession()
+}
+
+@Test @MainActor func scrollCaptureStartsOnMovingPageWithoutStarvingPipeline() async {
+  // 画面一直在动(动画/视频)时不能整个功能失败,也不能死等——早先等 30 次约 5 秒并占着
+  // 抓帧锁,滚动期间一帧都接不上,最后拼出来只有一屏。
+  let document = scrollDocument()
+  let a = scrollFrame(document, at: 0)
+  let b = scrollFrame(document, at: 40)
+  let rect = CGRect(x: 0, y: 0, width: a.width, height: a.height)
+  var grabs = 0
+  var flip = false
+  let controller = ScrollCaptureController(
+    snapshot: DisplaySnapshot(displayID: 0, image: a, frame: rect, scale: 1),
+    captureRect: rect,
+    frameCapture: { _ in grabs += 1; flip.toggle(); return flip ? a : b })
+  #expect(await controller.startSession())
+  #expect(grabs <= 6)
+  controller.cancelSession()
+}
+
+@Test @MainActor func scrollCaptureStartsWithSingleGrab() async {
+  // 开场只抓一帧就走,不等静止;首帧必须和后续帧同源,否则尺寸差几像素就全程拼不上。
+  let document = scrollDocument()
+  let frozen = scrollFrame(document, at: 0)
+  let rect = CGRect(x: 0, y: 0, width: frozen.width, height: frozen.height)
+  var grabs = 0
+  let controller = ScrollCaptureController(
+    snapshot: DisplaySnapshot(displayID: 0, image: frozen, frame: rect, scale: 1),
+    captureRect: rect,
+    frameCapture: { _ in grabs += 1; return frozen })
+  #expect(await controller.startSession())
+  #expect(grabs == 1)
+  #expect(controller.stitchedPixelSize.height == CGFloat(frozen.height))
+  controller.cancelSession()
+}
+
+@Test func scrollCaptureMatcherFailureBudget() {
+  let document = scrollDocument(width: 1495, height: 6000)
+  let previous = scrollFrame(document, at: 0, height: 1540)
+  let far = scrollFrame(document, at: 3000, height: 1540)
+  let near = scrollFrame(document, at: 240, height: 1540)
+  var start = ContinuousClock.now
+  #expect(ScrollFrameMatcher.match(current: far, previous: previous) == nil)
+  print("匹配失败(带救援) 1495x1540: \(start.duration(to: .now))")
+  start = .now
+  #expect(ScrollFrameMatcher.match(current: far, previous: previous, rescue: false) == nil)
+  print("匹配失败(无救援) 1495x1540: \(start.duration(to: .now))")
+  start = .now
+  #expect(ScrollFrameMatcher.match(current: near, previous: previous)?.offset == 240)
+  print("匹配成功 1495x1540: \(start.duration(to: .now))")
+}
+
+// 离线复盘:用调试日志存下来的真实帧。文件不存在就跳过。
+private func loadDebugFrame(_ name: String) -> CGImage? {
+  let url = FileManager.default.homeDirectoryForCurrentUser
+    .appendingPathComponent("Library/Logs/Velto/scroll-debug/\(name).png")
+  guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+        let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else { return nil }
+  return shiftedFrame(image, by: 0)
+}
+
+/// 内容上移 `rows` 行(模拟向下滚动),底部补白。
+private func shiftedFrame(_ image: CGImage, by rows: CGFloat) -> CGImage? {
+  guard let context = CGContext(data: nil, width: image.width, height: image.height, bitsPerComponent: 8,
+    bytesPerRow: image.width * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+    bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)
+  else { return nil }
+  context.setFillColor(.white)
+  context.fill(CGRect(x: 0, y: 0, width: image.width, height: image.height))
+  context.interpolationQuality = rows == rows.rounded() ? .none : .high
+  context.draw(image, in: CGRect(x: 0, y: rows, width: CGFloat(image.width), height: CGFloat(image.height)))
+  return context.makeImage()
+}
+
+@Test func scrollCaptureDebugFramesReplay() {
+  guard let previous = loadDebugFrame("previous"), let current = loadDebugFrame("current") else { return }
+  var t = ContinuousClock.now
+  print("原始两帧:", ScrollFrameMatcher.match(current: current, previous: previous).map { "offset \($0.offset)" } ?? "nil", t.duration(to: .now))
+  t = .now
+  print("原始两帧无救援:", ScrollFrameMatcher.match(current: current, previous: previous, rescue: false).map { "offset \($0.offset)" } ?? "nil", t.duration(to: .now))
+  for d in [60, 200, 400, 700, 60.5, 200.5, 400.25, 400.5] as [CGFloat] {
+    let still = shiftedFrame(previous, by: d)!
+    let animated = shiftedFrame(current, by: d)!
+    let a = ScrollFrameMatcher.match(current: still, previous: previous)
+    let b = ScrollFrameMatcher.match(current: animated, previous: previous)
+    let t = ContinuousClock.now
+    let c = ScrollFrameMatcher.match(current: animated, previous: previous, rescue: false)
+    let cost = t.duration(to: .now)
+    print("[\(cost)] ","滚 \(d): 无动画 \(a.map { "\($0.offset)" } ?? "nil") | 有动画 \(b.map { "\($0.offset)" } ?? "nil") | 有动画无救援 \(c.map { "\($0.offset)" } ?? "nil")")
+  }
+}
+
+@Test func scrollCaptureLoopMatchesHalfPixelScroll() {
+  // 采样帧不走 Vision 兜底,但必须接得上半像素滚动(Chrome 触控板滚动的常态)。
+  let previous = scrollFrame(scrollDocument(), at: 0)
+  let current = shiftedFrame(previous, by: 40.5)!
+  let offset = ScrollFrameMatcher.match(current: current, previous: previous, rescue: false)?.offset
+  #expect(offset == 40 || offset == 41)
 }
