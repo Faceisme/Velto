@@ -188,7 +188,7 @@ struct AxCircuitBreakerTests {
     let sky = try source("Sources/Velto/Switcher/SkyLightPrivate.swift")
     let target = try source("Sources/Velto/GestureTargetController.swift")
 
-    #expect(sky.contains("@_silgen_name(\"SLSMoveWindow\")"))
+    #expect(sky.contains("case moveWindow = \"SLSMoveWindow\""))
     #expect(target.contains("static func cgWindowUnderPointer(at point: CGPoint)"))
     #expect(drag.contains("SLSMoveWindow(CGS_CONNECTION, session.cgWindowID, &origin)"))
     #expect(drag.contains("GestureTargetController.cgWindowUnderPointer(at: location)"))

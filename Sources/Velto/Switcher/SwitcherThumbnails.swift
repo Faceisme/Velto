@@ -186,7 +186,7 @@ final class SwitcherThumbnails {
         // 选项:忽略系统全局裁剪 + 最高分辨率 + 全尺寸(应对 Stage Manager)
         let options: CGSWindowCaptureOptions = [.ignoreGlobalClipShape, .bestResolution, .fullSize]
         let resultRaw = CGSHWCaptureWindowList(CGS_CONNECTION, &widCopy, 1, options)
-        let array = resultRaw.takeRetainedValue() as? [CGImage] ?? []
+        let array = resultRaw?.takeRetainedValue() as? [CGImage] ?? []
         guard let cgImage = array.first else { return nil }
         return .cgImage(cgImage)
     }

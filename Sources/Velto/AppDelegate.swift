@@ -14,6 +14,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var isListenerRunning = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        let missingSymbols = SkyLightPrivate.missingSymbols
+        if !missingSymbols.isEmpty {
+            NSLog("Velto 当前系统缺少私有符号,相关功能会失效: %@", missingSymbols.joined(separator: ", "))
+        }
+
         configureMainMenu()
         configureInputSubsystem()
 
