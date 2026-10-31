@@ -42,12 +42,43 @@ public struct BetterFinderActionRequest: Codable, Equatable, Sendable {
     public var urls: [URL] {
         urlPaths.map { URL(fileURLWithPath: $0) }
     }
+
+    /// `velto-betterfinder://` 是系统级 URL scheme,网页和任何本地程序都能打开,payload
+    /// 里的应用和路径都不可信:只放行当前菜单确实能产生的动作,并用自己的配置覆盖
+    /// 请求里的选项。
+    ///
+    /// 不查路径是否存在:主程序自己访问用户文件夹可能弹隐私授权,而交给 `open` 时不需要。
+    /// 控制字符必须拒:「拷贝路径」把路径原样写进剪贴板,换行粘贴到终端就是回车。
+    public func validated(against preferences: BetterFinderPreferences) throws -> Self {
+        let menuActions = (
+            BetterFinderMenuBuilder.entries(for: .toolbar, preferences: preferences)
+                + BetterFinderMenuBuilder.entries(for: .contextMenu, preferences: preferences)
+        ).map(\.action)
+        let action: BetterFinderMenuEntryAction? = switch kind {
+        case .open: app.map { .open($0) }
+        case .copyPath: .copyPath
+        }
+        guard let action, menuActions.contains(action) else {
+            throw BetterFinderActionBridgeError.actionNotInMenu(app?.name ?? kind.rawValue)
+        }
+        if let invalid = urlPaths.first(where: { path in
+            !path.hasPrefix("/") || path.unicodeScalars.contains { CharacterSet.controlCharacters.contains($0) }
+        }) {
+            throw BetterFinderActionBridgeError.invalidPath(invalid)
+        }
+
+        var request = self
+        request.escapesCopiedPaths = preferences.escapesCopiedPaths
+        return request
+    }
 }
 
 public enum BetterFinderActionBridgeError: LocalizedError {
     case invalidCallbackURL
     case missingPayload
     case cannotOpenCallbackURL
+    case actionNotInMenu(String)
+    case invalidPath(String)
 
     public var errorDescription: String? {
         switch self {
@@ -57,6 +88,10 @@ public enum BetterFinderActionBridgeError: LocalizedError {
             "增强Finder回调缺少动作数据"
         case .cannotOpenCallbackURL:
             "无法打开增强Finder回调链接"
+        case .actionNotInMenu(let name):
+            "增强Finder菜单里没有这个动作:\(name)"
+        case .invalidPath(let path):
+            "增强Finder回调里的路径无效:\(path)"
         }
     }
 }

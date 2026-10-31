@@ -161,6 +161,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         do {
             let request = try BetterFinderActionBridge.request(from: url)
+                .validated(against: BetterFinderPreferencesStore.shared.preferences)
             BetterFinderDebugLog.log("callback received kind=\(request.kind.rawValue) app=\(request.app?.name ?? "-") urls=\(request.urlPaths.joined(separator: ","))")
             NSLog("BetterFinder callback received: %@ %@", request.kind.rawValue, request.urlPaths.joined(separator: ","))
             try BetterFinderActionRunner.perform(request)
