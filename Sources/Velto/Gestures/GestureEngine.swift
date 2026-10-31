@@ -551,6 +551,7 @@ final class GestureEngine: @unchecked Sendable {
             executeMatchedGesture(
                 shortcut: shortcut,
                 target: target,
+                targetPoint: targetPoint,
                 frontmostApplicationAtGestureStart: frontmostApplicationAtGestureStart
             )
 
@@ -581,6 +582,7 @@ final class GestureEngine: @unchecked Sendable {
                     self.executeMatchedGesture(
                         shortcut: shortcut,
                         target: target,
+                        targetPoint: targetPoint,
                         frontmostApplicationAtGestureStart: frontmostApplicationAtGestureStart
                     )
                 }
@@ -592,6 +594,7 @@ final class GestureEngine: @unchecked Sendable {
     private func executeMatchedGesture(
         shortcut: Shortcut,
         target: GestureExecutionTarget,
+        targetPoint: CGPoint,
         frontmostApplicationAtGestureStart: NSRunningApplication?
     ) {
         GestureTargetController.prepareForExecution(target)
@@ -633,6 +636,12 @@ final class GestureEngine: @unchecked Sendable {
             // 在屏窗口:关窗类快捷键生效就一定会掉一个,不掉就是这次真没生效。
             let watchPid = target.pid
             let winsBefore = watchPid.map(Self.onScreenWindowCount(pid:)) ?? -1
+            // 有的网页不响应 ⌘↑/⌘↓,浏览器里先补一组滚轮(必须在按键之前,见 BrowserEdgeScroll)。
+            if let edge = BrowserEdgeScroll.edge(for: shortcut),
+               BrowserEdgeScroll.isBrowser(watchPid.flatMap(NSRunningApplication.init(processIdentifier:)) ?? front) {
+                WindowManagementDebugLog.log("  🖱 补滚轮 \(edge) @ (\(Int(targetPoint.x)),\(Int(targetPoint.y)))")
+                await BrowserEdgeScroll.send(edge, at: targetPoint)
+            }
             ShortcutSynthesizer.send(shortcut)
             if let watchPid {
                 Task { @MainActor in

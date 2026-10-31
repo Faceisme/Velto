@@ -327,6 +327,8 @@ enum VirtualKeyCode {
     static let minus: UInt16 = 27
     static let w: UInt16 = 13
     static let t: UInt16 = 17
+    static let upArrow: UInt16 = 126
+    static let downArrow: UInt16 = 125
     static let leftBracket: UInt16 = 33
     static let rightBracket: UInt16 = 30
 }
