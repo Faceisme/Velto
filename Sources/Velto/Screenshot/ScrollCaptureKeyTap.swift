@@ -30,12 +30,7 @@ final class ScrollCaptureKeyTap: @unchecked Sendable {
   private var verticalGesture = false
   private var callbackGeneration = 0
   private var hasStopped = false
-  private var tap: CFMachPort?
-  private var runLoopSource: CFRunLoopSource?
-  private var tapRunLoop: CFRunLoop?
-  /// 运行中的 Thread 由系统保活;这里弱持有以避免 thread 闭包与 self 构成引用环。
-  private weak var tapThread: Thread?
-  private var threadStopped: DispatchSemaphore?
+  private var host: EventTapHost?
 
   init(preferences: ScreenshotPreferences, captureRect: CGRect) {
     self.captureRect = captureRect
@@ -64,7 +59,7 @@ final class ScrollCaptureKeyTap: @unchecked Sendable {
   /// 创建会话级 event tap。失败通常表示辅助功能权限或系统资源不可用。
   func start() -> Bool {
     lifecycleLock.lock()
-    let alreadyStarted = tap != nil
+    let alreadyStarted = host != nil
     lifecycleLock.unlock()
     guard !alreadyStarted else { return true }
 
@@ -74,62 +69,24 @@ final class ScrollCaptureKeyTap: @unchecked Sendable {
       .rightMouseDown, .rightMouseDragged, .rightMouseUp,
       .otherMouseDown, .otherMouseDragged, .otherMouseUp]
     let mask = types.reduce(CGEventMask(0)) { $0 | (CGEventMask(1) << $1.rawValue) }
-    let refcon = Unmanaged.passUnretained(self).toOpaque()
-    guard let tap = CGEvent.tapCreate(
-      tap: .cghidEventTap,
+    let host = EventTapHost(
+      name: "com.face.velto.screenshot.scroll-keytap",
+      location: .cghidEventTap,
       place: .headInsertEventTap,
-      options: .defaultTap,
-      eventsOfInterest: mask,
-      callback: Self.tapCallback,
-      userInfo: refcon
-    ) else { return false }
-
-    guard let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0) else {
-      CFMachPortInvalidate(tap)
-      return false
+      mask: mask
+    ) { [unowned self] type, event in
+      self.handle(type: type, event: event)
     }
-
-    let ready = DispatchSemaphore(value: 0)
-    let stopped = DispatchSemaphore(value: 0)
-    let thread = Thread { [self] in
-      defer {
-        clearTapRunLoop(for: Thread.current)
-        stopped.signal()
-      }
-      guard let runLoop = CFRunLoopGetCurrent() else {
-        ready.signal()
-        return
-      }
-      guard installTapRunLoop(runLoop, for: Thread.current) else {
-        ready.signal()
-        return
-      }
-      CFRunLoopAddSource(runLoop, source, .commonModes)
-      ready.signal()
-      CFRunLoopRun()
-      CFRunLoopRemoveSource(runLoop, source, .commonModes)
-    }
-    thread.name = "com.face.velto.screenshot.scroll-keytap"
-    thread.qualityOfService = .userInteractive
 
     lifecycleLock.lock()
     hasStopped = false
-    self.tap = tap
-    runLoopSource = source
-    tapThread = thread
-    threadStopped = stopped
+    self.host = host
     lifecycleLock.unlock()
 
-    thread.start()
-    ready.wait()
-    lifecycleLock.lock()
-    let didStart = self.tap === tap && tapRunLoop != nil
-    lifecycleLock.unlock()
-    guard didStart else {
+    guard host.start() else {
       stop()
       return false
     }
-    CGEvent.tapEnable(tap: tap, enable: true)
     Self.active.withLock { $0 = self }
     return true
   }
@@ -137,71 +94,22 @@ final class ScrollCaptureKeyTap: @unchecked Sendable {
   /// 完整回收 tap、source 与专用 runloop,避免会话结束后继续吞键。
   func stop() {
     lifecycleLock.lock()
-    let tap = tap
-    let source = runLoopSource
-    let runLoop = tapRunLoop
-    let thread = tapThread
-    let stopped = threadStopped
+    let host = host
     callbackGeneration &+= 1
     hasStopped = true
     allowsScrolling = false
     draggingControl = false
     verticalGesture = false
-    self.tap = nil
-    runLoopSource = nil
-    tapRunLoop = nil
-    tapThread = nil
-    threadStopped = nil
+    self.host = nil
     lifecycleLock.unlock()
 
     Self.active.withLock { if $0 === self { $0 = nil } }
-    if let tap {
-      CGEvent.tapEnable(tap: tap, enable: false)
-      CFMachPortInvalidate(tap)
-    }
-    if let source {
-      CFRunLoopSourceInvalidate(source)
-    }
-    if let runLoop {
-      CFRunLoopStop(runLoop)
-    }
-    if let thread, let stopped {
-      if Thread.current !== thread {
-        stopped.wait()
-      }
-    }
+    host?.stop(waitForThread: true)
   }
 
   deinit { stop() }
 
-  private func installTapRunLoop(_ runLoop: CFRunLoop, for thread: Thread) -> Bool {
-    lifecycleLock.lock()
-    defer { lifecycleLock.unlock() }
-    guard tap != nil, tapThread === thread else { return false }
-    tapRunLoop = runLoop
-    return true
-  }
-
-  private func clearTapRunLoop(for thread: Thread) {
-    lifecycleLock.lock()
-    if tapThread === thread { tapRunLoop = nil }
-    lifecycleLock.unlock()
-  }
-
-  private static let tapCallback: CGEventTapCallBack = { _, type, event, refcon in
-    guard let refcon else { return Unmanaged.passUnretained(event) }
-    let keyTap = Unmanaged<ScrollCaptureKeyTap>.fromOpaque(refcon).takeUnretainedValue()
-    return keyTap.handle(type: type, event: event)
-  }
-
   func handle(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
-    if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-      lifecycleLock.lock()
-      let tap = tap
-      lifecycleLock.unlock()
-      if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
-      return Unmanaged.passUnretained(event)
-    }
     lifecycleLock.lock()
     defer { lifecycleLock.unlock() }
     guard !hasStopped else { return nil }

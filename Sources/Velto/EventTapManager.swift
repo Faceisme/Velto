@@ -26,17 +26,6 @@ import betterfinder
 /// inside the sub-controllers on that thread — no cross-thread sync per
 /// event. The few fields read from the callback that are also written by the
 /// main-thread preferences observer (modifier snapshots) use short NSLocks.
-private let veltoEventTapCallback: CGEventTapCallBack = { proxy, type, event, userInfo in
-    guard let userInfo else { return Unmanaged.passUnretained(event) }
-    let manager = Unmanaged<EventTapManager>.fromOpaque(userInfo).takeUnretainedValue()
-    return manager.handle(proxy: proxy, type: type, event: event)
-}
-
-private let veltoScrollEventTapCallback: CGEventTapCallBack = { proxy, type, event, userInfo in
-    guard let userInfo else { return Unmanaged.passUnretained(event) }
-    let manager = Unmanaged<EventTapManager>.fromOpaque(userInfo).takeUnretainedValue()
-    return manager.handleAnnotatedScroll(proxy: proxy, type: type, event: event)
-}
 
 /// 右键透传白区。GestureCaptureView 之类 Velto 自己的"想吃右键"的 view 在被
 /// 显示时把自己的屏幕 rect(event-tap 坐标:左上角原点,Y 向下)写进来,移除
@@ -163,23 +152,12 @@ final class EventTapManager: @unchecked Sendable {
 
     private let dispatcher: InputDispatcher
 
-    private var eventTap: CFMachPort?
-    private var runLoopSource: CFRunLoopSource?
-    private var tapThread: Thread?
-    private var scrollEventTap: CFMachPort?
-    private var scrollRunLoopSource: CFRunLoopSource?
-    /// 滚动链路的专用高 QoS 线程 + runloop。scroll tap 回调、平滑滚动动画
-    /// (CADisplayLink) 与引擎可变状态都 affine 到这条线程,与 HID tap 线程对称,
-    /// 把最高频的滚动处理彻底移出主线程。写于 start(scroll 线程起步),读于
-    /// 主线程 (stop)。
-    private var scrollTapThread: Thread?
-    private var scrollTapRunLoop: CFRunLoop?
-    /// 写于 tap 线程 (start 里 thread block 起步时),读于主线程 (performOnTapThread,
-    /// stop)。启动期靠 `ready.wait()` 同步可见性;`stop()` 仅在主线程调用,所有
-    /// `performOnTapThread` 调用点也都在主线程,串行化天然成立。类整体标
-    /// `@unchecked Sendable`,Swift 6 不替我们检查这个字段的可见性,如果以后
-    /// 引入从其它线程触发 `performOnTapThread` 的路径,要在这里加锁。
-    private var tapRunLoop: CFRunLoop?
+    /// HID tap。回调、手势状态机都在它的线程上。写在主线程(start / stop),
+    /// 所有 `performOnTapThread` 调用点也都在主线程,串行化天然成立。
+    private var hidTap: EventTapHost?
+    /// 滚动链路的专用 tap。scroll tap 回调、平滑滚动动画(CADisplayLink)与引擎可变状态
+    /// 都 affine 到这条线程,与 HID tap 线程对称,把最高频的滚动处理彻底移出主线程。
+    private var scrollTap: EventTapHost?
 
     private var activationObserver: NSObjectProtocol?
     private var storeObserver: NSObjectProtocol?
@@ -250,39 +228,30 @@ final class EventTapManager: @unchecked Sendable {
             forName: .gestureStoreDidChange,
             object: store,
             queue: .main
-        ) { [weak self] _ in
+        ) { [weak self] note in
+            let reason = note.gestureStoreChangeReason
+            let change = note.preferencesChange
             // queue: .main 保证回调在主线程,store 是 @MainActor。
             MainActor.assumeIsolated {
                 guard let self else { return }
-                let preferences = store.preferences
-                let gestures = store.gestures
-                let appProfiles = store.appProfiles
-                let buttonMap = Self.buttonMap(for: store)
-                let version = store.gesturesVersion
-                self.applyPreferenceSnapshots(preferences)
-                // 强制英文标点是全局开关,偏好一变立刻同步快照。
-                let punctuationActive = preferences.inputSourceSwitch.forceEnglishPunctuationEnabled
-                let punctuationSnapshot = Self.currentPunctuationSnapshot()
-                self.performOnTapThread { [weak self] in
-                    self?.dispatcher.gesturesEnabled = preferences.gesturesEnabled
-                    self?.dispatcher.windowManagementEnabled = preferences.windowManagementEnabled
-                    self?.gestureEngine.updatePreferences(preferences)
-                    self?.gestureEngine.updateGestures(
-                        gestures, appProfiles: appProfiles, buttonMap: buttonMap, version: version)
-                    self?.inputSourcePunctuationController.setActive(punctuationActive)
-                    self?.inputSourcePunctuationController.setCurrentInputSourceIsCJKV(punctuationSnapshot.isCJKV)
-                    self?.inputSourcePunctuationController.setCurrentInputSourceProcessID(punctuationSnapshot.imePID)
+                if reason != .preferences {
+                    self.pushGestures()
+                }
+                if let change {
+                    self.pushPreferences(change)
                 }
             }
         }
 
         betterFinderShortcutController.updatePreferences(BetterFinderPreferencesStore.shared.preferences)
+        betterFinderShortcutController.updateHotKeys(BetterFinderPreferencesStore.shared.preferences)
         betterFinderObserver = NotificationCenter.default.addObserver(
             forName: BetterFinderPreferencesStore.didChangeNotification,
             object: nil,
             queue: .main
         ) { [weak self] _ in
             let preferences = BetterFinderPreferencesStore.shared.preferences
+            self?.betterFinderShortcutController.updateHotKeys(preferences)
             self?.performOnTapThread { [weak self] in
                 self?.betterFinderShortcutController.updatePreferences(preferences)
             }
@@ -344,7 +313,7 @@ final class EventTapManager: @unchecked Sendable {
     // MARK: - Lifecycle
 
     func start() -> Bool {
-        guard eventTap == nil else { return true }
+        guard hidTap == nil else { return true }
 
         guard PermissionManager.isAccessibilityTrusted else {
             onStatusChange?("需要辅助功能权限")
@@ -371,83 +340,67 @@ final class EventTapManager: @unchecked Sendable {
             | eventMask(for: .keyDown)
             | eventMask(for: .keyUp)
 
-        guard let tap = CGEvent.tapCreate(
-            tap: .cghidEventTap,
+        let tap = EventTapHost(
+            name: "com.face.velto.eventtap",
+            location: .cghidEventTap,
             place: .headInsertEventTap,
-            options: .defaultTap,
-            eventsOfInterest: mask,
-            callback: veltoEventTapCallback,
-            userInfo: Unmanaged.passUnretained(self).toOpaque()
-        ) else {
+            mask: mask
+        ) { [unowned self] type, event in
+            self.handle(type: type, event: event)
+        }
+        tap.onThreadStart = { [weak self] runLoop in
+            self?.gestureEngine.attach(runLoop: runLoop)
+        }
+        tap.onDisabled = { [weak self] type in
+            self?.handleTapDisabled(type)
+        }
+
+        guard tap.start() else {
             stopScrollEventTap()
             onStatusChange?("事件拦截启动失败")
             return false
         }
 
-        eventTap = tap
-        guard let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0) else {
-            CFMachPortInvalidate(tap)
-            eventTap = nil
-            stopScrollEventTap()
-            onStatusChange?("事件拦截启动失败")
-            return false
-        }
-
-        runLoopSource = source
-        let ready = DispatchSemaphore(value: 0)
-        let thread = Thread { [weak self] in
-            guard let runLoop = CFRunLoopGetCurrent() else {
-                ready.signal()
-                return
-            }
-            CFRunLoopAddSource(runLoop, source, .commonModes)
-            if let self {
-                self.tapRunLoop = runLoop
-                self.gestureEngine.attach(runLoop: runLoop)
-            }
-            ready.signal()
-            CFRunLoopRun()
-            CFRunLoopRemoveSource(runLoop, source, .commonModes)
-        }
-        thread.name = "com.face.velto.eventtap"
-        thread.qualityOfService = QualityOfService.userInteractive
-        tapThread = thread
-        thread.start()
-        ready.wait()
-
-        CGEvent.tapEnable(tap: tap, enable: true)
+        hidTap = tap
         prewarmCaches()
         onStatusChange?("监听中(主动拦截)")
         return true
     }
 
     func stop() {
-        let runLoop = tapRunLoop
-        let tap = eventTap
-        let source = runLoopSource
-
-        if runLoop != nil {
-            performOnTapThread { [weak self] in
-                self?.gestureEngine.detach()
-            }
+        performOnTapThread { [weak self] in
+            self?.gestureEngine.detach()
         }
-
-        tapRunLoop = nil
-        eventTap = nil
-        runLoopSource = nil
-        tapThread = nil
-
-        if let tap {
-            CGEvent.tapEnable(tap: tap, enable: false)
-            CFMachPortInvalidate(tap)
-        }
-        if let source {
-            CFRunLoopSourceInvalidate(source)
-        }
-        if let runLoop {
-            CFRunLoopStop(runLoop)
-        }
+        hidTap?.stop()
+        hidTap = nil
         stopScrollEventTap()
+    }
+
+    /// 低频健康检查,主线程调用。启动时没权限的话授权后自动启动,不用手动点「重启监听」;
+    /// tap 被系统废掉后重建。返回监听是否在跑。
+    @discardableResult
+    func checkHealth() -> Bool {
+        let running = hidTap != nil
+        let tapsEnabled = (hidTap?.ensureEnabled() ?? false) && (scrollTap?.ensureEnabled() ?? false)
+        let action = EventTapHost.healthAction(
+            running: running,
+            tapsEnabled: tapsEnabled,
+            trusted: PermissionManager.isAccessibilityTrusted
+        )
+        switch action {
+        case .keep:
+            return running
+        case .start:
+            break
+        case .restart:
+            stop()
+        case .stop:
+            stop()
+            onStatusChange?("需要辅助功能权限")
+            return false
+        }
+        WindowManagementDebugLog.log("健康检查:\(action)")
+        return start()
     }
 
     // MARK: - Event dispatch (tap thread)
@@ -476,7 +429,7 @@ final class EventTapManager: @unchecked Sendable {
         }
     }
 
-    func handle(proxy: CGEventTapProxy, type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
+    func handle(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
         // 水位计:量化"哪类事件在 tap 线程卡了多久"。`DebugLog.event` 内部自判
         // 开关,慢事件才走到那一步;快路径只多两次读时钟,开销可忽略。
         let watermarkStart = CFAbsoluteTimeGetCurrent()
@@ -490,44 +443,25 @@ final class EventTapManager: @unchecked Sendable {
             }
         }
 
-        if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-            // tap 被系统禁用期间事件全丢(含 rightMouseUp)。重启后所有模块都要复位,
-            // 否则手势会卡在 .gesturing 半路,之后的手势连环判为 abandoned、整片失灵。
-            // 留痕方便对照"resize 拖错窗口"之类的问题是不是赶上了 tap 被禁用。
-            dispatcher.resetTransientState()
-            WindowManagementDebugLog.log(
-                "⚠️ event tap 被系统禁用(\(type == .tapDisabledByTimeout ? "超时" : "用户输入")),已重新启用")
-            if let eventTap {
-                CGEvent.tapEnable(tap: eventTap, enable: true)
-            }
-            if DebugLog.isEnabled {
-                DebugLog.event("tap", [
-                    "event": "reenabled",
-                    "kind": type == .tapDisabledByTimeout ? "timeout" : "userInput"
-                ])
-            }
-            onStatusChange?("监听中(tap 已重启)")
-            return nil
-        }
-
         return dispatcher.dispatch(type: type, event: event) ? nil : Unmanaged.passUnretained(event)
+    }
+
+    /// tap 被系统禁用期间事件全丢(含 rightMouseUp)。重启后所有模块都要复位,
+    /// 否则手势会卡在 .gesturing 半路,之后的手势连环判为 abandoned、整片失灵。
+    /// 留痕方便对照"resize 拖错窗口"之类的问题是不是赶上了 tap 被禁用。
+    private func handleTapDisabled(_ type: CGEventType) {
+        dispatcher.resetTransientState()
+        let timedOut = type == .tapDisabledByTimeout
+        WindowManagementDebugLog.log("⚠️ event tap 被系统禁用(\(timedOut ? "超时" : "用户输入")),已重启")
+        if DebugLog.isEnabled {
+            DebugLog.event("tap", ["event": "reenabled", "kind": timedOut ? "timeout" : "userInput"])
+        }
+        onStatusChange?("监听中(tap 已重启)")
     }
 
     // MARK: - Annotated scroll tap (scroll thread)
 
-    func handleAnnotatedScroll(
-        proxy: CGEventTapProxy,
-        type: CGEventType,
-        event: CGEvent
-    ) -> Unmanaged<CGEvent>? {
-        if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-            mouseControlController.stopSmoothScroll()
-            if let scrollEventTap {
-                CGEvent.tapEnable(tap: scrollEventTap, enable: true)
-            }
-            return Unmanaged.passUnretained(event)
-        }
-
+    func handleAnnotatedScroll(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
         guard type == .scrollWheel else {
             return Unmanaged.passUnretained(event)
         }
@@ -554,83 +488,45 @@ final class EventTapManager: @unchecked Sendable {
     }
 
     private func startScrollEventTap() -> Bool {
-        guard scrollEventTap == nil else { return true }
+        guard scrollTap == nil else { return true }
 
-        let mask = eventMask(for: .scrollWheel)
-        guard let tap = CGEvent.tapCreate(
-            tap: .cgAnnotatedSessionEventTap,
+        let tap = EventTapHost(
+            name: "com.face.velto.scrolltap",
+            location: .cgAnnotatedSessionEventTap,
             place: .tailAppendEventTap,
-            options: .defaultTap,
-            eventsOfInterest: mask,
-            callback: veltoScrollEventTapCallback,
-            userInfo: Unmanaged.passUnretained(self).toOpaque()
-        ) else {
-            return false
+            mask: eventMask(for: .scrollWheel)
+        ) { [unowned self] type, event in
+            self.handleAnnotatedScroll(type: type, event: event)
         }
-
-        guard let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0) else {
-            CFMachPortInvalidate(tap)
-            return false
-        }
-
-        scrollEventTap = tap
-        scrollRunLoopSource = source
 
         // CADisplayLink 必须在主线程访问 NSScreen 创建;创建后随线程一起带到滚动
         // 线程,在那条 runloop 上 add(to:),回调即在滚动线程触发。一次性交接,用
-        // 盒子越过 @Sendable 线程闭包的边界(CADisplayLink 非 Sendable)。
+        // 盒子越过线程闭包的边界(CADisplayLink 非 Sendable)。
         let displayLinkBox = UncheckedSendableBox(mouseControlController.makeScrollDisplayLink())
-
-        let ready = DispatchSemaphore(value: 0)
-        let thread = Thread { [weak self] in
-            guard let runLoop = CFRunLoopGetCurrent() else {
-                ready.signal()
-                return
-            }
-            CFRunLoopAddSource(runLoop, source, .commonModes)
-            if let self {
-                self.scrollTapRunLoop = runLoop
-                self.mouseControlController.attachScrollRunLoop(
-                    runLoop,
-                    thread: Thread.current,
-                    displayLink: displayLinkBox.value
-                )
-            }
-            ready.signal()
-            CFRunLoopRun()
-            CFRunLoopRemoveSource(runLoop, source, .commonModes)
-            // runloop 已退出,在本线程打破 CADisplayLink ↔ animator 的引用环。
+        tap.onThreadStart = { [weak self] runLoop in
+            self?.mouseControlController.attachScrollRunLoop(
+                runLoop,
+                thread: Thread.current,
+                displayLink: displayLinkBox.value
+            )
+        }
+        // runloop 已退出,在本线程打破 CADisplayLink ↔ animator 的引用环。
+        tap.onThreadExit = { [weak self] in
             self?.mouseControlController.detachScrollRunLoop()
         }
-        thread.name = "com.face.velto.scrolltap"
-        thread.qualityOfService = QualityOfService.userInteractive
-        scrollTapThread = thread
-        thread.start()
-        ready.wait()
+        tap.onDisabled = { [weak self] _ in
+            self?.mouseControlController.stopSmoothScroll()
+        }
 
-        CGEvent.tapEnable(tap: tap, enable: true)
+        guard tap.start() else { return false }
+        scrollTap = tap
         return true
     }
 
     private func stopScrollEventTap() {
         mouseControlController.stopSmoothScroll()
-        let runLoop = scrollTapRunLoop
-        if let tap = scrollEventTap {
-            CGEvent.tapEnable(tap: tap, enable: false)
-            CFMachPortInvalidate(tap)
-        }
-        if let source = scrollRunLoopSource {
-            CFRunLoopSourceInvalidate(source)
-        }
-        // 唤醒并停止滚动线程的 runloop;线程块退出时会移除 source 并 detach
-        // CADisplayLink。
-        if let runLoop {
-            CFRunLoopStop(runLoop)
-        }
-        scrollEventTap = nil
-        scrollRunLoopSource = nil
-        scrollTapRunLoop = nil
-        scrollTapThread = nil
+        scrollTap?.stop()
+        scrollTap = nil
     }
 
     // MARK: - Cross-thread helpers
@@ -639,9 +535,40 @@ final class EventTapManager: @unchecked Sendable {
     /// observers that need to mutate engine state safely. If the tap thread
     /// isn't running yet (start hasn't been called), the work is dropped.
     private func performOnTapThread(_ work: @escaping () -> Void) {
-        guard let runLoop = tapRunLoop else { return }
-        CFRunLoopPerformBlock(runLoop, CFRunLoopMode.commonModes.rawValue, work)
-        CFRunLoopWakeUp(runLoop)
+        hidTap?.perform(work)
+    }
+
+    @MainActor
+    private func pushGestures() {
+        let gestures = store.gestures
+        let appProfiles = store.appProfiles
+        let buttonMap = Self.buttonMap(for: store)
+        let version = store.gesturesVersion
+        performOnTapThread { [weak self] in
+            self?.gestureEngine.updateGestures(
+                gestures, appProfiles: appProfiles, buttonMap: buttonMap, version: version)
+        }
+    }
+
+    @MainActor
+    private func pushPreferences(_ change: PreferencesChange) {
+        let preferences = change.current
+        applyPreferenceSnapshots(preferences)
+        performOnTapThread { [weak self] in
+            self?.dispatcher.gesturesEnabled = preferences.gesturesEnabled
+            self?.dispatcher.windowManagementEnabled = preferences.windowManagementEnabled
+            self?.gestureEngine.updatePreferences(preferences)
+        }
+
+        // 强制英文标点是全局开关,一变立刻同步快照。
+        guard change.changed(\.inputSourceSwitch.forceEnglishPunctuationEnabled) else { return }
+        let punctuationActive = preferences.inputSourceSwitch.forceEnglishPunctuationEnabled
+        let punctuationSnapshot = Self.currentPunctuationSnapshot()
+        performOnTapThread { [weak self] in
+            self?.inputSourcePunctuationController.setActive(punctuationActive)
+            self?.inputSourcePunctuationController.setCurrentInputSourceIsCJKV(punctuationSnapshot.isCJKV)
+            self?.inputSourcePunctuationController.setCurrentInputSourceProcessID(punctuationSnapshot.imePID)
+        }
     }
 
     /// 强制英文标点需要的当前输入法快照:是否 CJKV + 宿主进程 PID(查候选窗在屏用)。
@@ -670,6 +597,9 @@ final class EventTapManager: @unchecked Sendable {
         )
         contentZoomController.updateModifierFlag(preferences.contentZoomModifierFlags)
         windowShortcutController.updateShortcut(preferences.windowMaximizeShortcut)
+        windowShortcutController.updateHotKey(
+            preferences.windowManagementEnabled ? preferences.windowMaximizeShortcut : nil
+        )
         windowShortcutController.updateMaximizeButton(
             preferences.windowMaximizeButton,
             excludedApps: Set(preferences.windowMaximizeButtonExcludedApps)

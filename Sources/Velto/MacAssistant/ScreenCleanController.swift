@@ -1,13 +1,11 @@
 import AppKit
-import Carbon.HIToolbox
 import Observation
 
 /// 擦屏助手:每块屏幕盖一层黑窗,键盘输入全部吞掉,只有解锁快捷键能退出。
 ///
 /// 吞键分三层:
 /// - HID 级 event tap 插在最前,吞 keyDown/keyUp/flagsChanged 和媒体键;
-/// - 安全输入开着时系统把 keyDown 从所有 tap 里滤掉,解锁靠 Carbon 热键兜底 ——
-///   平时 tap 先吞了,热键不会响,两条路互不干扰;
+/// - 安全输入开着时系统把 keyDown 从所有 tap 里滤掉,解锁靠 `GlobalHotKey` 兜底;
 /// - tap 被系统停掉的空当漏出来的键,落到前台的 Velto(开关就在设置窗口里拨),
 ///   被本地 monitor 吞掉。
 @MainActor
@@ -20,10 +18,9 @@ final class ScreenCleanController {
   private var windows: [NSWindow] = []
   private var hints: [NSTextField] = []
   private var hintGeneration = 0
-  private var tap: CFMachPort?
+  private var tap: EventTapHost?
   private var keyMonitor: Any?
-  private var hotKey: EventHotKeyRef?
-  private var hotKeyHandler: EventHandlerRef?
+  private var hotKey: GlobalHotKey?
   private var activity: NSObjectProtocol?
   private var unlock = MacAssistantPreferences.defaults.screenCleanUnlockShortcut
   private var unlockModifiers: UInt64 = 0
@@ -77,14 +74,10 @@ final class ScreenCleanController {
   private func stop() {
     guard isActive else { return }
     isActive = false
-    if let tap {
-      CGEvent.tapEnable(tap: tap, enable: false)
-      CFMachPortInvalidate(tap)  // 连带让挂在主 run loop 上的 source 失效
-    }
+    tap?.stop()
     tap = nil
     if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
     keyMonitor = nil
-    if let hotKey { UnregisterEventHotKey(hotKey) }
     hotKey = nil
     windows.forEach { $0.orderOut(nil) }
     windows = []
@@ -127,70 +120,34 @@ final class ScreenCleanController {
     // 14 = NX_SYSDEFINED:亮度/音量/播放这些媒体键,不吞的话一抹键盘音量就拉满了。
     let mask = [CGEventType.keyDown, .keyUp, .flagsChanged]
       .reduce(CGEventMask(1) << 14) { $0 | (CGEventMask(1) << $1.rawValue) }
-    guard let tap = CGEvent.tapCreate(
-      tap: .cghidEventTap,
+    let tap = EventTapHost(
+      name: "com.face.velto.screenclean",
+      location: .cghidEventTap,
       place: .headInsertEventTap,
-      options: .defaultTap,
-      eventsOfInterest: mask,
-      callback: Self.tapCallback,
-      userInfo: nil
-    ) else { return false }
-    guard let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0) else {
-      CFMachPortInvalidate(tap)
-      return false
+      mask: mask
+    ) { type, event in
+      // 黑屏期间吞掉所有输入,只看 keyDown 里有没有解锁键。
+      if type == .keyDown {
+        let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
+        let modifiers = ModifierFormatter.normalizedRawValue(from: event.flags)
+        DispatchQueue.main.async {
+          ScreenCleanController.shared.handleKeyDown(keyCode: keyCode, modifiers: modifiers)
+        }
+      }
+      return nil
     }
-    // ponytail: tap 挂在主线程,主线程卡 >1s 会被系统停掉;回调收到 disabled 立刻重开,
-    // 空当漏的键由本地 monitor 兜。真不够再挪专用线程(参考 ScrollCaptureKeyTap)。
-    CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
-    CGEvent.tapEnable(tap: tap, enable: true)
+    guard tap.start() else { return false }
     self.tap = tap
     return true
   }
 
-  nonisolated private static let tapCallback: CGEventTapCallBack = { _, type, event, _ in
-    if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-      MainActor.assumeIsolated {
-        if let tap = ScreenCleanController.shared.tap { CGEvent.tapEnable(tap: tap, enable: true) }
-      }
-      return Unmanaged.passUnretained(event)
-    }
-    if type == .keyDown {
-      let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
-      let modifiers = ModifierFormatter.normalizedRawValue(from: event.flags)
-      MainActor.assumeIsolated {
-        ScreenCleanController.shared.handleKeyDown(keyCode: keyCode, modifiers: modifiers)
-      }
-    }
-    return nil
-  }
-
-  nonisolated private static let hotKeySignature: OSType = 0x5653_434C  // "VSCL"
-
-  /// 解锁键注册成 Carbon 热键,只在安全输入把 keyDown 从 tap 里滤掉时才会响。
+  /// 解锁键注册成热键,只在安全输入把 keyDown 从 tap 里滤掉时才会响。
   /// Carbon 没有 Fn 位,兜底时不认 Fn。
   private func registerHotKey() {
-    if hotKeyHandler == nil {
-      var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
-      InstallEventHandler(GetEventDispatcherTarget(), Self.hotKeyCallback, 1, &spec, nil, &hotKeyHandler)
-    }
-    var mods = 0
-    if unlockModifiers & CGEventFlags.maskCommand.storedRawValue != 0 { mods |= cmdKey }
-    if unlockModifiers & CGEventFlags.maskShift.storedRawValue != 0 { mods |= shiftKey }
-    if unlockModifiers & CGEventFlags.maskAlternate.storedRawValue != 0 { mods |= optionKey }
-    if unlockModifiers & CGEventFlags.maskControl.storedRawValue != 0 { mods |= controlKey }
-    RegisterEventHotKey(
-      UInt32(unlock.keyCode), UInt32(mods), EventHotKeyID(signature: Self.hotKeySignature, id: 0),
-      GetEventDispatcherTarget(), 0, &hotKey
+    hotKey = GlobalHotKey(
+      keyCode: unlock.keyCode,
+      modifierFlags: unlockModifiers & ~CGEventFlags.maskSecondaryFn.rawValue,
+      action: { MainActor.assumeIsolated { ScreenCleanController.shared.unlockSoon() } }
     )
-  }
-
-  nonisolated private static let hotKeyCallback: EventHandlerUPP = { _, event, _ in
-    var id = EventHotKeyID()
-    guard let event,
-          GetEventParameter(event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID),
-                            nil, MemoryLayout<EventHotKeyID>.size, nil, &id) == noErr,
-          id.signature == ScreenCleanController.hotKeySignature else { return OSStatus(eventNotHandledErr) }
-    MainActor.assumeIsolated { ScreenCleanController.shared.unlockSoon() }
-    return noErr
   }
 }

@@ -12,6 +12,9 @@ final class WindowShortcutController: @unchecked Sendable {
     private let lock = NSLock()
     private var maximizeShortcut: Shortcut?
     private var maximizeButton: MouseButtonTrigger?
+    // 热键相关只在主线程读写(偏好同步在 main)。
+    private var hotKeyShortcut: Shortcut?
+    private var hotKey: GlobalHotKey?
     /// 最大化鼠标按钮不接管的 App(bundle id)。
     private var maximizeButtonExcludedApps: Set<String> = []
     /// 按下时被吞掉、还没抬起的按钮号;对应的 dragged / up 也要一并认领。
@@ -21,6 +24,25 @@ final class WindowShortcutController: @unchecked Sendable {
         lock.lock()
         maximizeShortcut = shortcut
         lock.unlock()
+    }
+
+    /// 主线程调用。安全输入开着时 tap 收不到 keyDown,靠热键兜底。窗口管理关着时传 nil,
+    /// 否则 tap 放行的组合键会被热键抢走。
+    func updateHotKey(_ shortcut: Shortcut?) {
+        guard shortcut != hotKeyShortcut else { return }
+        hotKeyShortcut = shortcut
+        hotKey = nil
+        guard let shortcut else { return }
+        hotKey = GlobalHotKey(
+            keyCode: shortcut.keyCode,
+            modifierFlags: shortcut.modifierFlags,
+            logFailure: { status in
+                WindowManagementDebugLog.log("最大化热键注册失败 status=\(status) shortcut=\(shortcut.displayName)")
+            },
+            action: { [weak self] in
+                self?.maximize(at: CGEvent(source: nil)?.location ?? .zero)
+            }
+        )
     }
 
     func updateMaximizeButton(_ trigger: MouseButtonTrigger?, excludedApps: Set<String> = []) {

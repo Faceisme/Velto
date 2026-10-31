@@ -61,7 +61,7 @@ final class FocusAutomationController {
     running = true
     FocusAutomationDebugLog.setEnabled(prefs.debugLoggingEnabled)
     NotificationCenter.default.addObserver(
-      self, selector: #selector(preferencesChanged),
+      self, selector: #selector(preferencesChanged(_:)),
       name: .gestureStoreDidChange, object: GestureStore.shared
     )
     // App 退出时立刻评估,不等下一次轮询。
@@ -113,7 +113,8 @@ final class FocusAutomationController {
     }
   }
 
-  @objc private func preferencesChanged() {
+  @objc private func preferencesChanged(_ note: Notification) {
+    guard note.preferencesChange?.changed(\.focusAutomation) == true else { return }
     FocusAutomationDebugLog.setEnabled(prefs.debugLoggingEnabled)
     // 改了设置(比如换了快捷指令名)就允许失败的「打开」再试一次。
     if !focusApplied {

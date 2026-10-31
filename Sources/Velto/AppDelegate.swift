@@ -12,8 +12,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var lastStatus = "正在启动"
     private var lastGesture = "暂无手势"
     private var isListenerRunning = false
+    private var healthTimer: Timer?
+    private var terminationSignal: DispatchSourceSignal?
+
+    /// 低频就够:只为授权恢复后自动启动、tap 被系统废掉后重建,不是实时路径。
+    private static let healthCheckInterval: TimeInterval = 10
+    private nonisolated static let terminationDeadline: TimeInterval = 5
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        installTerminationSignalHandler()
+
         let missingSymbols = SkyLightPrivate.missingSymbols
         if !missingSymbols.isEmpty {
             NSLog("Velto 当前系统缺少私有符号,相关功能会失效: %@", missingSymbols.joined(separator: ", "))
@@ -24,7 +32,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         NotificationCenter.default.addObserver(
             self,
-            selector: #selector(storeDidChange),
+            selector: #selector(storeDidChange(_:)),
             name: .gestureStoreDidChange,
             object: store
         )
@@ -49,9 +57,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // 放到下一轮:弹窗是模态的,别挡住上面的启动流程。
         DispatchQueue.main.async { ConfigRecovery.presentNotices() }
+
+        startHealthCheck()
+    }
+
+    /// `pkill` 这类 SIGTERM 默认直接杀进程,不走 applicationWillTerminate,系统 ⌘Tab 和
+    /// hidutil 映射就留在改过的状态。转成正常退出。
+    ///
+    /// 信号不能只交给主线程:`pkill` 是紧急停止的手段,主线程卡死时也得停得下来。
+    /// 正常退出最长等 3 秒(关勿扰),超过这个时间就直接结束进程。
+    private func installTerminationSignalHandler() {
+        signal(SIGTERM, SIG_IGN)
+        let source = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .global())
+        source.setEventHandler {
+            DispatchQueue.main.async { NSApp.terminate(nil) }
+            DispatchQueue.global().asyncAfter(deadline: .now() + Self.terminationDeadline) { _exit(EXIT_FAILURE) }
+        }
+        source.resume()
+        terminationSignal = source
+    }
+
+    private func startHealthCheck() {
+        healthTimer = Timer.scheduledTimer(withTimeInterval: Self.healthCheckInterval, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.checkHealth() }
+        }
+        healthTimer?.tolerance = 2
+    }
+
+    private func checkHealth() {
+        // 切到别的用户时会话不在前台,tap 可能被系统暂停,不是坏了。回来再查。
+        let session = CGSessionCopyCurrentDictionary() as? [String: Any]
+        guard session?[kCGSessionOnConsoleKey as String] as? Bool != false else { return }
+
+        isListenerRunning = eventTapManager?.checkHealth() ?? false
+        SwitcherController.shared.checkHealth()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        healthTimer?.invalidate()
         stopListener()
         // ⚠️ 必须恢复系统 Cmd+Tab —— 它是 OS 持久状态,我们不复位的话用户下次
         // 开机系统切换器都是关的。
@@ -231,11 +274,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.menu = menu
     }
 
-    @objc private func storeDidChange() {
+    @objc private func storeDidChange(_ note: Notification) {
         // tap 常驻,不再随手势开关启停。各功能开关的生效由 EventTapManager 自己的
-        // storeObserver 推快照到分发处处理;这里只刷新菜单栏图标。
-        configureStatusItem()
-        NetworkMonitorController.shared.setEnabled(store.preferences.networkMonitorEnabled)
+        // storeObserver 推快照到分发处处理;这里只管菜单栏图标和网络监控。
+        guard let change = note.preferencesChange else { return }
+        if change.changed(\.showMenuBarIcon) {
+            configureStatusItem()
+        }
+        if change.changed(\.networkMonitorEnabled) {
+            NetworkMonitorController.shared.setEnabled(change.current.networkMonitorEnabled)
+        }
     }
 
     @objc private func openSettings() {

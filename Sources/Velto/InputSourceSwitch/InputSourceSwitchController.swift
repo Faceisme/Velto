@@ -75,8 +75,7 @@ final class InputSourceSwitchController {
   }
 
   @objc private func storeChanged(_ note: Notification) {
-    guard note.gestureStoreChangeReason == .preferences
-            || note.gestureStoreChangeReason == .backupImport else { return }
+    guard note.preferencesChange?.changed(\.inputSourceSwitch) == true else { return }
     // 与 systemInputSourceChanged 同理:@objc 派发绕过 @MainActor 隔离的编译期检查,
     // 显式跳回主线程再访问 monitor / 偏好状态。
     Task { @MainActor [weak self] in

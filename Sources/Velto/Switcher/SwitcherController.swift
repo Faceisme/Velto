@@ -149,10 +149,13 @@ final class SwitcherController {
     }
 
     @objc private func handleStoreChanged(_ note: Notification) {
-        // 关心的只是 preferences 变化(手势列表变化跟我们无关)
-        guard note.gestureStoreChangeReason == .preferences ||
-                note.gestureStoreChangeReason == .backupImport else { return }
+        guard note.preferencesChange?.changed(\.switcher) == true else { return }
         applyPreferencesToKeyTap()
+    }
+
+    /// 低频健康检查:启动时没权限的话,授权后自动接管 ⌘Tab。
+    func checkHealth() {
+        keyTap.checkHealth()
     }
 
     private func applyPreferencesToKeyTap() {
@@ -278,14 +281,6 @@ final class SwitcherController {
 
     /// 开始这次 session 的缩略图抓取。抓到一张就找对应 tile 更新一张。
     private func startThumbnailCapture(for session: SwitcherSession) {
-        // 第一次 trigger 时,如果还没拿 Screen Recording 权限就弹一次。
-        // 弹完用户也得重启 app 才生效,所以这里我们仍然继续往下走 —— 这次
-        // session 用 P1 退化样式(只 app 图标),下次启动后才真有缩略图。
-        if !didPromptForScreenRecording && !PermissionManager.isScreenRecordingTrusted {
-            didPromptForScreenRecording = true
-            _ = PermissionManager.requestScreenRecordingPrompt()
-        }
-
         let panelRef = panel
         SwitcherThumbnails.shared.captureThumbnails(
             for: session.windows,
@@ -299,7 +294,15 @@ final class SwitcherController {
                     tile.updateThumbnail(contents)
                 }
             },
-            completion: {}
+            // 抓不到才可能是没权限:`CGPreflightScreenCaptureAccess()` 在 app 冷启动后的
+            // 几十秒里会假阴性,不能拿它做前置判断(同 ScreenshotController)。弹完用户也得
+            // 重启 app 才生效,这次 session 保持纯图标。
+            onNothingCapturable: { [weak self] in
+                guard let self, !self.didPromptForScreenRecording,
+                      !PermissionManager.isScreenRecordingTrusted else { return }
+                self.didPromptForScreenRecording = true
+                _ = PermissionManager.requestScreenRecordingPrompt()
+            }
         )
     }
 

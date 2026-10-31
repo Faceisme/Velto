@@ -396,3 +396,14 @@ docs/
 ```bash
 pkill -x Velto
 ```
+
+`pkill` 发的是 SIGTERM，Velto 会走正常退出，恢复系统 ⌘Tab 和 Caps Lock 改键。主线程卡死时 5 秒后强制结束，这种情况同样来不及恢复。
+
+崩溃或 `kill -9` 时来不及恢复：
+
+- 系统 ⌘Tab 不能用：重新打开一次 Velto 就会恢复，不打算再用的话重启电脑后恢复。
+- Caps Lock 还是改键：执行下面的命令，或者重启电脑。这条命令会清空所有 `hidutil` 用户映射。
+
+```bash
+hidutil property --set '{"UserKeyMapping":[]}'
+```

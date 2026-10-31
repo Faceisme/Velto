@@ -42,17 +42,14 @@ final class SwitcherThumbnails {
     func captureThumbnails(
         for windows: [SwitcherWindow],
         onThumbnailReady: @escaping @MainActor (SwitcherWindow, CALayerContents) -> Void,
-        completion: @escaping @MainActor () -> Void
+        onNothingCapturable: @escaping @MainActor () -> Void
     ) {
         let now = CFAbsoluteTimeGetCurrent()
         let needsCapture = windows.filter {
             $0.thumbnail == nil || now - $0.thumbnailCapturedAt > Self.staleAfter
         }
-        guard !needsCapture.isEmpty else {
-            // 所有窗口都有缓存图了 —— 直接完事,session 全程不抓 SCK
-            completion()
-            return
-        }
+        // 所有窗口都有缓存图了 —— 直接完事,session 全程不抓 SCK
+        guard !needsCapture.isEmpty else { return }
         let widMap: [CGWindowID: SwitcherWindow] = Dictionary(
             uniqueKeysWithValues: needsCapture.map { ($0.cgWindowId, $0) }
         )
@@ -60,7 +57,7 @@ final class SwitcherThumbnails {
             await Self.runCaptureSession(
                 widMap: widMap,
                 onThumbnailReady: onThumbnailReady,
-                completion: completion
+                onNothingCapturable: onNothingCapturable
             )
         }
     }
@@ -102,11 +99,11 @@ final class SwitcherThumbnails {
     private static func runCaptureSession(
         widMap: [CGWindowID: SwitcherWindow],
         onThumbnailReady: @escaping @MainActor (SwitcherWindow, CALayerContents) -> Void,
-        completion: @escaping @MainActor () -> Void
+        onNothingCapturable: @escaping @MainActor () -> Void
     ) async {
         let scBoxes = await cache.boxes(forWids: Array(widMap.keys))
         guard !scBoxes.isEmpty else {
-            await MainActor.run { completion() }
+            await MainActor.run { onNothingCapturable() }
             return
         }
 
@@ -130,7 +127,6 @@ final class SwitcherThumbnails {
             }
             await group.waitForAll()
         }
-        await MainActor.run { completion() }
     }
 
     private static func warmOne(box: SwitcherWindowBox) async {

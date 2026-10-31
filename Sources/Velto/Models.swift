@@ -312,12 +312,28 @@ enum GestureStoreChangeReason: String {
     case backupImport
 }
 
+/// 一次配置变化的前后快照。所有模块共用一个通知,各自只比较关心的那部分,没变就不动:
+/// 否则改一个滑块也会让切换器重注册热键、输入法清空缓存。
+struct PreferencesChange {
+    let previous: AppPreferences
+    let current: AppPreferences
+
+    func changed<Value: Equatable>(_ keyPath: KeyPath<AppPreferences, Value>) -> Bool {
+        previous[keyPath: keyPath] != current[keyPath: keyPath]
+    }
+}
+
 extension Notification {
     var gestureStoreChangeReason: GestureStoreChangeReason? {
         guard let rawValue = userInfo?[GestureStore.changeReasonUserInfoKey] as? String else {
             return nil
         }
         return GestureStoreChangeReason(rawValue: rawValue)
+    }
+
+    /// 配置变了才有;只改手势时是 nil。
+    var preferencesChange: PreferencesChange? {
+        userInfo?[GestureStore.preferencesChangeUserInfoKey] as? PreferencesChange
     }
 }
 
@@ -353,6 +369,7 @@ final class GestureStore {
     // `Notification` 的 userInfo 是字符串 key 的 dictionary,extension 上的
     // accessor 必须 nonisolated 才能从任意 actor 读取。
     nonisolated static let changeReasonUserInfoKey = "reason"
+    nonisolated static let preferencesChangeUserInfoKey = "preferencesChange"
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
 
@@ -400,10 +417,16 @@ final class GestureStore {
     }
 
     func updatePreferences(_ update: (inout AppPreferences) -> Void) {
+        let previous = preferences
         update(&preferences)
+        // 写回同一个值时什么都不做:不重写配置,也不惊动各模块。
+        guard preferences != previous else { return }
         savePreferences()
         syncDebugLog()
-        notifyChanged(reason: .preferences)
+        notifyChanged(
+            reason: .preferences,
+            preferencesChange: PreferencesChange(previous: previous, current: preferences)
+        )
     }
 
     func exportBackupData() throws -> Data {
@@ -433,6 +456,7 @@ final class GestureStore {
             throw GestureBackupError.emptyGestureList
         }
 
+        let previousPreferences = preferences
         gestures = backup.gestures
         if let profiles = backup.gestureAppProfiles {
             appProfiles = profiles
@@ -454,7 +478,10 @@ final class GestureStore {
         saveGestures()
         savePreferences()
         syncDebugLog()
-        notifyChanged(reason: .backupImport)
+        notifyChanged(
+            reason: .backupImport,
+            preferencesChange: PreferencesChange(previous: previousPreferences, current: preferences)
+        )
     }
 
     /// 全局手势和按 App 的手势一起写。
@@ -479,12 +506,10 @@ final class GestureStore {
         WindowManagementDebugLog.setEnabled(preferences.windowManagementDebugLoggingEnabled)
     }
 
-    private func notifyChanged(reason: GestureStoreChangeReason) {
-        NotificationCenter.default.post(
-            name: .gestureStoreDidChange,
-            object: self,
-            userInfo: [Self.changeReasonUserInfoKey: reason.rawValue]
-        )
+    private func notifyChanged(reason: GestureStoreChangeReason, preferencesChange: PreferencesChange? = nil) {
+        var userInfo: [String: Any] = [Self.changeReasonUserInfoKey: reason.rawValue]
+        userInfo[Self.preferencesChangeUserInfoKey] = preferencesChange
+        NotificationCenter.default.post(name: .gestureStoreDidChange, object: self, userInfo: userInfo)
     }
 
     private static func load<T: Decodable>(

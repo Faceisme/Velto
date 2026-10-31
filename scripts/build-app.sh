@@ -251,6 +251,11 @@ fi
 # 干掉旧实例,免得替换时撞文件锁
 pkill -f "$INSTALLED_APP/Contents/MacOS/Velto" 2>/dev/null || true
 pkill -f "$LEGACY_INSTALLED_APP/Contents/MacOS/VibeGestures" 2>/dev/null || true
+# Velto 收到 SIGTERM 后走正常退出,要恢复系统 ⌘Tab 和 hidutil 映射,等它真的退了再换包
+for _ in {1..50}; do
+    pgrep -f "$INSTALLED_APP/Contents/MacOS/Velto" >/dev/null 2>&1 || break
+    sleep 0.1
+done
 # 等一下让 OS 收尾
 sleep 0.3
 
