@@ -66,20 +66,8 @@ final class GestureEngine: @unchecked Sendable {
     /// 事件号、设备字段,Movist 这类自己处理右键的 App 不认(实测右键动作失效)。
     private var pendingRightMouseDown: CGEvent?
 
-    // MARK: 乱划检测 (scribble-to-cancel)
-    //
-    // 把手势按"腿"(leg) 切分:从 `scribbleLegStart` 起累积直线位移,达到
-    // `scribbleLegMinLength` 就定一条腿的方向,把它相对上一条腿的转角累加到
-    // `scribbleTurnAccumulator`。来回甩每次反向 ≈180°、转圈圈每圈 =360°,两种
-    // "乱划"都靠总转角统一识别;直线/折线的正常手势总转角很小(实测 ≤176°),
-    // 离阈值很远。累积转角到 `scribbleTurnThreshold` 即判为取消。
-    //
-    // 注:不做"笔直腿放电"。平滑大圈每条腿只转几度,一旦按角度门槛把它当笔直腿
-    // 放电,转再多圈也会被清零(这正是早期版本对画圈完全失效的根因)。直接全量
-    // 累加转角,靠阈值与正常手势之间约 2.5× 的余量区分,实测最稳。
-    private var scribbleLegStart = CGPoint.zero
-    private var scribbleLastLegDirection: CGVector?
-    private var scribbleTurnAccumulator: CGFloat = 0
+    /// 乱划检测 (scribble-to-cancel),判定规则见 `GestureScribbleDetector`。
+    private var scribbleDetector = GestureScribbleDetector()
 
     // MARK: 调试轨迹记录 (仅"调试模式"开启时记录,不改变手势行为)
     //
@@ -127,13 +115,6 @@ final class GestureEngine: @unchecked Sendable {
     private let timeoutRearmDistance: CGFloat = 8
     private let maximumGesturePointCount = 512
     private let safetyTimeout: TimeInterval = 8
-
-    /// 一条"腿"成立所需的最小直线位移。太小会被手抖/微漂噪声带偏方向判断,
-    /// 太大则小圈切不出腿。10px 在实测里既滤抖又能逐段累积小圈的转角。
-    private let scribbleLegMinLength: CGFloat = 10
-    /// 累积转角达到此值即判为乱划/转圈取消。2π = 360° ≈ 转满一圈,或来回甩两下。
-    /// 实测正常手势总转角 ≤176°,仍留约 2× 余量;转圈动作约半秒内即触发。
-    private let scribbleTurnThreshold: CGFloat = 2 * .pi       // 360°
 
     /// 最近邻命令与次近邻命令的差异度余量门槛(`GestureDirection.distance`,命令层面
     /// —— 每个命令已压成一条规范方向序列)。两者差值小于此值时,手势被判为"卡在两个
@@ -290,7 +271,7 @@ final class GestureEngine: @unchecked Sendable {
                 }
             }
             // 乱划检测吃原始拖动点(含 <2px 的微动累积),独立于轨迹采样。
-            if preferences.scribbleCancelEnabled, updateScribbleDetection(at: location) {
+            if preferences.scribbleCancelEnabled, scribbleDetector.update(at: location) {
                 cancelGestureByScribble()
             }
             return true
@@ -781,33 +762,7 @@ final class GestureEngine: @unchecked Sendable {
     // MARK: - 乱划检测
 
     private func resetScribbleTracking(at location: CGPoint) {
-        scribbleLegStart = location
-        scribbleLastLegDirection = nil
-        scribbleTurnAccumulator = 0
-    }
-
-    /// 喂入一个拖动点。返回 `true` 表示本次手势已判定为乱划/转圈,调用方应取消。
-    private func updateScribbleDetection(at location: CGPoint) -> Bool {
-        let dx = location.x - scribbleLegStart.x
-        let dy = location.y - scribbleLegStart.y
-        let legLength = hypot(dx, dy)
-        // 位移还不够一条腿,继续累积,方向待定。
-        guard legLength >= scribbleLegMinLength else { return false }
-
-        let direction = CGVector(dx: dx / legLength, dy: dy / legLength)
-        defer {
-            scribbleLastLegDirection = direction
-            scribbleLegStart = location
-        }
-
-        // 第一条腿没有参照方向,只记录不判定。
-        guard let previous = scribbleLastLegDirection else { return false }
-
-        // 两条腿夹角(无向, 0...π),全量累加:来回甩每次 ≈π,转圈每段是稳定
-        // 的小转角,都老老实实攒进去。
-        let dot = max(-1, min(1, previous.dx * direction.dx + previous.dy * direction.dy))
-        scribbleTurnAccumulator += acos(dot)
-        return scribbleTurnAccumulator >= scribbleTurnThreshold
+        scribbleDetector = GestureScribbleDetector(at: location)
     }
 
     /// 在 tap 线程上调用 —— 和超时取消同一条收尾链路。
