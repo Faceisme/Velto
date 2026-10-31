@@ -35,3 +35,37 @@ import Testing
   #expect(store.preferences.windowMaximizeButtonExcludedApps == ["com.movist.MovistPro"])
   #expect(store.appProfiles.first?.gestures.first?.buttonTrigger == middle)
 }
+
+@Test @MainActor func importingOldBackupKeepsKeyRemapRules() throws {
+  let store = GestureStore.shared
+  let remaps = KeyRemapStore.shared
+  let saved = (remaps.rules, remaps.masterEnabled)
+  defer { remaps.replaceAll(rules: saved.0, masterEnabled: saved.1) }
+  let rule = KeyRemapRule(title: "Caps", isManual: true, manipulators: [])
+  remaps.replaceAll(rules: [rule], masterEnabled: false)
+
+  // 旧备份没有这两个字段。
+  let encoder = JSONEncoder()
+  encoder.dateEncodingStrategy = .iso8601
+  try store.importBackupData(encoder.encode(
+    VeltoBackupFile(gestures: store.gestures, preferences: store.preferences)))
+
+  #expect(remaps.rules == [rule])
+  #expect(!remaps.masterEnabled)
+}
+
+@Test @MainActor func importingBackupRestoresKeyRemapRules() throws {
+  let store = GestureStore.shared
+  let remaps = KeyRemapStore.shared
+  let saved = (remaps.rules, remaps.masterEnabled)
+  defer { remaps.replaceAll(rules: saved.0, masterEnabled: saved.1) }
+  let rule = KeyRemapRule(title: "Caps", isManual: true, manipulators: [])
+  remaps.replaceAll(rules: [rule], masterEnabled: true)
+  let backup = try store.exportBackupData()
+
+  remaps.replaceAll(rules: [], masterEnabled: false)
+  try store.importBackupData(backup)
+
+  #expect(remaps.rules == [rule])
+  #expect(remaps.masterEnabled)
+}

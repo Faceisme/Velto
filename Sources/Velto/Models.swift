@@ -441,10 +441,13 @@ final class GestureStore {
         if let betterFinderPreferences = backup.betterFinderPreferences {
             BetterFinderPreferencesStore.shared.replace(with: betterFinderPreferences)
         }
-        KeyRemapStore.shared.replaceAll(
-            rules: backup.keyRemapRules ?? [],
-            masterEnabled: backup.keyRemapEnabled ?? true
-        )
+        // 旧备份没有按键映射:和上面两项一样保留现有的,不清空。
+        if let keyRemapRules = backup.keyRemapRules {
+            KeyRemapStore.shared.replaceAll(
+                rules: keyRemapRules,
+                masterEnabled: backup.keyRemapEnabled ?? true
+            )
+        }
         // 尊重备份里的开关状态,不再强制开启(与启动逻辑一致)。
         localizeBuiltInGestureNames()
         gesturesVersion &+= 1
