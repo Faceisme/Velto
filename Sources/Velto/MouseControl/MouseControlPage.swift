@@ -4,7 +4,7 @@ import UniformTypeIdentifiers
 
 /// 鼠标控制设置页。改动即时保存;拉条松手才写入。
 struct MouseControlPage: View {
-    private let store = GestureStore.shared
+    private let store = ConfigStore.shared
 
     /// 指针速度是系统设置,不进偏好:拖动即写入系统,所以单独存一份。
     @State private var pointerSpeed = 0.0

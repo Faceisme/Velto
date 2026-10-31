@@ -35,15 +35,15 @@ final class InputSourceSwitchController {
   func start() {
     guard !running else { return }
     running = true
-    let prefs = GestureStore.shared.preferences.inputSourceSwitch
+    let prefs = ConfigStore.shared.preferences.inputSourceSwitch
     InputSourceSwitchDebugLog.setEnabled(prefs.debugLoggingEnabled)
 
     monitor.browserDetectionEnabled = {
-      let p = GestureStore.shared.preferences.inputSourceSwitch
+      let p = ConfigStore.shared.preferences.inputSourceSwitch
       return p.enabled && !p.enabledBrowserBundleIDs.isEmpty
     }
     monitor.isBrowserEnabled = { bundleID in
-      GestureStore.shared.preferences.inputSourceSwitch.enabledBrowserBundleIDs.contains(bundleID)
+      ConfigStore.shared.preferences.inputSourceSwitch.enabledBrowserBundleIDs.contains(bundleID)
     }
     monitor.onContextChange = { [weak self] ctx in
       self?.handleContext(ctx)
@@ -62,7 +62,7 @@ final class InputSourceSwitchController {
     // 偏好变化 → 同步调试开关 + 重新评估。
     NotificationCenter.default.addObserver(
       self, selector: #selector(storeChanged(_:)),
-      name: .gestureStoreDidChange, object: GestureStore.shared
+      name: .configStoreDidChange, object: ConfigStore.shared
     )
   }
 
@@ -71,7 +71,7 @@ final class InputSourceSwitchController {
     running = false
     monitor.stop()
     DistributedNotificationCenter.default().removeObserver(self)
-    NotificationCenter.default.removeObserver(self, name: .gestureStoreDidChange, object: GestureStore.shared)
+    NotificationCenter.default.removeObserver(self, name: .configStoreDidChange, object: ConfigStore.shared)
   }
 
   @objc private func storeChanged(_ note: Notification) {
@@ -80,7 +80,7 @@ final class InputSourceSwitchController {
     // 显式跳回主线程再访问 monitor / 偏好状态。
     Task { @MainActor [weak self] in
       guard let self else { return }
-      InputSourceSwitchDebugLog.setEnabled(GestureStore.shared.preferences.inputSourceSwitch.debugLoggingEnabled)
+      InputSourceSwitchDebugLog.setEnabled(ConfigStore.shared.preferences.inputSourceSwitch.debugLoggingEnabled)
       // 偏好变更后清空 runtime cache:否则 restorePreviouslyUsed 模式下旧缓存会
       // 一直命中、绕过用户刚改的规则,导致"新配的规则不生效"。代价是会话内
       // "上次用过的输入法"记忆被重置,但语义更可预期。
@@ -108,7 +108,7 @@ final class InputSourceSwitchController {
     }
     let isSameContext = (lastContext?.contextID == ctx.contextID)
     lastContext = ctx
-    let prefs = GestureStore.shared.preferences.inputSourceSwitch
+    let prefs = ConfigStore.shared.preferences.inputSourceSwitch
     guard prefs.enabled else { return }
 
     // 自动切换只在「进入新上下文」(或偏好刚变更需重评)时发生一次。同一上下文的重复
@@ -192,16 +192,11 @@ final class InputSourceSwitchController {
         if let id = rule.inputSourceID { return id }
       }
     }
-    // 应用分组(新架构,优先):App 属于哪个启用的分组,就用该组的输入法。
+    // 应用分组:App 属于哪个启用的分组,就用该组的输入法。
     // 改一个分组的输入法,整组 App 同时生效,无需逐个改。
     if let group = prefs.appGroups.first(where: {
       $0.isEnabled && $0.bundleIdentifiers.contains(ctx.bundleID)
     }), let id = group.inputSourceID {
-      return id
-    }
-    // 应用规则(旧架构兼容:未迁移或迁移残留时仍生效)。
-    if let rule = prefs.appRules.first(where: { $0.isEnabled && $0.bundleIdentifier == ctx.bundleID }),
-       let id = rule.inputSourceID {
       return id
     }
     return nil
@@ -247,7 +242,7 @@ final class InputSourceSwitchController {
   }
 
   private func applyUserInputSourceChange() {
-    let prefs = GestureStore.shared.preferences.inputSourceSwitch
+    let prefs = ConfigStore.shared.preferences.inputSourceSwitch
     guard running, !isApplyingProgrammaticSwitch,
           prefs.restoreStrategy == .restorePreviouslyUsed,
           let ctx = lastContext, ctx.kind != .addressBar,

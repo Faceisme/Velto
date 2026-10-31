@@ -33,7 +33,7 @@ final class ScreenCleanController {
 
   private func start() {
     guard !isActive else { return }
-    unlock = GestureStore.shared.preferences.macAssistant.screenCleanUnlockShortcut
+    unlock = ConfigStore.shared.preferences.macAssistant.screenCleanUnlockShortcut
     unlockModifiers = ModifierFormatter.normalizedRawValue(from: CGEventFlags(rawValue: unlock.modifierFlags))
     // 建不了 tap 就锁不住键盘,干脆不黑屏。
     guard installTap() else {
@@ -124,21 +124,28 @@ final class ScreenCleanController {
       name: "com.face.velto.screenclean",
       location: .cghidEventTap,
       place: .headInsertEventTap,
-      mask: mask
-    ) { type, event in
-      // 黑屏期间吞掉所有输入,只看 keyDown 里有没有解锁键。
-      if type == .keyDown {
-        let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
-        let modifiers = ModifierFormatter.normalizedRawValue(from: event.flags)
-        DispatchQueue.main.async {
-          ScreenCleanController.shared.handleKeyDown(keyCode: keyCode, modifiers: modifiers)
-        }
-      }
-      return nil
-    }
+      mask: mask,
+      handler: Self.handleTapEvent
+    )
     guard tap.start() else { return false }
     self.tap = tap
     return true
+  }
+
+  /// 在 tap 线程上跑,所以是 `nonisolated`:写成闭包会继承本类的主线程隔离,
+  /// 一运行就触发 Swift 的执行器检查(SIGTRAP)。
+  /// 黑屏期间吞掉所有输入,只看 keyDown 里有没有解锁键。
+  nonisolated static func handleTapEvent(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
+    if type == .keyDown {
+      let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
+      let modifiers = ModifierFormatter.normalizedRawValue(from: event.flags)
+      DispatchQueue.main.async {
+        MainActor.assumeIsolated {
+          ScreenCleanController.shared.handleKeyDown(keyCode: keyCode, modifiers: modifiers)
+        }
+      }
+    }
+    return nil
   }
 
   /// 解锁键注册成热键,只在安全输入把 keyDown 从 tap 里滤掉时才会响。

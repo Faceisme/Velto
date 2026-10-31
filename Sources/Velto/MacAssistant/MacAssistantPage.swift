@@ -2,7 +2,7 @@ import SwiftUI
 
 /// Mac小助手:零碎的小工具,一个工具一个分组。改动即时保存。
 struct MacAssistantPage: View {
-  private let store = GestureStore.shared
+  private let store = ConfigStore.shared
   private let cleaner = ScreenCleanController.shared
 
   var body: some View {

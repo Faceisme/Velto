@@ -7,44 +7,20 @@ import Foundation
 ///   1. 设置页「窗口管理 → 调试日志」开关 -> WindowManagementDebugLog.setEnabled
 ///   2. 环境变量 VELTO_WINDOW_DEBUG=1(开发期强制开)
 ///
-/// 线程安全:开关状态用串行队列保护,可从任意线程读写(目标定位在 window-drag
-/// 后台队列读 / 写日志,设置在主线程改开关)。move/resize 按鼠标事件触发,日志
-/// 在 began / 目标定位等关键节点打点,`log` 内直接同步写文件即可。
 enum WindowManagementDebugLog {
-  private static let stateQueue = DispatchQueue(label: "com.velto.windowmgmt.debuglog.state")
-  private nonisolated(unsafe) static var _enabled =
-    ProcessInfo.processInfo.environment["VELTO_WINDOW_DEBUG"] == "1"
-  private nonisolated(unsafe) static var _handle: FileHandle?
-  private nonisolated(unsafe) static var _handleOpened = false
+  private static let file = DebugLogFile(
+    name: "window-management", fileName: "window-management.log", environmentKey: "VELTO_WINDOW_DEBUG")
 
-  private static let envForced = ProcessInfo.processInfo.environment["VELTO_WINDOW_DEBUG"] == "1"
-
-  static let fileURL = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0]
-    .appendingPathComponent("Logs/Velto/window-management.log")
-
-  private static let dateFormatter: DateFormatter = {
-    let f = DateFormatter()
-    f.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS"
-    return f
-  }()
-
-  static var isEnabled: Bool {
-    stateQueue.sync { _enabled }
-  }
+  static var fileURL: URL { file.fileURL }
+  static var isEnabled: Bool { file.isEnabled }
 
   static func setEnabled(_ enabled: Bool) {
-    let (changed, isOn) = stateQueue.sync { () -> (Bool, Bool) in
-      let next = enabled || envForced
-      let changed = _enabled != next
-      _enabled = next
-      return (changed, next)
-    }
-    if changed, isOn {
+    if file.setEnabled(enabled) {
       log("=== 调试日志开启 ===")
     }
-    // 不看 changed —— VELTO_WINDOW_DEBUG=1 时 _enabled 出生就是 true,
+    // 不看是否变化 —— VELTO_WINDOW_DEBUG=1 时开关出生就是开的,
     // 启动那次 setEnabled 不算"变化",不无条件调心跳就永远起不来。
-    setHeartbeat(isOn)
+    setHeartbeat(isEnabled)
   }
 
   /// 主线程心跳 —— 只写时间戳,不做任何 AX 调用,不碰任何别的进程。
@@ -96,54 +72,5 @@ enum WindowManagementDebugLog {
     }
   }
 
-  private static func fileHandle() -> FileHandle? {
-    stateQueue.sync {
-      // 日志文件被删/被轮转走之后,老 fd 指向的是已经 unlink 的 inode —— 写进去
-      // 谁也看不见,而且永远不会自己恢复(2026-08-27 排查 Telegram 时就这么白丢了
-      // 一轮复现)。st_nlink == 0 正是这个状态,一个 fstat 换「删了日志不用重启」。
-      if let handle = _handle {
-        var st = stat()
-        if fstat(handle.fileDescriptor, &st) != 0 || st.st_nlink == 0 {
-          try? handle.close()
-          _handle = nil
-          _handleOpened = false
-        }
-      }
-      if !_handleOpened {
-        _handleOpened = true
-        _handle = Self.openLogFile()
-      }
-      return _handle
-    }
-  }
-
-  /// 用 O_APPEND 打开,每次写入都落在文件末尾。测试进程和运行中的 Velto 会写同一份日志,
-  /// 只 seekToEnd 的话各记各的位置,后写的把对方的内容盖掉,切口落在中文字符中间时文件
-  /// 就成了非法 UTF-8,读取直接失败。
-  static func openForAppending(_ url: URL) -> FileHandle? {
-    let descriptor = open(url.path, O_WRONLY | O_APPEND | O_CREAT, 0o644)
-    guard descriptor >= 0 else { return nil }
-    return FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
-  }
-
-  private static func openLogFile() -> FileHandle? {
-    let url = fileURL
-    try? FileManager.default.createDirectory(
-      at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-    let handle = openForAppending(url)
-    let banner = "\n=== Velto window-management log started \(dateFormatter.string(from: Date())) ===\n"
-    if let data = banner.data(using: .utf8) {
-      try? handle?.write(contentsOf: data)
-    }
-    return handle
-  }
-
-  static func log(_ message: @autoclosure () -> String) {
-    guard isEnabled else { return }
-    let line = "[\(dateFormatter.string(from: Date()))] \(message())\n"
-    FileHandle.standardError.write(Data(line.utf8))
-    if let handle = fileHandle(), let data = line.data(using: .utf8) {
-      try? handle.write(contentsOf: data)
-    }
-  }
+  static func log(_ message: @autoclosure () -> String) { file.log(message()) }
 }

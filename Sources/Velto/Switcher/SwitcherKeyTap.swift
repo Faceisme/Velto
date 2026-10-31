@@ -387,7 +387,7 @@ final class SwitcherKeyTap: @unchecked Sendable {
                     onEvent?(.step(reverse: true))
                     return nil
                 default:
-                    // 其他按键透传 —— P3 可以加搜索
+                    // 其他按键透传
                     return Unmanaged.passUnretained(event)
                 }
             }

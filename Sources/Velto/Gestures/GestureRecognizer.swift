@@ -25,7 +25,7 @@ struct GestureCandidates: Sendable {
 /// 发生(`GestureEngine.runGesture` 经 `Task { @MainActor }` 进入)。
 @MainActor
 final class GestureRecognizer {
-    /// 上次构建缓存所依据的 `GestureStore.gesturesVersion`,版本一变整张表作废。
+    /// 上次构建缓存所依据的 `ConfigStore.gesturesVersion`,版本一变整张表作废。
     private var cachedVersion: UInt64?
     /// 命令 id → 规范签名(众数,可能为空 —— 样本全部太短)。按 id 缓存而不是按整张
     /// 命令表:每个 App 参与匹配的是不同的子集(App 手势 + 没被覆盖的全局手势),

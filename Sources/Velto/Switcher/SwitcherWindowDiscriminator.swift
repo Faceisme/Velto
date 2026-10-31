@@ -42,7 +42,7 @@ enum SwitcherWindowDiscriminator {
         {
             if (title?.isEmpty ?? true) && size.width < 200 { return false }
         }
-        _ = role  // 留着接口位置;P1 不用,后续 app-specific 规则要用
+        _ = role  // 留着接口位置,app-specific 规则要用
         return true
     }
 }

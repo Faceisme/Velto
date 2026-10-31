@@ -32,9 +32,10 @@ struct EventTapHostTests {
     let host = EventTapHost(
       name: "test", location: .cghidEventTap, place: .headInsertEventTap, mask: 0
     ) { _, event in Unmanaged.passUnretained(event) }
-    var ran = false
-    host.perform { ran = true }
-    #expect(!ran)
+    final class Flag: @unchecked Sendable { var ran = false }
+    let flag = Flag()
+    host.perform { flag.ran = true }
+    #expect(!flag.ran)
     #expect(!host.ensureEnabled())
     host.stop()
   }

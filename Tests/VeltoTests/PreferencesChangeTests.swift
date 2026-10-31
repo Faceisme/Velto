@@ -31,13 +31,13 @@ struct PreferencesChangeTests {
 
   @Test("写回同一个值不发通知,改了才发,并带前后快照")
   func storeNotifiesOnlyOnRealChange() {
-    let store = GestureStore.shared
+    let store = ConfigStore.shared
     let original = store.preferences
     defer { store.updatePreferences { $0 = original } }
 
     var notes: [Notification] = []
     let observer = NotificationCenter.default.addObserver(
-      forName: .gestureStoreDidChange, object: store, queue: nil
+      forName: .configStoreDidChange, object: store, queue: nil
     ) { notes.append($0) }
     defer { NotificationCenter.default.removeObserver(observer) }
 
@@ -46,7 +46,7 @@ struct PreferencesChangeTests {
 
     store.updatePreferences { $0.showTrail.toggle() }
     #expect(notes.count == 1)
-    #expect(notes.first?.gestureStoreChangeReason == .preferences)
+    #expect(notes.first?.configStoreChangeReason == .preferences)
     #expect(notes.first?.preferencesChange?.changed(\.showTrail) == true)
     #expect(notes.first?.preferencesChange?.previous == original)
   }

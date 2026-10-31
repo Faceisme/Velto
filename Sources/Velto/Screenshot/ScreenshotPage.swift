@@ -3,13 +3,13 @@ import SwiftUI
 import VeltoAnnotationCore
 
 /// 截图模块设置页。
-/// 所有写入走 GestureStore.shared.updatePreferences { $0.screenshot.xxx = ... }
-/// 触发 .gestureStoreDidChange → EventTapManager 重推触发键快照。
+/// 所有写入走 ConfigStore.shared.updatePreferences { $0.screenshot.xxx = ... }
+/// 触发 .configStoreDidChange → EventTapManager 重推触发键快照。
 struct ScreenshotPage: View {
-  private let store = GestureStore.shared
+  private let store = ConfigStore.shared
 
   // 本地快照:onReceive 更新,保证每次存储变更都刷新 UI
-  @State private var prefs = GestureStore.shared.preferences.screenshot
+  @State private var prefs = ConfigStore.shared.preferences.screenshot
   // 屏幕录制权限(非持久,查询实时值)
   @State private var screenRecordingTrusted = PermissionManager.isScreenRecordingTrusted
 
@@ -107,13 +107,13 @@ struct ScreenshotPage: View {
           segmented(bind(\.annotationFontSize), [14, 18, 24, 32]) { "\(Int($0))" }
         }
         SettingsRow(title: "高亮透明度") {
-          opacitySlider(bind(\.annotationHighlightOpacity), in: 0.15...0.65)
+          OpacitySlider(value: bind(\.annotationHighlightOpacity), range: 0.15...0.65)
         }
         SettingsRow(title: "马赛克粒度") {
           segmented(bind(\.annotationMosaicBlockSize), [8, 12, 16, 24])
         }
         SettingsRow(title: "填充透明度", subtitle: "形状内部填充,0 为空心。") {
-          opacitySlider(bind(\.annotationFillOpacity), in: 0...1)
+          OpacitySlider(value: bind(\.annotationFillOpacity), range: 0...1)
         }
       }
 
@@ -138,7 +138,7 @@ struct ScreenshotPage: View {
       )
     }
     .onReceive(
-      NotificationCenter.default.publisher(for: .gestureStoreDidChange)
+      NotificationCenter.default.publisher(for: .configStoreDidChange)
     ) { _ in
       prefs = store.preferences.screenshot
       screenRecordingTrusted = PermissionManager.isScreenRecordingTrusted
@@ -157,19 +157,6 @@ struct ScreenshotPage: View {
     .pickerStyle(.segmented)
     .labelsHidden()
     .fixedSize()
-  }
-
-  /// 透明度滑杆 + 百分比读数,供高亮/填充复用。
-  private func opacitySlider(_ value: Binding<CGFloat>, in range: ClosedRange<CGFloat>) -> some View {
-    HStack(spacing: 10) {
-      Slider(value: value, in: range)
-        .frame(width: 160)
-        .controlSize(.small)
-      Text(String(format: "%.0f%%", value.wrappedValue * 100))
-        .font(.mgMeta)
-        .foregroundStyle(Color.mgText2)
-        .frame(width: 40, alignment: .trailing)
-    }
   }
 
   // MARK: - 辅助
@@ -206,5 +193,45 @@ struct ScreenshotPage: View {
     case 1:  return "S"
     default: return "keyCode \(keyCode)"
     }
+  }
+}
+
+/// 透明度滑杆 + 百分比读数,供高亮/填充复用。松手才写回:每次写回都会整份偏好落盘。
+private struct OpacitySlider: View {
+  @Binding var value: CGFloat
+  let range: ClosedRange<CGFloat>
+  /// 拖动中的值,非 nil 即正在拖。
+  @State private var dragValue: CGFloat?
+
+  var body: some View {
+    HStack(spacing: 10) {
+      Slider(value: sliderValue, in: range, onEditingChanged: { editing in
+        if editing {
+          dragValue = value
+        } else {
+          if let dragValue, dragValue != value { value = dragValue }
+          dragValue = nil
+        }
+      })
+      .frame(width: 160)
+      .controlSize(.small)
+      Text(String(format: "%.0f%%", (dragValue ?? value) * 100))
+        .font(.mgMeta)
+        .foregroundStyle(Color.mgText2)
+        .frame(width: 40, alignment: .trailing)
+    }
+  }
+
+  private var sliderValue: Binding<CGFloat> {
+    Binding(
+      get: { dragValue ?? value },
+      set: { newValue in
+        if dragValue != nil {
+          dragValue = newValue
+        } else {
+          value = newValue
+        }
+      }
+    )
   }
 }

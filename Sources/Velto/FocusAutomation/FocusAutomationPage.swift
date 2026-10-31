@@ -1,13 +1,13 @@
 import AppKit
 import SwiftUI
 
-/// 专注自动化设置页。写入走 GestureStore.shared.updatePreferences { $0.focusAutomation.xxx = ... },
-/// FocusAutomationController 收到 .gestureStoreDidChange 后重新评估。
+/// 专注自动化设置页。写入走 ConfigStore.shared.updatePreferences { $0.focusAutomation.xxx = ... },
+/// FocusAutomationController 收到 .configStoreDidChange 后重新评估。
 struct FocusAutomationPage: View {
-  private let store = GestureStore.shared
+  private let store = ConfigStore.shared
   private let controller = FocusAutomationController.shared
 
-  @State private var prefs = GestureStore.shared.preferences.focusAutomation
+  @State private var prefs = ConfigStore.shared.preferences.focusAutomation
   /// 系统快捷键这条路为什么走不通;nil = 能用。要读文件,不放 body 里每次算。
   @State private var hotkeyUnavailableReason = DoNotDisturbSwitch.keyboardUnavailableReason()
 
@@ -123,7 +123,7 @@ struct FocusAutomationPage: View {
       controller.refreshShortcutNames()
       refreshHotkeyStatus()
     }
-    .onReceive(NotificationCenter.default.publisher(for: .gestureStoreDidChange)) { _ in
+    .onReceive(NotificationCenter.default.publisher(for: .configStoreDidChange)) { _ in
       prefs = store.preferences.focusAutomation
     }
   }

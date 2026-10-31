@@ -4,7 +4,7 @@ import UniformTypeIdentifiers
 
 /// 通用设置页。改动即时保存。
 struct GeneralSettingsPage: View {
-  private let store = GestureStore.shared
+  private let store = ConfigStore.shared
 
   // 登录项 / 权限都是系统状态,回到前台时重读(从系统设置授权回来即刷新)。
   @State private var loginItem = LoginItemManager.isEnabled

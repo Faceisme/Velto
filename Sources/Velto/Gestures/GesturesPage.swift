@@ -19,7 +19,7 @@ struct GesturesPage: View {
         case app(UUID)
     }
 
-    private let store = GestureStore.shared
+    private let store = ConfigStore.shared
 
     @State private var tab: Tab = .gestures
     @State private var scope: Scope = .global
@@ -186,9 +186,9 @@ struct GesturesPage: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .onAppear(perform: loadDraftIfNeeded)
-        .onReceive(NotificationCenter.default.publisher(for: .gestureStoreDidChange)) { note in
-            guard note.object as? GestureStore === store else { return }
-            switch note.gestureStoreChangeReason {
+        .onReceive(NotificationCenter.default.publisher(for: .configStoreDidChange)) { note in
+            guard note.object as? ConfigStore === store else { return }
+            switch note.configStoreChangeReason {
             case .gestures, .backupImport:
                 reloadFromStore()
             default: break

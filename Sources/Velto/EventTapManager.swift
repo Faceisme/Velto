@@ -139,7 +139,7 @@ final class EventTapManager: @unchecked Sendable {
         didSet { gestureEngine.onGestureMatch = onGestureMatch }
     }
 
-    private let store: GestureStore
+    private let store: ConfigStore
     private let gestureEngine: GestureEngine
     private let mouseControlController = MouseControlController()
     private let windowDragController = WindowDragController()
@@ -165,7 +165,7 @@ final class EventTapManager: @unchecked Sendable {
     private var keyRemapObserver: NSObjectProtocol?
 
     @MainActor
-    init(store: GestureStore = .shared) {
+    init(store: ConfigStore = .shared) {
         self.store = store
         self.gestureEngine = GestureEngine(
             preferences: store.preferences,
@@ -225,11 +225,11 @@ final class EventTapManager: @unchecked Sendable {
         }
 
         storeObserver = NotificationCenter.default.addObserver(
-            forName: .gestureStoreDidChange,
+            forName: .configStoreDidChange,
             object: store,
             queue: .main
         ) { [weak self] note in
-            let reason = note.gestureStoreChangeReason
+            let reason = note.configStoreChangeReason
             let change = note.preferencesChange
             // queue: .main 保证回调在主线程,store 是 @MainActor。
             MainActor.assumeIsolated {
@@ -534,7 +534,7 @@ final class EventTapManager: @unchecked Sendable {
     /// Schedule `work` to run on the tap thread's runloop. Used by main-thread
     /// observers that need to mutate engine state safely. If the tap thread
     /// isn't running yet (start hasn't been called), the work is dropped.
-    private func performOnTapThread(_ work: @escaping () -> Void) {
+    private func performOnTapThread(_ work: @escaping @Sendable () -> Void) {
         hidTap?.perform(work)
     }
 
@@ -645,7 +645,7 @@ final class EventTapManager: @unchecked Sendable {
 
     /// 鼠标按钮触发的查找表。主线程构建(覆盖判定要算轨迹签名),再交给 tap 线程。
     @MainActor
-    private static func buttonMap(for store: GestureStore) -> GestureButtonMap {
+    private static func buttonMap(for store: ConfigStore) -> GestureButtonMap {
         GestureButtonMap(global: store.gestures, appProfiles: store.appProfiles) {
             GestureDirection.canonical(for: $0.templates.map { $0.map(\.cgPoint) })
         }

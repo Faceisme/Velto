@@ -52,7 +52,7 @@ final class FocusAutomationController {
 
   private init() {}
 
-  private var prefs: FocusAutomationPreferences { GestureStore.shared.preferences.focusAutomation }
+  private var prefs: FocusAutomationPreferences { ConfigStore.shared.preferences.focusAutomation }
 
   // MARK: - 生命周期
 
@@ -62,7 +62,7 @@ final class FocusAutomationController {
     FocusAutomationDebugLog.setEnabled(prefs.debugLoggingEnabled)
     NotificationCenter.default.addObserver(
       self, selector: #selector(preferencesChanged(_:)),
-      name: .gestureStoreDidChange, object: GestureStore.shared
+      name: .configStoreDidChange, object: ConfigStore.shared
     )
     // App 退出时立刻评估,不等下一次轮询。
     NSWorkspace.shared.notificationCenter.addObserver(

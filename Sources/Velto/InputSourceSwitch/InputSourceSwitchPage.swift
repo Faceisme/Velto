@@ -4,7 +4,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct InputSourceSwitchPage: View {
-  private let store = GestureStore.shared
+  private let store = ConfigStore.shared
 
   private enum Segment: String, CaseIterable, Identifiable {
     case general, appRules, browserRules
@@ -260,15 +260,8 @@ struct InputSourceSwitchPage: View {
 
   // MARK: - 固定分组操作
 
-  /// 进入页时把分组规整成固定两组(英文组 / 中文组),仅在尚未规整时写回。
+  /// 进入页时把分组规整成固定两组(英文组 / 中文组),已经规整过就不会写回。
   private func ensureFixedGroups() {
-    let p = store.preferences.inputSourceSwitch
-    let alreadyFixed = p.appRules.isEmpty
-      && p.appGroups.count == 2
-      && p.appGroups.contains { $0.role == .english }
-      && p.appGroups.contains { $0.role == .chinese }
-      && !p.appGroups.contains { $0.role == nil }
-    guard !alreadyFixed else { return }
     store.updatePreferences { $0.inputSourceSwitch.ensureFixedGroups() }
   }
 

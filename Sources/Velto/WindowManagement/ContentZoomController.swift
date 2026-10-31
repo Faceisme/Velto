@@ -29,6 +29,17 @@ final class ContentZoomController: @unchecked Sendable {
     private let maxBufferedSteps: Double = 4
     private let minimumStepInterval: TimeInterval = 0.055
 
+    /// 真正发出一步缩放。`true` = 放大。测试里换掉,不发真实按键。
+    var stepSender: @Sendable (_ zoomIn: Bool) -> Void = { zoomIn in
+        let keyCode = zoomIn ? VirtualKeyCode.equal : VirtualKeyCode.minus
+        DispatchQueue.global(qos: .userInteractive).async {
+            ShortcutSynthesizer.sendKey(
+                keyCode: keyCode,
+                modifierFlags: CGEventFlags.maskCommand.storedRawValue
+            )
+        }
+    }
+
     // MARK: - Preference snapshot
 
     func updateModifierFlag(_ flag: UInt64) {
@@ -121,7 +132,7 @@ final class ContentZoomController: @unchecked Sendable {
         let direction = accumulator > 0 ? 1.0 : -1.0
         accumulator -= direction * stepThreshold
         lastDispatchTime = CACurrentMediaTime()
-        sendStep(zoomIn: direction > 0)
+        stepSender(direction > 0)
 
         if abs(accumulator) >= stepThreshold {
             scheduleStep(after: minimumStepInterval)
@@ -134,16 +145,6 @@ final class ContentZoomController: @unchecked Sendable {
             self.accumulator = 0
             self.stepScheduled = false
             self.generation &+= 1
-        }
-    }
-
-    private func sendStep(zoomIn: Bool) {
-        let keyCode = zoomIn ? VirtualKeyCode.equal : VirtualKeyCode.minus
-        DispatchQueue.global(qos: .userInteractive).async {
-            ShortcutSynthesizer.sendKey(
-                keyCode: keyCode,
-                modifierFlags: CGEventFlags.maskCommand.storedRawValue
-            )
         }
     }
 }

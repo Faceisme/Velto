@@ -407,7 +407,7 @@ private struct ProtocolPill: View {
 // MARK: - 设置页
 
 struct NetworkMonitorPage: View {
-  private let store = GestureStore.shared
+  private let store = ConfigStore.shared
 
   var body: some View {
     SettingsPage {

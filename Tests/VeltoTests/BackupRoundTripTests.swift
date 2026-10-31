@@ -6,7 +6,7 @@ import Testing
 /// 备份导出 → 导入往返:近期新增的配置(按 App 手势、手势鼠标按钮、最大化鼠标按钮及
 /// 例外 App)都要带上,导入后与导出前一致。
 @Test @MainActor func backupRoundTripCoversNewFeatures() throws {
-  let store = GestureStore.shared
+  let store = ConfigStore.shared
   let middle = MouseButtonTrigger(button: 2, modifierFlags: 0)
   let gesture = GestureCommand(
     name: "最大化", templates: [], buttonTrigger: middle,
@@ -37,7 +37,7 @@ import Testing
 }
 
 @Test @MainActor func importingOldBackupKeepsKeyRemapRules() throws {
-  let store = GestureStore.shared
+  let store = ConfigStore.shared
   let remaps = KeyRemapStore.shared
   let saved = (remaps.rules, remaps.masterEnabled)
   defer { remaps.replaceAll(rules: saved.0, masterEnabled: saved.1) }
@@ -55,7 +55,7 @@ import Testing
 }
 
 @Test @MainActor func importingBackupRestoresKeyRemapRules() throws {
-  let store = GestureStore.shared
+  let store = ConfigStore.shared
   let remaps = KeyRemapStore.shared
   let saved = (remaps.rules, remaps.masterEnabled)
   defer { remaps.replaceAll(rules: saved.0, masterEnabled: saved.1) }

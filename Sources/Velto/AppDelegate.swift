@@ -5,7 +5,7 @@ import betterfinder
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    private let store = GestureStore.shared
+    private let store = ConfigStore.shared
     private var eventTapManager: EventTapManager?
     private var statusItem: NSStatusItem?
     private var settingsWindow: NSWindow?
@@ -20,7 +20,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private nonisolated static let terminationDeadline: TimeInterval = 5
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        installTerminationSignalHandler()
+        terminationSignal = Self.makeTerminationSignalSource()
 
         let missingSymbols = SkyLightPrivate.missingSymbols
         if !missingSymbols.isEmpty {
@@ -33,7 +33,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(storeDidChange(_:)),
-            name: .gestureStoreDidChange,
+            name: .configStoreDidChange,
             object: store
         )
 
@@ -66,15 +66,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     ///
     /// 信号不能只交给主线程:`pkill` 是紧急停止的手段,主线程卡死时也得停得下来。
     /// 正常退出最长等 3 秒(关勿扰),超过这个时间就直接结束进程。
-    private func installTerminationSignalHandler() {
+    ///
+    /// `nonisolated`:处理闭包在后台队列上跑,写在主线程隔离的方法里会继承隔离,
+    /// 一运行就触发 Swift 的执行器检查(SIGTRAP)。
+    private nonisolated static func makeTerminationSignalSource() -> DispatchSourceSignal {
         signal(SIGTERM, SIG_IGN)
         let source = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .global())
         source.setEventHandler {
-            DispatchQueue.main.async { NSApp.terminate(nil) }
-            DispatchQueue.global().asyncAfter(deadline: .now() + Self.terminationDeadline) { _exit(EXIT_FAILURE) }
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated { NSApp.terminate(nil) }
+            }
+            DispatchQueue.global().asyncAfter(deadline: .now() + terminationDeadline) {
+                _exit(EXIT_FAILURE)
+            }
         }
         source.resume()
-        terminationSignal = source
+        return source
     }
 
     private func startHealthCheck() {

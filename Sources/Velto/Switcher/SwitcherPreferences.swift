@@ -107,7 +107,7 @@ enum SwitcherScreenChoice: String, Codable, CaseIterable, Hashable {
     }
 }
 
-/// 外观样式 —— P2 我们做了缩略图,P3 设置项留扩展位
+/// 外观样式
 enum SwitcherAppearanceStyle: String, Codable, CaseIterable, Hashable {
     case thumbnails
     case appIcons
@@ -127,7 +127,7 @@ enum SwitcherAppearanceStyle: String, Codable, CaseIterable, Hashable {
 /// 切换器所有用户可调节的设置。
 ///
 /// 持久化路径:嵌在 AppPreferences.switcher 里走同一份 JSON,跟手势 / 窗口管理
-/// 的偏好共享 `GestureStore.savePreferences()`。
+/// 的偏好共享 `ConfigStore.savePreferences()`。
 ///
 /// 字段添加规则:**只能加,不能改类型/删字段**。`init(from:)` 用 decodeField
 /// 兜底 nil → defaults,保证老用户升级时偏好不丢。
@@ -139,7 +139,7 @@ struct SwitcherPreferences: Codable, Equatable {
     /// 不影响其它模块。带默认值,旧配置无此字段时解码回退到 false。
     var debugLoggingEnabled: Bool = false
 
-    /// 触发快捷键。nil 表示用户没设(P3 默认 Cmd+Tab,见 defaults)。
+    /// 触发快捷键。nil 表示用户没设,回退到 Cmd+Tab。
     var triggerShortcut: Shortcut?
 
     // --- 过滤器(对应 alt-tab "筛选" 那个 tab 的 7 个下拉)---

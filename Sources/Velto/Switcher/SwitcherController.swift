@@ -119,7 +119,7 @@ final class SwitcherController {
     @discardableResult
     func start() -> Bool {
         // 在 windowList.start() 之前定好维护开关:切换器禁用时连首次全量扫描都跳过。
-        windowList.setMaintainsIndex(GestureStore.shared.preferences.switcher.enabled)
+        windowList.setMaintainsIndex(ConfigStore.shared.preferences.switcher.enabled)
         windowList.start()
         keyTap.onEvent = { [weak self] event in
             // KeyTap 回调在 tap 线程,所有 UI / 状态修改必须跳回 main。
@@ -142,8 +142,8 @@ final class SwitcherController {
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(handleStoreChanged),
-            name: .gestureStoreDidChange,
-            object: GestureStore.shared
+            name: .configStoreDidChange,
+            object: ConfigStore.shared
         )
         return started
     }
@@ -159,7 +159,7 @@ final class SwitcherController {
     }
 
     private func applyPreferencesToKeyTap() {
-        let prefs = GestureStore.shared.preferences.switcher
+        let prefs = ConfigStore.shared.preferences.switcher
         keyTap.setSwitcherEnabled(prefs.enabled)
         keyTap.setTriggerShortcut(prefs.triggerShortcut)
         SwitcherDebugLog.setEnabled(prefs.debugLoggingEnabled)
@@ -206,10 +206,9 @@ final class SwitcherController {
     }
 
     private func triggerOrCycle(reverse: Bool) {
-        let prefs = GestureStore.shared.preferences.switcher
-        // 总开关关掉时,直接不响应触发 —— 让 KeyTap 把事件透传给系统。
-        // 注意:KeyTap 本身已经禁了系统 Cmd+Tab,所以"透传"在用户视角就是
-        // ⌘+Tab 没反应。P3 第一版接受这个行为;P4 可以加"切回系统 switcher"。
+        let prefs = ConfigStore.shared.preferences.switcher
+        // 总开关关掉时 KeyTap 已经把系统 Cmd+Tab 还回去、不再消费事件,正常走不到这里;
+        // 这里防的是关闭之前已经排进主队列的触发。
         guard prefs.enabled else { return }
         SwitcherDebugLog.log("trigger reverse=\(reverse) sessionActive=\(SwitcherSession.isActive)")
 

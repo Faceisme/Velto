@@ -14,7 +14,7 @@ final class SettingsPagesSnapshotTests: XCTestCase {
     }
     seedFromRealDomain()
     seedMouseDemo()
-    print("SNAPSHOT gestures=\(GestureStore.shared.gestures.count)")
+    print("SNAPSHOT gestures=\(ConfigStore.shared.gestures.count)")
 
     let only = ProcessInfo.processInfo.environment["VELTO_SNAPSHOT_PAGES"]?
       .split(separator: ",").map(String.init)

@@ -90,34 +90,11 @@ struct InputSourceAppGroup: Codable, Identifiable, Equatable {
   }
 }
 
-/// 应用规则(兼容旧架构):按 bundleIdentifier 绑定目标输入法。
-/// 新配置优先走 appGroups;升级时自动把 appRules 迁移成分组。
-struct InputSourceAppRule: Codable, Identifiable, Equatable {
-  var id: UUID
+/// 旧版逐应用规则。已经并入分组,只在读旧配置时还要认一下。
+struct LegacyInputSourceAppRule: Decodable {
   var bundleIdentifier: String
-  var displayName: String
-  var bundlePath: String?
   var inputSourceID: String?
   var isEnabled: Bool
-  var createdAt: Date
-
-  init(
-    id: UUID = UUID(),
-    bundleIdentifier: String,
-    displayName: String,
-    bundlePath: String? = nil,
-    inputSourceID: String? = nil,
-    isEnabled: Bool = true,
-    createdAt: Date = Date()
-  ) {
-    self.id = id
-    self.bundleIdentifier = bundleIdentifier
-    self.displayName = displayName
-    self.bundlePath = bundlePath
-    self.inputSourceID = inputSourceID
-    self.isEnabled = isEnabled
-    self.createdAt = createdAt
-  }
 }
 
 /// 浏览器规则:按当前 Tab URL 匹配。
@@ -174,13 +151,15 @@ struct InputSourceSwitchPreferences: Codable, Equatable {
   /// 打字时,标点键直接输出英文字符。默认关(改输出行为属于侵入式,必须显式开);
   /// 独立于 enabled 总开关。曾做过按应用勾选的粒度,用户明确不要 —— 别加回来。
   var forceEnglishPunctuationEnabled: Bool = false
-  /// 应用分组(新架构):按分组管理应用,一个分组一个输入法。
+  /// 应用分组:按分组管理应用,一个分组一个输入法。
   var appGroups: [InputSourceAppGroup] = []
-  /// 应用规则(兼容旧架构):新配置优先走 appGroups,升级时自动迁移。
-  var appRules: [InputSourceAppRule] = []
   var browserRules: [InputSourceBrowserRule] = []
 
   static let defaults = InputSourceSwitchPreferences()
+
+  private enum LegacyCodingKeys: String, CodingKey {
+    case appRules
+  }
 
   init() {}
 
@@ -197,27 +176,28 @@ struct InputSourceSwitchPreferences: Codable, Equatable {
     enabledBrowserBundleIDs = try c.decodeField(Set<String>.self, forKey: .enabledBrowserBundleIDs, in: decoder) ?? d.enabledBrowserBundleIDs
     forceEnglishPunctuationEnabled = try c.decodeField(Bool.self, forKey: .forceEnglishPunctuationEnabled, in: decoder) ?? d.forceEnglishPunctuationEnabled
     appGroups = try c.decodeField([InputSourceAppGroup].self, forKey: .appGroups, in: decoder) ?? d.appGroups
-    appRules = try c.decodeField([InputSourceAppRule].self, forKey: .appRules, in: decoder) ?? d.appRules
     browserRules = try c.decodeField([InputSourceBrowserRule].self, forKey: .browserRules, in: decoder) ?? d.browserRules
+
+    // 旧配置在这里迁移完,之后只有分组一种结构。
+    let legacy = try decoder.container(keyedBy: LegacyCodingKeys.self)
+    let legacyRules = try legacy.decodeField([LegacyInputSourceAppRule].self, forKey: .appRules, in: decoder) ?? []
+    if !legacyRules.isEmpty || appGroups.contains(where: { $0.role == nil }) {
+      ensureFixedGroups(legacyRules: legacyRules)
+    }
   }
 }
 
 // MARK: - 固定两分组的归一化
 
 extension InputSourceSwitchPreferences {
-  /// 把分组规整成「写死的两组:英文组 + 中文组」。幂等,返回是否有改动(供调用方
-  /// 决定是否写回,避免无谓保存)。
+  /// 把分组规整成「写死的两组:英文组 + 中文组」。幂等。
   ///
   /// 归并来源(都默认并入中文组,英文组留空待用户分配 —— 老配置基本是中文输入法):
-  ///   - 旧「逐应用规则」appRules;
+  ///   - 旧「逐应用规则」;
   ///   - 旧版动态分组(role == nil)的成员。
   /// 候选输入法取第一个非空的(旧规则/旧分组的 inputSourceID)填给中文组。
   /// 已存在的英文组 / 中文组(role 命中)保留其 id / 成员 / 输入法,只统一显示名。
-  @discardableResult
-  mutating func ensureFixedGroups() -> Bool {
-    let before = appGroups
-    let beforeRules = appRules
-
+  mutating func ensureFixedGroups(legacyRules: [LegacyInputSourceAppRule] = []) {
     var english = appGroups.first { $0.role == .english }
       ?? InputSourceAppGroup(displayName: InputSourceGroupRole.english.displayName, role: .english)
     var chinese = appGroups.first { $0.role == .chinese }
@@ -230,7 +210,7 @@ extension InputSourceSwitchPreferences {
     // 收集待归并的旧成员 + 候选输入法。
     var legacyBundleIDs: [String] = []
     var legacySource: String? = nil
-    for rule in appRules where rule.isEnabled {
+    for rule in legacyRules where rule.isEnabled {
       legacyBundleIDs.append(rule.bundleIdentifier)
       if legacySource == nil { legacySource = rule.inputSourceID }
     }
@@ -247,7 +227,5 @@ extension InputSourceSwitchPreferences {
     if chinese.inputSourceID == nil { chinese.inputSourceID = legacySource }
 
     appGroups = [english, chinese]
-    appRules = []
-    return appGroups != before || beforeRules != appRules
   }
 }

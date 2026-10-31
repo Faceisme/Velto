@@ -2,7 +2,7 @@ import SwiftUI
 
 /// 窗口切换器的设置页。改动即时保存。
 struct SwitcherSettingsPage: View {
-  private let store = GestureStore.shared
+  private let store = ConfigStore.shared
 
   var body: some View {
     SettingsPage {

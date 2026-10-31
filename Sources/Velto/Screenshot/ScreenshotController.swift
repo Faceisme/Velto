@@ -10,8 +10,8 @@ final class ScreenshotController {
   /// 全局触发键命中后切到主线程调用。已有会话/正在启动则忽略;权限判定挪到抓屏失败之后。
   func beginSession() {
     guard session == nil, !isStarting else { return }
-    guard GestureStore.shared.preferences.screenshot.enabled else { return }
-    let prefs = GestureStore.shared.preferences.screenshot
+    guard ConfigStore.shared.preferences.screenshot.enabled else { return }
+    let prefs = ConfigStore.shared.preferences.screenshot
     // 按偏好开关调试日志(环境变量 VELTO_SCREENSHOT_DEBUG=1 仍可强制开)。
     ScreenshotDebugLog.setEnabled(prefs.debugLoggingEnabled)
     ScreenshotDebugLog.log("=== beginSession === trigger=\(prefs.triggerShortcut?.displayName ?? "nil")")

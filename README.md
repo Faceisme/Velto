@@ -6,7 +6,7 @@ Velto 是一个面向 Apple Silicon Mac 的桌面操作增强工具。它把鼠�
 
 ## 功能一览
 
-设置窗口左侧是 10 个功能模块加通用设置。每个模块页顶部有自己的总开关，模块相关的设置和调试日志开关都放在本模块页里。
+设置窗口左侧是 11 个功能模块加通用设置。每个模块页顶部有自己的总开关，模块相关的设置和调试日志开关都放在本模块页里。
 
 | 模块 | 一句话 |
 | --- | --- |
@@ -19,6 +19,7 @@ Velto 是一个面向 Apple Silicon Mac 的桌面操作增强工具。它把鼠�
 | 增强Finder | Finder 工具栏 / 右键菜单 / 全局快捷键打开终端、编辑器或拷贝路径 |
 | 截图 | 全局快捷键截图，区域 / 窗口选择、标注、滚动长截图 |
 | 网络监控 | 菜单栏实时网速，点开查看哪些进程在占用网络 |
+| Mac小助手 | 擦屏时锁住键盘：黑屏、吞掉所有按键，只有解锁快捷键能退出 |
 | 专注自动化 | 指定 App（如视频播放器）在用时自动开勿扰、全屏时不弹出程序坞，用完自动恢复 |
 | 通用设置 | 开机启动、菜单栏图标、权限、配置备份、日志 |
 
@@ -247,6 +248,10 @@ macOS 没有开关勿扰的公开接口，这个模块有两种切换方式：
 - 全屏时不弹出程序坞（默认开）：列表里的 App 在最前面、且最前面的窗口铺满屏幕（原生全屏，或程序坞自动隐藏时的最大化）时，指针被挡在程序坞那条屏幕边内侧 3 点，拖底部进度条不会误触弹出程序坞。和截图的触发角守卫一样只在 event tap 里改写指针坐标，不改系统设置；那条边外紧挨着别的显示器时不挡。切到别的 App 立刻放开。
 - 每秒检查一次，App 退出时立即检查。打开视频到运行快捷指令约 1 秒。页里显示当前状态，快捷指令找不到或运行失败会提示。调试日志会记下每个 App 的进程、窗口、载入文件、播放状态变化，没自动开关时先看它。
 
+## Mac小助手
+
+擦屏助手：打开后每块屏幕盖一层黑窗，键盘输入和媒体键全部吞掉，方便擦屏或擦键盘。只有解锁快捷键能退出，默认快捷键可以在模块页修改。
+
 ## 通用设置
 
 - 行为：开机自动启动、显示菜单栏图标。
@@ -307,6 +312,8 @@ macOS 没有开关勿扰的公开接口，这个模块有两种切换方式：
 swift test --no-parallel --scratch-path .build
 ```
 
+提交前可以跑一遍 `./scripts/check.sh`：主程序不能有编译告警，全量测试串行通过。
+
 必须串行：测试大量使用全局单例，滚动拼接在 debug 构建下又很吃 CPU，并行时会互相干扰、挤到超时。
 
 ## 日志
@@ -324,6 +331,8 @@ swift test --no-parallel --scratch-path .build
 | `screenshot-debug.log` | 截图会话、窗口识别、滚动拼接 | 截图页或 `VELTO_SCREENSHOT_DEBUG=1` |
 | `focus-automation.log` | 专注自动化在用 App 变化、快捷指令运行结果 | 专注自动化页或 `VELTO_FOCUS_DEBUG=1` |
 | `betterfinder-debug.log` | Finder 扩展菜单构建、点击、URL 回调、动作执行（在扩展容器内） | 增强Finder页或 `VELTO_BETTERFINDER_DEBUG=1` |
+
+除 `betterfinder-debug.log` 外，单个文件超过 5MB 时改名成 `.1`（只留一份旧的），然后从空文件继续写。
 
 开发期可以直接从命令行带环境变量启动：
 
@@ -344,7 +353,9 @@ Resources/
 Sources/
   Velto/                    主程序
     AppDelegate.swift
-    EventTapManager.swift
+    EventTapManager.swift / InputDispatcher.swift / EventTapHost.swift
+    ConfigStore.swift / AppPreferences.swift
+    WindowSnapshot.swift / AXClient.swift / GlobalHotKey.swift / DebugLogFile.swift
     SettingsRootView.swift / SidebarView.swift / GeneralSettingsPage.swift
     DesignSystem.swift / Components.swift / RecorderViews.swift
     Gestures/
@@ -356,6 +367,7 @@ Sources/
     Screenshot/
     NetworkMonitor/
     FocusAutomation/
+    MacAssistant/
     betterfinder/
   VeltoAnnotationCore/      截图标注文档、渲染、撤销历史、工具栏布局
   betterfinder/             增强Finder 核心模型、菜单构建、动作执行
@@ -369,6 +381,13 @@ docs/
 核心职责：
 
 - `AppDelegate`：主菜单、菜单栏图标、Event Tap、切换器、输入法切换、网络监控、专注自动化的启动和退出复原。
+- `InputDispatcher`：事件交给哪些模块、按什么顺序，处理顺序由测试固定。
+- `EventTapHost`：事件 tap 的专用线程、禁用后重开、健康检查。所有 tap 都走它。
+- `ConfigStore`：全部模块的配置和备份。配置变化的通知带前后快照，各模块只比较自己那部分。
+- `WindowSnapshot`：CGWindowList 的类型化结果和窗口查询，窗口层级的判断都在这里。
+- `AXClient`：AX 读写的统一入口，集中超时、熔断和线程约束。
+- `GlobalHotKey`：Carbon 热键，给事件 tap 做安全输入兜底。
+- `DisplayCoordinateConverter`：Quartz 和 AppKit 全局坐标的换算。
 - `EventTapManager`：常驻的全局鼠标 / 键盘事件入口，分发到手势、鼠标控制、窗口管理、按键映射；各模块是否生效由各自开关在分发处判定。
 - `Gestures/`：手势录制、识别、冲突检测、轨迹显示和快捷键触发。
 - `MouseControl/`：指针速度、平滑滚动、滚动功能键、按钮绑定、按应用覆盖。
@@ -379,6 +398,7 @@ docs/
 - `Screenshot/`：截图会话、选区与窗口识别、标注画布、滚动长截图。
 - `NetworkMonitor/`：菜单栏网速、进程流量与连接面板。
 - `FocusAutomation/`：轮询指定 App 的窗口 / 播放状态，经快捷指令开关勿扰。
+- `MacAssistant/`：擦屏助手。
 - `AxDeadPids.swift`：AX 无响应 App 的 pid 级熔断。
 
 ## 注意事项

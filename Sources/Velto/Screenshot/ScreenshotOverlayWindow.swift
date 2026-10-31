@@ -83,13 +83,18 @@ final class ScreenshotOverlayWindow: NSWindow {
     preferences: ScreenshotPreferences
   ) -> [ScreenshotOverlayWindow] {
     // 菜单栏 agent 应用默认非前台;先激活,覆盖层才能立即接收键盘与“首次”鼠标拖拽。
-    NSApp.activate()
+    // 触发键被 tap 吞掉,系统不认为用户在跟 Velto 交互,`NSApp.activate()` 会被拒绝。
+    NSApp.activate(ignoringOtherApps: true)
     let windows = snapshots.map {
       ScreenshotOverlayWindow(
         screenSnapshot: $0, delegate: delegate, activeAppPID: activeAppPID, preferences: preferences)
     }
     for w in windows { w.orderFrontRegardless() }
-    windows.first?.makeKey()
+    if let first = windows.first {
+      first.makeKey()
+      // 窗口默认自己是第一响应者,不设的话框选之前按 Esc 没有反应。
+      first.makeFirstResponder(first.screenshotOverlayView)
+    }
     return windows
   }
 }

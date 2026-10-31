@@ -21,12 +21,26 @@ final class ScreenCleanControllerTests: XCTestCase {
     XCTAssertTrue(matches(unlock.keyCode, flags.union(.maskAlphaShift)))
   }
 
+  /// tap 回调在 tap 线程上跑。回调要是继承了主线程隔离,这里会直接 SIGTRAP。
+  func testTapHandlerRunsOffMainThreadAndSwallowsEverything() async throws {
+    let key = try XCTUnwrap(CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true))
+    let swallowed = await withCheckedContinuation { continuation in
+      Thread.detachNewThread {
+        let results = [CGEventType.keyDown, .keyUp, .flagsChanged].map {
+          ScreenCleanController.handleTapEvent(type: $0, event: key) == nil
+        }
+        continuation.resume(returning: results)
+      }
+    }
+    XCTAssertEqual(swallowed, [true, true, true])
+  }
+
   /// 端到端:真起 HID tap + 黑窗,发合成按键。跑的时候屏幕会黑约 1 秒、期间吞掉键盘,
   /// 所以默认跳过,要跑时设 `VELTO_LIVE_TESTS=1`。
   func testLiveSessionEndsOnUnlockShortcut() throws {
     try XCTSkipUnless(ProcessInfo.processInfo.environment["VELTO_LIVE_TESTS"] == "1", "会黑屏,默认不跑")
     let cleaner = ScreenCleanController.shared
-    let unlock = GestureStore.shared.preferences.macAssistant.screenCleanUnlockShortcut
+    let unlock = ConfigStore.shared.preferences.macAssistant.screenCleanUnlockShortcut
     cleaner.setActive(true)
     defer {
       cleaner.setActive(false)

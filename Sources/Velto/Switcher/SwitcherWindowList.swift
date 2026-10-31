@@ -1088,7 +1088,7 @@ final class SwitcherWindowList {
             if prefs.minimizedWindows == .showAtEnd && w.isMinimized { return true }
             if prefs.hiddenWindows == .showAtEnd && w.isAppHidden { return true }
             if prefs.fullscreenWindows == .showAtEnd && w.isFullscreen { return true }
-            // windowlessApps 我们 P4 还没有这种类型的窗口
+            // windowlessApps 目前没有对应的窗口类型
             return false
         }
         var normal: [SwitcherWindow] = []
@@ -1105,8 +1105,8 @@ final class SwitcherWindowList {
         case .recentlyFocused:
             return windows.sorted { $0.lastFocusOrder < $1.lastFocusOrder }
         case .recentlyCreated:
-            // SwitcherWindow 没有 creationOrder 字段,目前退化到 wid 倒序
-            // (wid 单调递增,新窗口 wid 大)—— P4 加正式的 creationOrder
+            // SwitcherWindow 没有 creationOrder 字段,用 wid 倒序代替
+            // (wid 单调递增,新窗口 wid 大)
             return windows.sorted { $0.cgWindowId > $1.cgWindowId }
         case .alphabetical:
             return windows.sorted { a, b in

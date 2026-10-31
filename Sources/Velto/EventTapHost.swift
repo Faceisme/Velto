@@ -143,7 +143,8 @@ final class EventTapHost: @unchecked Sendable {
     }
 
     /// 把 `work` 排到 tap 线程上。tap 线程没在跑时直接丢弃。
-    func perform(_ work: @escaping () -> Void) {
+    /// `@Sendable`:闭包不能继承调用方的主线程隔离,它是在 tap 线程上跑的。
+    func perform(_ work: @escaping @Sendable () -> Void) {
         lock.lock()
         let runLoop = runLoop
         lock.unlock()

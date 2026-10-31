@@ -4,7 +4,7 @@ import SwiftUI
 // 页头总开关 +「快捷操作」5 行 +(设了最大化鼠标按钮时)例外 App + 调试。
 // 改动即时保存,没有草稿和保存栏。
 struct WindowManagementPage: View {
-  private let store = GestureStore.shared
+  private let store = ConfigStore.shared
 
   var body: some View {
     SettingsPage {
