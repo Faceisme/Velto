@@ -304,8 +304,10 @@ macOS 没有开关勿扰的公开接口，这个模块有两种切换方式：
 运行测试：
 
 ```bash
-swift test --scratch-path .build
+swift test --no-parallel --scratch-path .build
 ```
+
+必须串行：测试大量使用全局单例，滚动拼接在 debug 构建下又很吃 CPU，并行时会互相干扰、挤到超时。
 
 ## 日志
 
