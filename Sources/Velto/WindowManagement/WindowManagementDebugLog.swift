@@ -117,15 +117,20 @@ enum WindowManagementDebugLog {
     }
   }
 
+  /// 用 O_APPEND 打开,每次写入都落在文件末尾。测试进程和运行中的 Velto 会写同一份日志,
+  /// 只 seekToEnd 的话各记各的位置,后写的把对方的内容盖掉,切口落在中文字符中间时文件
+  /// 就成了非法 UTF-8,读取直接失败。
+  static func openForAppending(_ url: URL) -> FileHandle? {
+    let descriptor = open(url.path, O_WRONLY | O_APPEND | O_CREAT, 0o644)
+    guard descriptor >= 0 else { return nil }
+    return FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+  }
+
   private static func openLogFile() -> FileHandle? {
-    let fm = FileManager.default
     let url = fileURL
-    try? fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-    if !fm.fileExists(atPath: url.path) {
-      fm.createFile(atPath: url.path, contents: nil)
-    }
-    let handle = try? FileHandle(forWritingTo: url)
-    _ = try? handle?.seekToEnd()
+    try? FileManager.default.createDirectory(
+      at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+    let handle = openForAppending(url)
     let banner = "\n=== Velto window-management log started \(dateFormatter.string(from: Date())) ===\n"
     if let data = banner.data(using: .utf8) {
       try? handle?.write(contentsOf: data)
