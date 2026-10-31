@@ -84,7 +84,7 @@ final class ScreenshotOverlayView: NSView {
   /// 拖拽起点 / 移动锚点(视图局部点)。
   private var dragOrigin: CGPoint = .zero
   private var dragOriginalSelection: CGRect = .zero
-  var windowCandidates: [[String: Any]] = []
+  var windowCandidates = WindowSnapshot()
   /// 悬停窗口高亮区域(视图局部点坐标)。
   private var hoverWindowRectLocal: CGRect?
   /// 最近一次鼠标位置(视图局部点),供放大镜定位。
@@ -129,23 +129,11 @@ final class ScreenshotOverlayView: NSView {
     return fallback
   }
 
-  // MARK: - 坐标换算 helper(本任务关键决策:不走 DisplayCoordinateConverter)
+  // MARK: - 坐标换算 helper
 
   /// 视图局部点 → AppKit 全局点(左下原点)。
   private func localToAppKitGlobal(_ p: CGPoint) -> CGPoint {
     CGPoint(x: p.x + globalFrame.minX, y: p.y + globalFrame.minY)
-  }
-
-  /// AppKit 全局点(左下原点)→ CGWindowList 左上原点点(原点在主屏左上)。
-  private func appKitGlobalToTopLeft(_ p: CGPoint) -> CGPoint {
-    let primaryHeight = NSScreen.screens.first?.frame.height ?? bounds.height
-    return CGPoint(x: p.x, y: primaryHeight - p.y)
-  }
-
-  /// CGWindowList 左上原点 rect → AppKit 全局 rect(左下原点)。
-  private func topLeftRectToAppKitGlobal(_ r: CGRect) -> CGRect {
-    let primaryHeight = NSScreen.screens.first?.frame.height ?? bounds.height
-    return CGRect(x: r.minX, y: primaryHeight - r.maxY, width: r.width, height: r.height)
   }
 
   /// AppKit 全局 rect(左下原点)→ 视图局部 rect。
@@ -313,10 +301,9 @@ final class ScreenshotOverlayView: NSView {
 
   private func updateWindowHover(at point: CGPoint) {
     let previous = hoverWindowRectLocal
-    let topLeft = appKitGlobalToTopLeft(localToAppKitGlobal(point))
-    hoverWindowRectLocal = WindowFrameDetector.hitWindowBounds(in: windowCandidates,
-      atGlobalPoint: topLeft, excludingWindowNumbers: [], activeAppPID: 0)
-      .map { appKitGlobalRectToLocal(topLeftRectToAppKitGlobal($0)) }
+    let topLeft = DisplayCoordinateConverter.quartzPoint(fromAppKit: localToAppKitGlobal(point))
+    hoverWindowRectLocal = WindowFrameDetector.hitWindowBounds(in: windowCandidates, atGlobalPoint: topLeft)
+      .map { appKitGlobalRectToLocal(DisplayCoordinateConverter.appKitRect(fromQuartz: $0)) }
     if let previous { setNeedsDisplay(selectionInvalidRect(previous)) }
     if let hoverWindowRectLocal { setNeedsDisplay(selectionInvalidRect(hoverWindowRectLocal)) }
   }

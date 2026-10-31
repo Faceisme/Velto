@@ -60,16 +60,14 @@ private func screenshotTestImage(width: Int = 1000, height: Int = 720) -> CGImag
 }
 
 @Test func screenshotWindowSnapFollowsVisibleWindowUnderPointer() {
-  func window(_ id: Int, _ pid: Int32, _ rect: CGRect, layer: Int = 0, alpha: Double = 1) -> [String: Any] {
-    [kCGWindowNumber as String: id, kCGWindowOwnerPID as String: pid, kCGWindowLayer as String: layer,
-     kCGWindowAlpha as String: alpha, kCGWindowBounds as String: rect.dictionaryRepresentation]
+  func window(_ id: CGWindowID, _ pid: Int32, _ rect: CGRect, layer: Int = 0, alpha: Double = 1) -> WindowInfo {
+    WindowInfo(id: id, pid: pid, layer: layer, bounds: rect, alpha: alpha)
   }
   let a = CGRect(x: 0, y: 0, width: 400, height: 600)
   let b = CGRect(x: 400, y: 0, width: 500, height: 600)
   let point = CGPoint(x: 600, y: 100)
-  let windows = [window(3, 99, b, alpha: 0), window(1, 10, a), window(2, 20, b)]
-  #expect(WindowFrameDetector.hitWindowBounds(in: windows, atGlobalPoint: point,
-    excludingWindowNumbers: [], activeAppPID: 10) == b)
+  let snapshot = WindowSnapshot([window(3, 99, b, alpha: 0), window(1, 10, a), window(2, 20, b)])
+  #expect(WindowFrameDetector.hitWindowBounds(in: snapshot, atGlobalPoint: point) == b)
 }
 
 @Test @MainActor func screenshotLongImageEditorKeepsFullResolutionAndCopyKeys() throws {

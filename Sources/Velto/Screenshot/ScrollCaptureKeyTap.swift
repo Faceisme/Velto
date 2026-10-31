@@ -7,9 +7,6 @@ final class ScrollCaptureKeyTap: @unchecked Sendable {
   static let active = Mutex<ScrollCaptureKeyTap?>(nil)
   static var current: ScrollCaptureKeyTap? { active.withLock { $0 } }
   static var isCapturing: Bool { current != nil }
-  static func eventRect(from rect: CGRect, primaryScreenHeight: CGFloat) -> CGRect {
-    CGRect(x: rect.minX, y: primaryScreenHeight - rect.maxY, width: rect.width, height: rect.height)
-  }
   private enum Action: Sendable { case copy, save, cancel, exit, scroll }
 
   var onCopy: (() -> Void)?

@@ -9,18 +9,13 @@ import Testing
     let movist = getpid() + 1
     let finder = getpid() + 2
     let agent = getpid() + 3
-    func window(pid: pid_t, level: NSWindow.Level = .normal, wid: Int = 1,
+    func window(pid: pid_t, level: NSWindow.Level = .normal, wid: CGWindowID = 1,
                 frame: CGRect = CGRect(x: 0, y: 0, width: 200, height: 200),
-                alpha: Double = 1, onscreen: Bool = true) -> [String: Any] {
-        [kCGWindowOwnerPID as String: pid,
-         kCGWindowNumber as String: wid,
-         kCGWindowLayer as String: level.rawValue,
-         kCGWindowIsOnscreen as String: onscreen,
-         kCGWindowAlpha as String: alpha,
-         kCGWindowBounds as String: frame.dictionaryRepresentation]
+                alpha: Double = 1, onscreen: Bool = true) -> WindowInfo {
+        WindowInfo(id: wid, pid: pid, layer: level.rawValue, bounds: frame, alpha: alpha, isOnscreen: onscreen)
     }
-    func top(_ list: [[String: Any]], at p: CGPoint = point) -> pid_t? {
-        GestureTargetController.floatingWindowOnTop(in: list, at: p, isRegularApp: { $0 != agent })?.pid
+    func top(_ list: [WindowInfo], at p: CGPoint = point) -> pid_t? {
+        WindowSnapshot(list).floatingWindowOnTop(at: p, isRegularApp: { $0 != agent })?.pid
     }
     let player = window(pid: movist, level: .floating, wid: 42)
     let below = window(pid: finder)
@@ -28,8 +23,7 @@ import Testing
     let dock = window(pid: getpid() + 4, level: NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.dockWindow))))
 
     #expect(top([player, below]) == movist)
-    #expect(GestureTargetController.floatingWindowOnTop(
-        in: [player, below], at: point, isRegularApp: { _ in true })?.wid == 42)
+    #expect(WindowSnapshot([player, below]).floatingWindowOnTop(at: point, isRegularApp: { _ in true })?.id == 42)
     #expect(top([dock, player, below]) == movist)
     #expect(top([window(pid: movist, level: .modalPanel), below]) == movist)
     // 普通窗口在最上层:不归这条路径管。

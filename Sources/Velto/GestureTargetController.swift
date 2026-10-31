@@ -3,6 +3,13 @@ import ApplicationServices
 import CoreGraphics
 import Foundation
 
+/// 能操作一个窗口的句柄。AX 拿得到窗口就用 AX;Telegram、微信、富途这类对 AX 零窗口
+/// 暴露的 App 只能靠 WindowServer,选中和移动窗口都只要 wid,不需要目标 App 配合。
+enum WindowHandle: @unchecked Sendable {
+    case accessibility(AXUIElement)
+    case windowServer(CGWindowID)
+}
+
 /// `@unchecked Sendable`:`AXUIElement` 是 CFType,SDK 没标 Sendable,但本结构
 /// 都是不可变字段,实例创建后只读,跨线程传递没有竞争风险。
 struct GestureExecutionTarget: @unchecked Sendable {
@@ -10,32 +17,33 @@ struct GestureExecutionTarget: @unchecked Sendable {
     let pid: pid_t?
     let restoresOriginalFrontmostApplication: Bool
     let deliveryDelay: TimeInterval
-    let window: AXUIElement?
+    /// `nil`:只定位到 App,没定位到窗口。
+    let handle: WindowHandle?
     let prefersDirectWindowClose: Bool
-    /// 光标下那个窗口的 CGWindowID。**只在 `window == nil` 时才用得上**:AX 熔断期
-    /// 拿不到 AXUIElement,靠它走 WindowServer 选中窗口(见 `prepareForExecution`)。
-    let cgWindowId: CGWindowID?
+
+    var window: AXUIElement? {
+        if case .accessibility(let window) = handle {
+            return window
+        }
+        return nil
+    }
+
+    fileprivate static func none(
+        policy: GestureTargetPolicy = .windowUnderPointer,
+        restoresOriginalFrontmostApplication: Bool = false
+    ) -> GestureExecutionTarget {
+        GestureExecutionTarget(
+            policy: policy,
+            pid: nil,
+            restoresOriginalFrontmostApplication: restoresOriginalFrontmostApplication,
+            deliveryDelay: 0,
+            handle: nil,
+            prefersDirectWindowClose: false
+        )
+    }
 }
 
 enum GestureTargetController {
-    struct WindowCandidate {
-        let pid: pid_t
-        let ownerName: String
-        let bounds: CGRect
-        /// 0 = 这个 candidate 不是直接从 CGWindowList 来的,没有可用的 wid。
-        let wid: CGWindowID
-        /// 0 = 普通窗口;落在 `AppWindowLayer.floating` 里的是置顶浮动窗口。
-        let layer: Int
-    }
-
-    /// Velto 自己的 pid。所有"鼠标下的目标"查询都必须先 skip 这个 pid ——
-    /// 否则当鼠标停在 Velto 设置窗口边缘时(典型场景:用户 resize 设置窗口),
-    /// `AXUIElementCopyElementAtPosition` 会被 AppKit 同步路由回我们自己的
-    /// NSHostingView,在 *调用方所在线程*(可能是 WindowDragController 的
-    /// background queue)同步跑 SwiftUI view graph update,撞到 MainActor
-    /// 隔离的 Binding 闭包时 Swift 6 runtime executor 校验直接 SIGTRAP。
-    private static let selfPid: pid_t = getpid()
-
     static func executionTarget(
         at point: CGPoint,
         policy: GestureTargetPolicy,
@@ -43,26 +51,9 @@ enum GestureTargetController {
     ) -> GestureExecutionTarget {
         switch policy {
         case .activeWindow:
-            if frontmostApplicationAtGestureStart != nil {
-                return GestureExecutionTarget(
-                    policy: policy,
-                    pid: nil,
-                    restoresOriginalFrontmostApplication: true,
-                    deliveryDelay: 0,
-                    window: nil,
-                    prefersDirectWindowClose: false,
-                    cgWindowId: nil
-                )
-            }
-
-            return GestureExecutionTarget(
+            return .none(
                 policy: policy,
-                pid: nil,
-                restoresOriginalFrontmostApplication: false,
-                deliveryDelay: 0,
-                window: nil,
-                prefersDirectWindowClose: false,
-                cgWindowId: nil
+                restoresOriginalFrontmostApplication: frontmostApplicationAtGestureStart != nil
             )
 
         case .windowUnderPointer:
@@ -89,9 +80,10 @@ enum GestureTargetController {
         let app = AppQuirks.foregroundApplication(for: rawApp) ?? rawApp
         app?.activate(options: [.activateAllWindows])
 
-        if let window = target.window {
-            focus(window: window, pid: pid)
-        } else if let wid = target.cgWindowId {
+        switch target.handle {
+        case .accessibility(let window):
+            AXClient.focus(window: window, pid: pid)
+        case .windowServer(let wid):
             // AX 熔断期 / AX 压根拿不到窗口:`activate` 只把 app 提到前台,
             // **选不中**具体那个窗口 —— 观感就是「窗口上来了却没被选中、像卡住」
             // (2026-08-27 Telegram 那次用户报的正是这个)。
@@ -101,6 +93,8 @@ enum GestureTargetController {
             // 熔断「别去打扰它主线程」的初衷。
             SwitcherFocus.raiseByWindowServer(pid: pid, cgWindowId: wid)
             WindowManagementDebugLog.log("  ↑ AX 无窗口 → WindowServer 选中 wid=\(wid) pid=\(pid)")
+        case nil:
+            break
         }
     }
 
@@ -112,22 +106,6 @@ enum GestureTargetController {
         ).window
     }
 
-    static func frame(ofWindow window: AXUIElement) -> CGRect? {
-        frame(of: window)
-    }
-
-    /// 尺寸 → 位置 → 再补一次尺寸。只设一次尺寸不够:app 会按窗口**当前**原点把
-    /// 尺寸夹到屏幕内 —— 访达在 x=149 时设宽 1920,实际只给 1771(=1920−149),
-    /// 再挪到 x=0 就成了"贴左但没铺满",得按第二次才满。挪完位置后再设一次尺寸,
-    /// 这时原点已经对了,不会再被夹。先设一次尺寸是为了跨屏挪时大窗口不被位置推偏。
-    static func setFrame(_ frame: CGRect, ofWindow window: AXUIElement) -> Bool {
-        guard setSize(frame.size, ofWindow: window),
-              setPosition(frame.origin, ofWindow: window) else {
-            return false
-        }
-        return setSize(frame.size, ofWindow: window)
-    }
-
     static func maximizeWindowUnderPointer(at point: CGPoint) {
         guard let window = windowUnderPointer(at: point) else {
             return
@@ -137,24 +115,17 @@ enum GestureTargetController {
     }
 
     static func maximizeWindow(_ window: AXUIElement, containingEventLocation point: CGPoint) {
-        let frame = DisplayCoordinateConverter.visibleAccessibilityFrame(containingEventLocation: point)
+        let frame = DisplayCoordinateConverter.visibleFrame(containingEventLocation: point)
         guard !frame.isEmpty else {
             return
         }
 
-        let ok = setFrame(frame, ofWindow: window)
+        let ok = AXClient.setFrame(frame, ofWindow: window)
         if WindowManagementDebugLog.isEnabled {
-            let result = self.frame(of: window).map(fmt) ?? "?"
+            let result = AXClient.frame(of: window).map(fmt) ?? "?"
             WindowManagementDebugLog.log("最大化: 目标 frame=\(fmt(frame)) → 结果 frame=\(result) ok=\(ok)")
         }
     }
-
-    // MARK: - AX 熔断(pid 级负缓存)
-
-    /// 账本本体在 `AxDeadPids`,与切换器共用 —— 那边的暴力枚举对同一批哑巴 app
-    /// 也是纯浪费。日志由账本自己打(每个调用点都得报上名来,见 `AxDeadPids.mark`)。
-    /// 同一机理的局部版见 `WindowDragController.lookupBackoffUntil`。
-    private static func axIsDead(_ pid: pid_t) -> Bool { AxDeadPids.isDead(pid) }
 
     private static func targetUnderPointer(at point: CGPoint) -> GestureExecutionTarget {
         let result = computeTargetUnderPointer(at: point)
@@ -165,23 +136,20 @@ enum GestureTargetController {
     }
 
     private static func computeTargetUnderPointer(at point: CGPoint) -> GestureExecutionTarget {
-        let candidatePoints = targetLookupPoints(for: point)
-
         // CGWindowListCopyWindowInfo 是跨进程的全窗口枚举,本次手势内最多取一次,
         // 各个 fallback 路径复用同一份列表。这里**无条件**先取一次,因为接下来
-        // 要先用它做 self-pid 守护(见 selfPid 注释)。
-        let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
-        let cachedWindowList = (CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]]) ?? []
+        // 要先用它做 self-pid 守护(见 `WindowInfo.ownPid` 注释)。
+        let snapshot = WindowSnapshot.onScreen()
 
         if WindowManagementDebugLog.isEnabled {
-            logWindowStack(point: point, candidatePoints: candidatePoints, windowList: cachedWindowList)
+            logWindowStack(point: point, snapshot: snapshot)
         }
 
         // 置顶浮动窗口压在最上层 → 直接按 CGWindowList 定位,不做 AX 命中测试。
         // 后面各路径只认 layer 0,AX 明明命中了它也会被「以 CG 栈顶为准」校正走
         // (见 floatingWindowOnTop)。它的 wid、几何都在列表里,target(from:) 按 frame
         // 配 AX 窗口就够了;也就不用担心命中测试穿过它落进下面 Velto 自己的窗口。
-        if let floating = floatingWindowOnTop(in: cachedWindowList, at: point) {
+        if let floating = snapshot.floatingWindowOnTop(at: point) {
             if WindowManagementDebugLog.isEnabled {
                 WindowManagementDebugLog.log("  最上层是浮动窗口 layer=\(floating.layer) app=\"\(floating.ownerName)\" pid=\(floating.pid) → 直接按 CGWindowList 定位")
             }
@@ -189,100 +157,67 @@ enum GestureTargetController {
         }
 
         // 鼠标下最上层是 Velto 自己时,**绝对**不能再调
-        // AXUIElementCopyElementAtPosition —— 详见 selfPid 注释。
+        // AXUIElementCopyElementAtPosition —— 详见 `WindowInfo.ownPid` 注释。
         // 但仍要让 move/resize 对设置窗口本身生效,所以改走
         // "按 frame 匹配自己 app 的 AX 窗口列表"路径:AXUIElementCreateApplication +
         // kAXWindowsAttribute 枚举的是 NSApp.windows 快照,AppKit 内部 sync 回主线程
         // 读 NSWindow.frame,不会跑 SwiftUI hit-test,在 background queue 上安全。
-        if candidatePoints.contains(where: { topmostWindowIsSelf(in: cachedWindowList, at: $0) }) {
+        if snapshot.isOverOwnWindow(at: point) {
             if WindowManagementDebugLog.isEnabled {
                 WindowManagementDebugLog.log("  最上层是 Velto 自己 → 只匹配自身窗口(self 守护路径)")
             }
-            for p in candidatePoints {
-                if let candidate = selfWindowCandidate(in: cachedWindowList, at: p) {
-                    return target(from: candidate)
-                }
-            }
-            return fallbackTarget()
+            return snapshot.topmostOwnWindow(at: point).map(target(from:)) ?? .none()
         }
 
-        func candidateFromWindowList() -> WindowCandidate? {
-            for p in candidatePoints {
-                if let candidate = windowCandidate(in: cachedWindowList, at: p) {
-                    return candidate
-                }
-            }
-            return nil
-        }
+        let candidate = snapshot.topmostAppWindow(at: point)
 
         // 已熔断的 app(Telegram / 微信 / 富途这类对 AX 零窗口暴露的)直接跳过命中
-        // 测试 —— 那两次上限 0.1s 的同步 RPC 压的是它自己的主线程,而结果必然是 nil。
-        if let topCandidate = windowCandidate(in: cachedWindowList, at: point),
-           axIsDead(topCandidate.pid) {
+        // 测试 —— 那次上限 0.1s 的同步 RPC 压的是它自己的主线程,而结果必然是 nil。
+        if let candidate, AxDeadPids.isDead(candidate.pid) {
             if WindowManagementDebugLog.isEnabled {
-                WindowManagementDebugLog.log("  ⏭️ pid=\(topCandidate.pid) app=\"\(topCandidate.ownerName)\" 已 AX 熔断 → 跳过命中测试,直接走 CGWindowList")
+                WindowManagementDebugLog.log("  ⏭️ pid=\(candidate.pid) app=\"\(candidate.ownerName)\" 已 AX 熔断 → 跳过命中测试,直接走 CGWindowList")
             }
-            return target(from: topCandidate)
+            return target(from: candidate)
         }
 
-        guard let element = firstElementAtPosition(candidatePoints) else {
+        guard let element = AXClient.element(at: point) else {
             if WindowManagementDebugLog.isEnabled {
-                WindowManagementDebugLog.log("  AX 命中失败(AXUIElementCopyElementAtPosition 全部返回 nil)→ 回退 CGWindowList")
+                WindowManagementDebugLog.log("  AX 命中失败(AXUIElementCopyElementAtPosition 返回 nil)→ 回退 CGWindowList")
             }
             // 这里**不熔断**:命中测试失败可能只是一次偶发超时,而熔断会让健康
             // app 的 ⌥ 拖拽降级 5 秒。紧接着的 target(from:) 会去查 kAXWindows,
             // 那个「success + 0 个窗口」才是 AX 哑巴的确定性信号,由它来记账。
-            if let candidate = candidateFromWindowList() {
-                return target(from: candidate)
-            }
-
-            return fallbackTarget()
+            return candidate.map(target(from:)) ?? .none()
         }
 
         if WindowManagementDebugLog.isEnabled {
-            let elemPid = processIdentifier(for: element)
-            WindowManagementDebugLog.log("  AX 命中: element pid=\(elemPid.map(String.init) ?? "?") app=\"\(elemPid.map { appName(forPid: $0, in: cachedWindowList) } ?? "?")\" role=\(role(of: element) ?? "?")")
+            let elemPid = AXClient.pid(of: element)
+            WindowManagementDebugLog.log("  AX 命中: element pid=\(elemPid.map(String.init) ?? "?") app=\"\(elemPid.map { appName(forPid: $0, in: snapshot) } ?? "?")\" role=\(AXClient.role(of: element) ?? "?")")
         }
 
-        let window = windowElement(containing: element)
-        if window == nil, let candidate = candidateFromWindowList() {
+        let window = AXClient.windowElement(containing: element)
+        if window == nil, let candidate {
             if WindowManagementDebugLog.isEnabled {
                 WindowManagementDebugLog.log("  AX 命中元素找不到所属窗口 → 回退 CGWindowList: app=\"\(candidate.ownerName)\" pid=\(candidate.pid) frame=\(fmt(candidate.bounds))")
             }
             return target(from: candidate)
         }
 
-        let pid = window.flatMap(processIdentifier(for:)) ?? processIdentifier(for: element)
+        let pid = window.flatMap(AXClient.pid(of:)) ?? AXClient.pid(of: element)
         guard let pid else {
-            if let candidate = candidateFromWindowList() {
-                return target(from: candidate)
-            }
-
-            return GestureExecutionTarget(
-                policy: .windowUnderPointer,
-                pid: nil,
-                restoresOriginalFrontmostApplication: false,
-                deliveryDelay: 0,
-                window: nil,
-                prefersDirectWindowClose: false,
-                cgWindowId: nil
-            )
+            return candidate.map(target(from:)) ?? .none()
         }
 
-        // 【修复:AX 命中飘到 z 序更低的窗口】
-        // firstElementAtPosition 会依次试 [原始光标点, 转换坐标点]。当目标 app
-        // (如 Telegram)不支持 systemwide AX 命中、在原始点返回 nil 时,会退到
-        // eventLocationToAccessibilityPoint 的转换点 —— 该点经 y 翻转后可能落在屏幕
-        // 另一处、命中 z 序更低、铺满全屏的别家窗口(Claude/Chrome),AX 路径一旦命中
-        // 就短路返回,导致"光标在 Telegram 上却移动了底下的窗口"。
-        // CGWindowList 在**原始光标点**的栈顶才是光标下真正最上层的窗口(与 CGEvent
-        // 同坐标系,权威),据此校正:AX 命中 pid 与栈顶 CG pid 不一致时,以 CG 栈顶为准。
-        if let topCandidate = windowCandidate(in: cachedWindowList, at: point),
-           topCandidate.pid != pid {
+        // 【AX 命中的不是光标下的普通窗口时,以 CG 栈顶为准】
+        // AX 命中会落在程序坞、后台 App 的 HUD 这类高层窗口上,这些不是手势该操作的
+        // 目标(常规 App 的浮动窗口前面已经单独处理过)。CGWindowList 在光标点的栈顶
+        // 才是用户看到的那个普通窗口(与 CGEvent 同坐标系,权威):AX 命中 pid 与栈顶
+        // pid 不一致时,以栈顶为准。
+        if let candidate, candidate.pid != pid {
             if WindowManagementDebugLog.isEnabled {
-                WindowManagementDebugLog.log("  ⚠️ AX 命中 pid=\(pid) app=\"\(appName(forPid: pid, in: cachedWindowList))\" 与原始光标点 CG 栈顶 pid=\(topCandidate.pid) app=\"\(topCandidate.ownerName)\" 不一致 → 以 CG 栈顶为准")
+                WindowManagementDebugLog.log("  ⚠️ AX 命中 pid=\(pid) app=\"\(appName(forPid: pid, in: snapshot))\" 与 CG 栈顶 pid=\(candidate.pid) app=\"\(candidate.ownerName)\" 不一致 → 以 CG 栈顶为准")
             }
-            return target(from: topCandidate)
+            return target(from: candidate)
         }
 
         let rawApp = NSRunningApplication(processIdentifier: pid)
@@ -294,13 +229,12 @@ enum GestureTargetController {
             pid: pid,
             restoresOriginalFrontmostApplication: false,
             deliveryDelay: policy.deliveryDelay,
-            window: window,
-            prefersDirectWindowClose: policy.prefersDirectWindowClose,
-            cgWindowId: nil
+            handle: window.map(WindowHandle.accessibility),
+            prefersDirectWindowClose: policy.prefersDirectWindowClose
         )
     }
 
-    private static func target(from candidate: WindowCandidate) -> GestureExecutionTarget {
+    private static func target(from candidate: WindowInfo) -> GestureExecutionTarget {
         let rawApp = NSRunningApplication(processIdentifier: candidate.pid)
         let app = AppQuirks.foregroundApplication(for: rawApp) ?? rawApp
         let policy = AppQuirks.policy(rawApp: rawApp, foregroundApp: app, ownerName: candidate.ownerName)
@@ -309,16 +243,17 @@ enum GestureTargetController {
                 guard foregroundApp.processIdentifier != candidate.pid else { return nil }
                 return axWindow(matching: candidate, pid: foregroundApp.processIdentifier)
             }
-        let pid = window.flatMap(processIdentifier(for:)) ?? candidate.pid
+        let pid = window.flatMap(AXClient.pid(of:)) ?? candidate.pid
+        // Velto 自己的窗口不走 WindowServer:拿不到 AX 窗口时只激活 App。
+        let windowServer = candidate.isOwn ? nil : WindowHandle.windowServer(candidate.id)
 
         return GestureExecutionTarget(
             policy: .windowUnderPointer,
             pid: pid,
             restoresOriginalFrontmostApplication: false,
             deliveryDelay: policy.deliveryDelay,
-            window: window,
-            prefersDirectWindowClose: policy.prefersDirectWindowClose,
-            cgWindowId: candidate.wid == 0 ? nil : candidate.wid
+            handle: window.map(WindowHandle.accessibility) ?? windowServer,
+            prefersDirectWindowClose: policy.prefersDirectWindowClose
         )
     }
 
@@ -334,64 +269,14 @@ enum GestureTargetController {
         }
 
         if let pid = target.pid {
-            focus(window: window, pid: pid)
+            AXClient.focus(window: window, pid: pid)
         }
 
-        guard let closeButton = axElementAttribute(kAXCloseButtonAttribute, of: window) else {
+        guard let closeButton = AXClient.element(kAXCloseButtonAttribute, of: window) else {
             return false
         }
 
-        let result = AXUIElementPerformAction(closeButton, kAXPressAction as CFString)
-        return result == .success
-    }
-
-    private static func targetLookupPoints(for point: CGPoint) -> [CGPoint] {
-        let accessibilityPoint = DisplayCoordinateConverter.eventLocationToAccessibilityPoint(point)
-        guard point != accessibilityPoint else {
-            return [point]
-        }
-
-        return [point, accessibilityPoint]
-    }
-
-    private static func firstElementAtPosition(_ points: [CGPoint]) -> AXUIElement? {
-        for point in points {
-            if let element = elementAtPosition(point) {
-                return element
-            }
-        }
-        return nil
-    }
-
-    /// 跨进程 AX 查询:遇到卡死 / 无响应的目标 App 可能长时间阻塞。给它设一个消息
-    /// 超时,超时后调用快速失败(返回非 .success),上层回退到 frontmost App,避免
-    /// detached task 长期挂住、最终晚回来补发旧手势。
-    ///
-    /// ⚠️ 传 systemWide 元素 = **设置整个进程的全局默认超时**(SDK 头文件明确写了:
-    /// "Pass the system-wide accessibility object ... if you want to set the timeout
-    /// globally for this process")。所以这里只在首次调用时设一次,不能每次命中测试
-    /// 都重设 —— 否则会持续覆盖 AXCallQueue 给切换器设的 1.0s 预算。切换器改为在
-    /// 自己的 app 元素上设置(元素级,不污染全局),见 SwitcherApp。
-    static let axMessagingTimeout: Float = AXCallQueue.processMessagingTimeout
-    private static let installGlobalTimeout: Void = {
-        AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), axMessagingTimeout)
-    }()
-
-    private static func elementAtPosition(_ point: CGPoint) -> AXUIElement? {
-        _ = installGlobalTimeout
-        let systemWide = AXUIElementCreateSystemWide()
-        var element: AXUIElement?
-        let result = AXUIElementCopyElementAtPosition(
-            systemWide,
-            Float(point.x),
-            Float(point.y),
-            &element
-        )
-
-        guard result == .success else {
-            return nil
-        }
-        return element
+        return AXClient.press(closeButton)
     }
 
     /// 光标下最上层窗口的 **CGWindowID + 几何**,不碰 AX。
@@ -400,199 +285,24 @@ enum GestureTargetController {
     /// 0 个窗口,拿不到 AX 句柄就 `AXUIElementSetAttributeValue(kAXPosition)` 无从谈起,
     /// ⌥ 拖窗口在这些 app 上**从来就没工作过**。改走 WindowServer 的 `SLSMoveWindow`
     /// 只需要 wid,不需要目标 app 配合。见 `WindowDragController`。
-    static func cgWindowUnderPointer(at point: CGPoint) -> (id: CGWindowID, frame: CGRect)? {
-        let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
-        let windowList = (CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]]) ?? []
-
-        if let floating = floatingWindowOnTop(in: windowList, at: point), floating.wid != 0 {
-            return (floating.wid, floating.bounds)
-        }
-
-        for p in targetLookupPoints(for: point) {
-            for info in windowList {
-                guard (info[kCGWindowLayer as String] as? NSNumber)?.intValue == 0,
-                      info[kCGWindowIsOnscreen as String] as? Bool == true,
-                      let alpha = (info[kCGWindowAlpha as String] as? NSNumber)?.doubleValue,
-                      alpha > 0.01,
-                      let pidNumber = info[kCGWindowOwnerPID as String] as? NSNumber,
-                      pid_t(pidNumber.intValue) != selfPid,
-                      let wid = (info[kCGWindowNumber as String] as? NSNumber)?.uint32Value,
-                      let boundsDictionary = info[kCGWindowBounds as String] as? NSDictionary,
-                      let bounds = CGRect(dictionaryRepresentation: boundsDictionary),
-                      bounds.width >= 40,
-                      bounds.height >= 40,
-                      bounds.contains(p) else {
-                    continue
-                }
-                return (wid, bounds)
-            }
-        }
-        return nil
+    static func cgWindowUnderPointer(at point: CGPoint) -> WindowInfo? {
+        let snapshot = WindowSnapshot.onScreen()
+        return snapshot.floatingWindowOnTop(at: point) ?? snapshot.topmostAppWindow(at: point)
     }
 
-    private static func windowCandidate(in windowList: [[String: Any]], at point: CGPoint) -> WindowCandidate? {
-        for info in windowList {
-            guard let layer = (info[kCGWindowLayer as String] as? NSNumber)?.intValue,
-                  layer == 0,
-                  let onscreen = info[kCGWindowIsOnscreen as String] as? Bool,
-                  onscreen,
-                  let alpha = (info[kCGWindowAlpha as String] as? NSNumber)?.doubleValue,
-                  alpha > 0.01,
-                  let pidNumber = info[kCGWindowOwnerPID as String] as? NSNumber,
-                  let boundsDictionary = info[kCGWindowBounds as String] as? NSDictionary,
-                  let bounds = CGRect(dictionaryRepresentation: boundsDictionary),
-                  bounds.width >= 40,
-                  bounds.height >= 40,
-                  bounds.contains(point) else {
-                continue
-            }
-
-            // Velto 自己的窗口不能当作目标 —— 上层 targetUnderPointer 已经守住
-            // 了 AX 路径,这里是 fallback 路径的同等防线。
-            let pid = pid_t(pidNumber.intValue)
-            if pid == selfPid { continue }
-
-            return WindowCandidate(
-                pid: pid,
-                ownerName: info[kCGWindowOwnerName as String] as? String ?? "",
-                bounds: bounds,
-                wid: (info[kCGWindowNumber as String] as? NSNumber)?.uint32Value ?? 0,
-                layer: layer
-            )
-        }
-
-        return nil
-    }
-
-    /// 光标下最上层是**常规 App 的浮动窗口**时返回它,否则 nil。
-    ///
-    /// Movist Pro「播放时置顶」把播放窗口提到 layer 3,而其余定位只认 layer 0:
-    /// AX 命中了 Movist,却被「以 CG 栈顶为准」校正到压在下面的访达 / Claude,
-    /// 手势穿透过去把后面的窗口 ⌘W 关了(2026-10-29)。
-    ///
-    /// 只收常规(程序坞里有图标的)App:CGWindowList 看不出谁鼠标穿透,后台 /
-    /// 辅助 App 的浮动窗口多是 HUD、遮罩,算进来会把手势吸走。
-    /// 从上往下走,先碰到 Velto 自己(任何层级)或别家 layer 0 窗口就停,交回原来的路径。
-    static func floatingWindowOnTop(
-        in windowList: [[String: Any]],
-        at point: CGPoint,
-        isRegularApp: (pid_t) -> Bool = ownerIsRegularApp
-    ) -> WindowCandidate? {
-        for info in windowList {
-            guard let layer = (info[kCGWindowLayer as String] as? NSNumber)?.intValue,
-                  let onscreen = info[kCGWindowIsOnscreen as String] as? Bool,
-                  onscreen,
-                  let alpha = (info[kCGWindowAlpha as String] as? NSNumber)?.doubleValue,
-                  alpha > 0.01,
-                  let pidNumber = info[kCGWindowOwnerPID as String] as? NSNumber,
-                  let boundsDictionary = info[kCGWindowBounds as String] as? NSDictionary,
-                  let bounds = CGRect(dictionaryRepresentation: boundsDictionary),
-                  bounds.contains(point)
-            else { continue }
-
-            let pid = pid_t(pidNumber.intValue)
-            if pid == selfPid || layer == 0 { return nil }
-            guard AppWindowLayer.floating.contains(layer),
-                  bounds.width >= 40,
-                  bounds.height >= 40,
-                  isRegularApp(pid)
-            else { continue }
-
-            return WindowCandidate(
-                pid: pid,
-                ownerName: info[kCGWindowOwnerName as String] as? String ?? "",
-                bounds: bounds,
-                wid: (info[kCGWindowNumber as String] as? NSNumber)?.uint32Value ?? 0,
-                layer: layer
-            )
-        }
-        return nil
-    }
-
-    static func ownerIsRegularApp(_ pid: pid_t) -> Bool {
-        NSRunningApplication(processIdentifier: pid)?.activationPolicy == .regular
-    }
-
-    /// `windowCandidate` 的 self-only 版本:用于"鼠标停在 Velto 自己窗口上"分支,
-    /// 显式只匹配 selfPid 的窗口(普通 windowCandidate 会主动 skip selfPid 作防线)。
-    private static func selfWindowCandidate(in windowList: [[String: Any]], at point: CGPoint) -> WindowCandidate? {
-        for info in windowList {
-            guard let layer = (info[kCGWindowLayer as String] as? NSNumber)?.intValue,
-                  layer == 0,
-                  let onscreen = info[kCGWindowIsOnscreen as String] as? Bool,
-                  onscreen,
-                  let alpha = (info[kCGWindowAlpha as String] as? NSNumber)?.doubleValue,
-                  alpha > 0.01,
-                  let pidNumber = info[kCGWindowOwnerPID as String] as? NSNumber,
-                  pid_t(pidNumber.intValue) == selfPid,
-                  let boundsDictionary = info[kCGWindowBounds as String] as? NSDictionary,
-                  let bounds = CGRect(dictionaryRepresentation: boundsDictionary),
-                  bounds.width >= 40,
-                  bounds.height >= 40,
-                  bounds.contains(point)
-            else { continue }
-
-            return WindowCandidate(
-                pid: selfPid,
-                ownerName: info[kCGWindowOwnerName as String] as? String ?? "",
-                bounds: bounds,
-                wid: 0,
-                layer: 0
-            )
-        }
-        return nil
-    }
-
-    /// 全局 AX 命中测试会不会落到 Velto 自己。自己的窗口不分层级都算:截图遮罩等
-    /// 高层窗口也会被全局 AX 查询同步命中,从后台进入其 UI 会触发 SIGTRAP。
-    /// 别家的非 layer 0 窗口一律跳过:CGWindowList 看不出谁鼠标穿透,macOS 27 程序坞
-    /// 有张 layer 20 铺满全屏的透明窗口压在所有普通窗口上,按「最上层那张」判定就
-    /// 永远是程序坞,守护形同虚设(2026-09-29 在设置窗口上画手势闪退)。
-    /// 只有别家 layer 0 普通窗口才算真挡住。
-    static func topmostWindowIsSelf(in windowList: [[String: Any]], at point: CGPoint) -> Bool {
-        for info in windowList {
-            guard let onscreen = info[kCGWindowIsOnscreen as String] as? Bool,
-                  onscreen,
-                  let alpha = (info[kCGWindowAlpha as String] as? NSNumber)?.doubleValue,
-                  alpha > 0.01,
-                  let boundsDictionary = info[kCGWindowBounds as String] as? NSDictionary,
-                  let bounds = CGRect(dictionaryRepresentation: boundsDictionary),
-                  bounds.contains(point),
-                  let pidNumber = info[kCGWindowOwnerPID as String] as? NSNumber
-            else { continue }
-
-            if pid_t(pidNumber.intValue) == selfPid { return true }
-            if (info[kCGWindowLayer as String] as? NSNumber)?.intValue == 0 { return false }
-        }
-        return false
-    }
-
-    private static func processIdentifier(for element: AXUIElement) -> pid_t? {
-        var pid: pid_t = 0
-        guard AXUIElementGetPid(element, &pid) == .success else {
-            return nil
-        }
-        return pid
-    }
-
-    private static func axWindow(matching candidate: WindowCandidate, pid: pid_t? = nil) -> AXUIElement? {
+    private static func axWindow(matching candidate: WindowInfo, pid: pid_t? = nil) -> AXUIElement? {
         let targetPid = pid ?? candidate.pid
-        guard !axIsDead(targetPid) else { return nil }
-
-        let app = AXUIElementCreateApplication(targetPid)
-        // 空列表和取属性失败都视为"这个 app 不暴露 AX 窗口":Telegram 实测就是
-        // success + 0 个窗口,而这 53ms 是白花的。距离匹配不上(bestDistance > 80)
-        // 不算,那是几何问题不是 AX 哑巴,不熔断。
-        guard let windows = axElementArrayAttribute(kAXWindowsAttribute, of: app), !windows.isEmpty else {
-            AxDeadPids.mark(targetPid, source: "手势目标定位:kAXWindows 无窗口")
-            return nil
-        }
+        // 距离匹配不上(bestDistance > 80)不算哑巴,那是几何问题,不熔断。
+        guard let windows = AXClient.windows(
+            ofPid: targetPid,
+            markingEmptyAs: "手势目标定位:kAXWindows 无窗口"
+        ) else { return nil }
 
         var bestWindow: AXUIElement?
         var bestDistance = CGFloat.greatestFiniteMagnitude
 
         for window in windows {
-            guard let frame = frame(of: window) else {
+            guard let frame = AXClient.frame(of: window) else {
                 continue
             }
 
@@ -610,113 +320,6 @@ enum GestureTargetController {
         return bestDistance <= 80 ? bestWindow : nil
     }
 
-    private static func frame(of window: AXUIElement) -> CGRect? {
-        if let frame = frameFromMultipleAttributes(of: window) {
-            return frame
-        }
-
-        guard let position = pointAttribute(kAXPositionAttribute, of: window),
-              let size = sizeAttribute(kAXSizeAttribute, of: window) else {
-            return nil
-        }
-
-        return CGRect(origin: position, size: size)
-    }
-
-    static func setPosition(_ position: CGPoint, ofWindow window: AXUIElement) -> Bool {
-        runOnMainIfSelf(window) {
-            var position = position
-            guard let value = AXValueCreate(.cgPoint, &position) else { return false }
-            return AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, value) == .success
-        }
-    }
-
-    static func setSize(_ size: CGSize, ofWindow window: AXUIElement) -> Bool {
-        runOnMainIfSelf(window) {
-            var size = size
-            guard let value = AXValueCreate(.cgSize, &size) else { return false }
-            return AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, value) == .success
-        }
-    }
-
-    /// 对 Velto 自己进程的 AX window 写入(setPosition/setSize)必须在 main thread:
-    /// AppKit 的 `-[NSWindow _setFrameCommon:display:fromServer:]` 通过
-    /// `NSWMWindowCoordinator performTransactionUsingBlock:` 内部断言主线程,
-    /// 从 background queue 调直接 brk。这里只挑 self 走 main sync —— 不影响
-    /// 其他 app 的窗口(那些走跨进程 AX,server 自己排队)。
-    /// 用 `Thread.isMainThread` 兜底防止已在 main 上时 `DispatchQueue.main.sync`
-    /// 死锁。
-    /// `AXUIElement` 不 Sendable、闭包跨 queue 也会被 Swift 6 拦住,但这里只是
-    /// 同步等 main 上跑完就返回,引用不会真的逃逸,用 `@unchecked Sendable` 包装
-    /// 把 escape hatch 收敛在 helper 内部。
-    private struct UnsafeBox<T>: @unchecked Sendable { let value: T }
-
-    private static func runOnMainIfSelf(_ window: AXUIElement, _ action: () -> Bool) -> Bool {
-        guard processIdentifier(for: window) == selfPid else { return action() }
-        if Thread.isMainThread { return action() }
-        return withoutActuallyEscaping(action) { escapableAction in
-            let box = UnsafeBox(value: escapableAction)
-            return DispatchQueue.main.sync { box.value() }
-        }
-    }
-
-    private static func frameFromMultipleAttributes(of window: AXUIElement) -> CGRect? {
-        let attributes = [
-            kAXPositionAttribute as CFString,
-            kAXSizeAttribute as CFString
-        ] as CFArray
-        var values: CFArray?
-        let result = AXUIElementCopyMultipleAttributeValues(
-            window,
-            attributes,
-            AXCopyMultipleAttributeOptions(rawValue: 0),
-            &values
-        )
-
-        guard result == .success,
-              let values = values as? [Any],
-              values.count == 2,
-              CFGetTypeID(values[0] as CFTypeRef) == AXValueGetTypeID(),
-              CFGetTypeID(values[1] as CFTypeRef) == AXValueGetTypeID() else {
-            return nil
-        }
-
-        var position = CGPoint.zero
-        var size = CGSize.zero
-        guard AXValueGetValue((values[0] as! AXValue), .cgPoint, &position),
-              AXValueGetValue((values[1] as! AXValue), .cgSize, &size) else {
-            return nil
-        }
-
-        return CGRect(origin: position, size: size)
-    }
-
-    private static func pointAttribute(_ name: String, of element: AXUIElement) -> CGPoint? {
-        guard let value = attribute(name, of: element),
-              CFGetTypeID(value) == AXValueGetTypeID() else {
-            return nil
-        }
-
-        var point = CGPoint.zero
-        guard AXValueGetValue((value as! AXValue), .cgPoint, &point) else {
-            return nil
-        }
-        return point
-    }
-
-    private static func sizeAttribute(_ name: String, of element: AXUIElement) -> CGSize? {
-        guard let value = attribute(name, of: element),
-              CFGetTypeID(value) == AXValueGetTypeID() else {
-            return nil
-        }
-
-        var size = CGSize.zero
-        guard AXValueGetValue((value as! AXValue), .cgSize, &size) else {
-            return nil
-        }
-        return size
-    }
-
     private static func frameDistance(_ left: CGRect, _ right: CGRect) -> CGFloat {
         abs(left.minX - right.minX)
             + abs(left.minY - right.minY)
@@ -724,59 +327,10 @@ enum GestureTargetController {
             + abs(left.height - right.height)
     }
 
-    private static func windowElement(containing element: AXUIElement) -> AXUIElement? {
-        if role(of: element) == kAXWindowRole {
-            return element
-        }
-
-        if let window = axElementAttribute(kAXWindowAttribute, of: element) {
-            return window
-        }
-
-        if let topLevel = axElementAttribute(kAXTopLevelUIElementAttribute, of: element),
-           role(of: topLevel) == kAXWindowRole {
-            return topLevel
-        }
-
-        var current: AXUIElement? = element
-        for _ in 0..<8 {
-            guard let parent = current.flatMap({ axElementAttribute(kAXParentAttribute, of: $0) }) else {
-                return nil
-            }
-            if role(of: parent) == kAXWindowRole {
-                return parent
-            }
-            current = parent
-        }
-
-        return nil
-    }
-
-    private static func focus(window: AXUIElement, pid: pid_t) {
-        let app = AXUIElementCreateApplication(pid)
-        AXUIElementSetAttributeValue(app, kAXFrontmostAttribute as CFString, kCFBooleanTrue)
-        AXUIElementSetAttributeValue(app, kAXFocusedWindowAttribute as CFString, window)
-        AXUIElementPerformAction(window, kAXRaiseAction as CFString)
-        AXUIElementSetAttributeValue(window, kAXMainAttribute as CFString, kCFBooleanTrue)
-        AXUIElementSetAttributeValue(window, kAXFocusedAttribute as CFString, kCFBooleanTrue)
-    }
-
     private static func isCommandW(_ shortcut: Shortcut) -> Bool {
         let flags = CGEventFlags(rawValue: CGEventFlags.RawValue(shortcut.modifierFlags))
         let shortcutFlags: CGEventFlags = [.maskCommand, .maskAlternate, .maskControl, .maskShift, .maskSecondaryFn]
         return shortcut.keyCode == VirtualKeyCode.w && flags.intersection(shortcutFlags) == .maskCommand
-    }
-
-    private static func fallbackTarget() -> GestureExecutionTarget {
-        GestureExecutionTarget(
-            policy: .windowUnderPointer,
-            pid: nil,
-            restoresOriginalFrontmostApplication: false,
-            deliveryDelay: 0,
-            window: nil,
-            prefersDirectWindowClose: false,
-            cgWindowId: nil
-        )
     }
 
     // MARK: - 调试日志(仅 WindowManagementDebugLog 开启时调用)
@@ -786,51 +340,25 @@ enum GestureTargetController {
         "[\(Int(r.minX)),\(Int(r.minY)) \(Int(r.width))×\(Int(r.height))]"
     }
 
-    private static func appName(forPid pid: pid_t, in windowList: [[String: Any]]) -> String {
-        for info in windowList {
-            if let p = info[kCGWindowOwnerPID as String] as? NSNumber, pid_t(p.intValue) == pid,
-               let name = info[kCGWindowOwnerName as String] as? String, !name.isEmpty {
-                return name
-            }
-        }
-        return NSRunningApplication(processIdentifier: pid)?.localizedName ?? "pid \(pid)"
+    private static func appName(forPid pid: pid_t, in snapshot: WindowSnapshot) -> String {
+        snapshot.ownerName(of: pid) ?? NSRunningApplication(processIdentifier: pid)?.localizedName ?? "pid \(pid)"
     }
 
-    /// 转储光标各查询点下的 layer-0 + 浮动层窗口栈(上→下序),含被尺寸/可见性
+    /// 转储光标下的 layer-0 + 浮动层窗口栈(上→下序),含被尺寸/可见性
     /// 过滤的项,用来判断"光标下最上层到底是谁"——bug 的第一现场。
-    private static func logWindowStack(
-        point: CGPoint,
-        candidatePoints: [CGPoint],
-        windowList: [[String: Any]]
-    ) {
-        WindowManagementDebugLog.log(
-            "目标定位 @ \(fmt(point)) | 查询点=[\(candidatePoints.map(fmt).joined(separator: " , "))]")
-        for p in candidatePoints {
-            var lines: [String] = []
-            var idx = 0
-            for info in windowList {
-                guard let layer = (info[kCGWindowLayer as String] as? NSNumber)?.intValue,
-                      AppWindowLayer.contains(layer),
-                      let bd = info[kCGWindowBounds as String] as? NSDictionary,
-                      let bounds = CGRect(dictionaryRepresentation: bd),
-                      bounds.contains(p) else { continue }
-                let onscreen = (info[kCGWindowIsOnscreen as String] as? Bool) ?? false
-                let alpha = (info[kCGWindowAlpha as String] as? NSNumber)?.doubleValue ?? 0
-                let pidN = (info[kCGWindowOwnerPID as String] as? NSNumber)?.intValue ?? -1
-                let owner = info[kCGWindowOwnerName as String] as? String ?? ""
-                let tooSmall = bounds.width < 40 || bounds.height < 40
-                var flags = ""
-                if layer != 0 { flags += " [浮动 layer=\(layer)]" }
-                if pidN == Int(selfPid) { flags += " [self]" }
-                if !onscreen { flags += " [非onscreen]" }
-                if alpha <= 0.01 { flags += " [透明]" }
-                if tooSmall { flags += " [<40被滤]" }
-                lines.append("      #\(idx) app=\"\(owner)\" pid=\(pidN) frame=\(fmt(bounds)) alpha=\(String(format: "%.2f", alpha))\(flags)")
-                idx += 1
-            }
-            WindowManagementDebugLog.log(
-                "  查询点 \(fmt(p)) 命中的 layer0+浮动层 窗口栈(上→下):\(lines.isEmpty ? " 无" : "\n" + lines.joined(separator: "\n"))")
+    private static func logWindowStack(point: CGPoint, snapshot: WindowSnapshot) {
+        var lines: [String] = []
+        for window in snapshot.windows where window.isAppWindow && window.bounds.contains(point) {
+            var flags = ""
+            if window.layer != 0 { flags += " [浮动 layer=\(window.layer)]" }
+            if window.isOwn { flags += " [self]" }
+            if !window.isOnscreen { flags += " [非onscreen]" }
+            if window.alpha <= 0.01 { flags += " [透明]" }
+            if window.bounds.width < 40 || window.bounds.height < 40 { flags += " [<40被滤]" }
+            lines.append("      #\(lines.count) app=\"\(window.ownerName)\" pid=\(window.pid) frame=\(fmt(window.bounds)) alpha=\(String(format: "%.2f", window.alpha))\(flags)")
         }
+        WindowManagementDebugLog.log(
+            "目标定位 @ \(fmt(point)) 命中的 layer0+浮动层 窗口栈(上→下):\(lines.isEmpty ? " 无" : "\n" + lines.joined(separator: "\n"))")
     }
 
     private static func logChosenTarget(point: CGPoint, result: GestureExecutionTarget) {
@@ -839,43 +367,8 @@ enum GestureTargetController {
             return
         }
         let app = NSRunningApplication(processIdentifier: pid)?.localizedName ?? "pid \(pid)"
-        let frameText = result.window.flatMap { frame(of: $0) }.map(fmt) ?? "?"
+        let frameText = result.window.flatMap(AXClient.frame(of:)).map(fmt) ?? "?"
         WindowManagementDebugLog.log(
             "→ 最终目标 @ \(fmt(point)): pid=\(pid) app=\"\(app)\" window=\(result.window == nil ? "nil" : "有") frame=\(frameText)")
-    }
-
-    private static func role(of element: AXUIElement) -> String? {
-        attribute(kAXRoleAttribute, of: element) as? String
-    }
-
-    private static func axElementAttribute(_ name: String, of element: AXUIElement) -> AXUIElement? {
-        guard let value = attribute(name, of: element),
-              CFGetTypeID(value) == AXUIElementGetTypeID() else {
-            return nil
-        }
-        return (value as! AXUIElement)
-    }
-
-    private static func axElementArrayAttribute(_ name: String, of element: AXUIElement) -> [AXUIElement]? {
-        guard let value = attribute(name, of: element),
-              CFGetTypeID(value) == CFArrayGetTypeID() else {
-            return nil
-        }
-
-        return (value as! [Any]).compactMap { item in
-            guard CFGetTypeID(item as CFTypeRef) == AXUIElementGetTypeID() else {
-                return nil
-            }
-            return (item as! AXUIElement)
-        }
-    }
-
-    private static func attribute(_ name: String, of element: AXUIElement) -> CFTypeRef? {
-        var value: CFTypeRef?
-        let result = AXUIElementCopyAttributeValue(element, name as CFString, &value)
-        guard result == .success else {
-            return nil
-        }
-        return value
     }
 }

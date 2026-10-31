@@ -55,15 +55,13 @@ struct SwitcherWindowProbe: @unchecked Sendable {
     }
 
     static func hasOnlyWindowChromeChildren(_ window: AXUIElement) -> Bool {
-        var value: CFTypeRef?
-        let result = AXUIElementCopyAttributeValue(window, kAXChildrenAttribute as CFString, &value)
-        guard result == .success, let children = value as? [AXUIElement] else { return false }
+        guard let children = AXClient.elements(kAXChildrenAttribute, of: window) else { return false }
         guard !children.isEmpty else { return true }
         return children.allSatisfy(isChromeOnlyChild)
     }
 
     private static func isChromeOnlyChild(_ child: AXUIElement) -> Bool {
-        let attrs = SwitcherAxRead.multiAttributes(child, [
+        let attrs = AXClient.values(of: child, [
             kAXRoleAttribute as String,
             kAXSubroleAttribute as String,
             kAXTitleAttribute as String,
@@ -81,7 +79,7 @@ struct SwitcherWindowProbe: @unchecked Sendable {
         // 视为 chrome 一类 —— 真主窗不会出现"全是 chrome + 微型空文本"的组合。
         if role == kAXStaticTextRole as String,
            let raw = attrs[kAXSizeAttribute as String],
-           let size = SwitcherAxRead.axValueSize(raw),
+           let size = AXClient.size(from: raw),
            size.width < 40, size.height < 40
         {
             let title = (attrs[kAXTitleAttribute as String] as? String) ?? ""
@@ -286,14 +284,14 @@ final class SwitcherWindowList {
                 return
             }
             var probes: [SwitcherWindowProbe] = axWindows.compactMap { ax in
-                guard let wid = SwitcherAxRead.cgWindowId(of: ax) else {
+                guard let wid = AXClient.windowID(of: ax) else {
                     if traceApp {
-                        let t = SwitcherAxRead.multiAttributes(ax, [kAXTitleAttribute as String, kAXSubroleAttribute as String])
+                        let t = AXClient.values(of: ax, [kAXTitleAttribute as String, kAXSubroleAttribute as String])
                         SwitcherDebugLog.log("  sync DROP: _AXUIElementGetWindow 拿不到 wid title=\"\(t[kAXTitleAttribute as String] as? String ?? "-")\" subrole=\(t[kAXSubroleAttribute as String] as? String ?? "-")")
                     }
                     return nil
                 }
-                let attrs = SwitcherAxRead.multiAttributes(ax, [
+                let attrs = AXClient.values(of: ax, [
                     kAXTitleAttribute as String,
                     kAXSubroleAttribute as String,
                     kAXRoleAttribute as String,
@@ -302,8 +300,8 @@ final class SwitcherWindowList {
                     kAXMinimizedAttribute as String,
                     kAXFullScreenAttribute,
                 ])
-                let size: CGSize? = attrs[kAXSizeAttribute as String].flatMap(SwitcherAxRead.axValueSize)
-                let position: CGPoint? = attrs[kAXPositionAttribute as String].flatMap(SwitcherAxRead.axValuePoint)
+                let size: CGSize? = attrs[kAXSizeAttribute as String].flatMap(AXClient.size(from:))
+                let position: CGPoint? = attrs[kAXPositionAttribute as String].flatMap(AXClient.point(from:))
                 let axTitle = attrs[kAXTitleAttribute as String] as? String
                 let cgTitle = SwitcherAxRead.cgTitle(for: wid)
                 let hasOnlyWindowChromeChildren: Bool
@@ -361,33 +359,21 @@ final class SwitcherWindowList {
     /// ponytail: 每次全量扫一遍系统窗口;只对 AX 空窗 app 触发、频率低,够用;
     /// 真成热点再按 pid 做缓存。
     nonisolated static func cgFallbackProbes(pid: pid_t, appElement: AXUIElement) -> [SwitcherWindowProbe] {
-        let options: CGWindowListOption = [.optionAll, .excludeDesktopElements]
-        guard let info = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
-            return []
-        }
-        return info.compactMap { cgFallbackProbe(row: $0, pid: pid, appElement: appElement) }
+        WindowSnapshot.all().windows.compactMap { cgFallbackProbe(window: $0, pid: pid, appElement: appElement) }
     }
 
     /// 单行 CGWindowList 记录 → 探针的纯函数(便于单测)。保留条件:属于本 app、
-    /// layer 0(普通窗口,排除菜单/浮层)、alpha 可见、有非空标题(排除工具条/
+    /// 普通或置顶浮动窗口(排除菜单/程序坞等高层)、alpha 可见、有非空标题(排除工具条/
     /// 无名浮层,也是 tile 标签来源)、尺寸过关(与 AX 判别同阈值)。
-    nonisolated static func cgFallbackProbe(row: [String: Any], pid: pid_t, appElement: AXUIElement) -> SwitcherWindowProbe? {
-        guard let owner = row[kCGWindowOwnerPID as String] as? Int, owner == Int(pid),
-              (row[kCGWindowLayer as String] as? Int) == 0,
-              let widInt = row[kCGWindowNumber as String] as? Int,
-              let rawName = row[kCGWindowName as String] as? String
-        else { return nil }
+    nonisolated static func cgFallbackProbe(window: WindowInfo, pid: pid_t, appElement: AXUIElement) -> SwitcherWindowProbe? {
+        guard window.pid == pid, window.isAppWindow, let rawName = window.name else { return nil }
         let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !name.isEmpty else { return nil }
-        let alpha = (row[kCGWindowAlpha as String] as? Double) ?? 1
-        guard alpha > 0.1 else { return nil }
-        guard let boundsDict = row[kCGWindowBounds as String] as? [String: Any],
-              let bounds = CGRect(dictionaryRepresentation: boundsDict as CFDictionary),
-              bounds.width > 100, bounds.height > 50
-        else { return nil }
+        guard !name.isEmpty, window.alpha > 0.1 else { return nil }
+        let bounds = window.bounds
+        guard bounds.width > 100, bounds.height > 50 else { return nil }
         return SwitcherWindowProbe(
             axUiElement: appElement,
-            wid: CGWindowID(widInt),
+            wid: window.id,
             title: name,
             cgTitle: name,
             subrole: kAXStandardWindowSubrole as String,
@@ -554,7 +540,7 @@ final class SwitcherWindowList {
     }
 
     private func window(matching element: AXUIElement) -> SwitcherWindow? {
-        if let wid = SwitcherAxRead.cgWindowId(of: element),
+        if let wid = AXClient.windowID(of: element),
            let window = windows[wid]
         {
             return window
@@ -664,8 +650,7 @@ final class SwitcherWindowList {
     /// 哪个 app 是确定的 —— 用它而不是 frontmostPid,后台 app 建/删窗口才不会同步错对象。
     /// `AXUIElementGetPid` 只读 element 内部 token,不向 app 发消息,销毁的 element 也能拿到。
     private func pidOfElement(_ element: AXUIElement) -> pid_t? {
-        var pid: pid_t = 0
-        return AXUIElementGetPid(element, &pid) == .success ? pid : nil
+        AXClient.pid(of: element)
     }
 
     private func handleAxNotification(_ type: String, element: AXUIElement) {
@@ -822,30 +807,14 @@ final class SwitcherWindowList {
         }
     }
 
-    /// `CGWindowListCreateDescriptionFromArray` 的正确调用姿势:CFArray 元素必须
-    /// 是 **raw CGWindowID 位模式塞进指针槽**(alt-tab 同款),**不是** NSNumber/
-    /// CFNumber —— 用 NSNumber 时该 API 不报错、静默返回空数组。此前
-    /// windowServerKnowsWindow 的 NSNumber 版恒 false,微信 churn 的第一道防护
+    /// 返回 WindowServer 认识的每个 wid 的在屏状态(不在返回里 = CGS 不认识)。
+    /// 此前 windowServerKnowsWindow 用 NSNumber 调 API 恒 false,微信 churn 的第一道防护
     /// (destroy 先问 WindowServer)从未真正生效,一直靠 re-add 恢复 MRU 兜底。
-    /// 返回 WindowServer 认识的每个 wid 的在屏状态(不在返回里 = CGS 不认识);
-    /// 不限 on-screen —— 最小化 / 其他 Space 的窗口也查得到,只是 value 为
-    /// false。单次 IPC,主线程廉价。
     static func windowServerOnscreenStates(_ wids: [CGWindowID]) -> [CGWindowID: Bool] {
-        guard !wids.isEmpty else { return [:] }
-        var ptrs: [UnsafeRawPointer?] = wids.map { UnsafeRawPointer(bitPattern: UInt($0)) }
-        let array = ptrs.withUnsafeMutableBufferPointer { buf in
-            CFArrayCreate(kCFAllocatorDefault, buf.baseAddress, buf.count, nil)
-        }
-        guard let array,
-              let info = CGWindowListCreateDescriptionFromArray(array) as? [[String: Any]]
-        else { return [:] }
-        var states = [CGWindowID: Bool](minimumCapacity: info.count)
-        for row in info {
-            if let n = row[kCGWindowNumber as String] as? NSNumber {
-                states[CGWindowID(truncating: n)] = (row[kCGWindowIsOnscreen as String] as? Bool) ?? false
-            }
-        }
-        return states
+        Dictionary(
+            WindowSnapshot.windows(wids).map { ($0.id, $0.isOnscreen) },
+            uniquingKeysWith: { first, _ in first }
+        )
     }
 
     /// WindowServer 认识的 wid 集合 —— windowServerOnscreenStates 的键集。
@@ -864,14 +833,12 @@ final class SwitcherWindowList {
     /// brute force 100ms。
     private func updateTitleForWindow(_ element: AXUIElement) {
         // 主线程拿 wid:_AXUIElementGetWindow 是本进程内的查询,廉价。
-        guard let wid = SwitcherAxRead.cgWindowId(of: element),
+        guard let wid = AXClient.windowID(of: element),
               let existing = windows[wid] else { return }
         let appLocalizedName = existing.application.localizedName
         let elementBox = SwitcherAxRefBox(element: element)
         AXCallQueue.shared.schedule("title-\(wid)") { [weak self] in
-            var v: CFTypeRef?
-            let result = AXUIElementCopyAttributeValue(elementBox.element, kAXTitleAttribute as CFString, &v)
-            let axTitle = (result == .success ? v as? String : nil)
+            let axTitle = AXClient.string(kAXTitleAttribute, of: elementBox.element)
             let cgTitle = SwitcherAxRead.cgTitle(for: wid)
             let resolved = SwitcherAxRead.bestEffortTitle(
                 axTitle: axTitle,
@@ -889,13 +856,7 @@ final class SwitcherWindowList {
         guard let app = apps[pid] else { return }
         let axBox = SwitcherAxRefBox(element: app.axUiElement)
         AXCallQueue.shared.schedule("focus-\(pid)") { [weak self] in
-            var value: CFTypeRef?
-            var wid: CGWindowID?
-            if AXUIElementCopyAttributeValue(axBox.element, kAXFocusedWindowAttribute as CFString, &value) == .success,
-               let v = value, CFGetTypeID(v) == AXUIElementGetTypeID()
-            {
-                wid = SwitcherAxRead.cgWindowId(of: v as! AXUIElement)
-            }
+            let wid = AXClient.element(kAXFocusedWindowAttribute, of: axBox.element).flatMap(AXClient.windowID(of:))
             Task { @MainActor [weak self, wid] in
                 self?.applyFocusedWindow(wid, pid: pid)
             }
@@ -1117,17 +1078,7 @@ final class SwitcherWindowList {
     }
 
     private static func currentOnScreenWindowIds() -> Set<CGWindowID> {
-        let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
-        guard let info = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
-            return []
-        }
-        return Set(info.compactMap { row -> CGWindowID? in
-            let value = row[kCGWindowNumber as String]
-            if let id = value as? CGWindowID { return id }
-            if let number = value as? NSNumber { return CGWindowID(truncating: number) }
-            if let int = value as? Int { return CGWindowID(int) }
-            return nil
-        })
+        Set(WindowSnapshot.onScreen().windows.map(\.id))
     }
 
     /// showAtEnd 三档实现:任何匹配 showAtEnd 条件的窗口移到列表末尾。

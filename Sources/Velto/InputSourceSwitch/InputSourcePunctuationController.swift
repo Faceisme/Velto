@@ -171,10 +171,7 @@ final class InputSourcePunctuationController: @unchecked Sendable {
 
   /// WindowServer 一次 IPC(实测远低于 1ms),只发生在标点导航键按下时,热路径无感。
   private static func processOwnsOnScreenWindow(pid: pid_t) -> Bool {
-    guard let list = CGWindowListCopyWindowInfo(
-      [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]
-    else { return false }
-    return list.contains { ($0[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == pid }
+    WindowSnapshot.onScreen().containsWindow(of: pid)
   }
 
   /// keyDown 热路径。命中时吞掉原事件并自行 post 一组 keyCode=0 + unicode 的合成按键。

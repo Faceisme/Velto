@@ -135,7 +135,7 @@ final class InputSourceContextMonitor {
       DispatchQueue.main.async { monitor.evaluate() }
     }
     guard AXObserverCreate(pid, callback, &observer) == .success, let observer else { return }
-    let appElement = AXUIElementCreateApplication(pid)
+    let appElement = AXClient.application(pid: pid)
     let refcon = Unmanaged.passUnretained(self).toOpaque()
     for note in [
       kAXFocusedWindowChangedNotification,

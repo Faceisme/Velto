@@ -161,15 +161,8 @@ final class GestureCaptureView: NSView {
         // 自身 bounds → window 坐标 → 屏幕(AppKit,左下原点)→ CGEvent(左上原点)
         let viewInWindow = convert(bounds, to: nil)
         let viewInScreen = window.convertToScreen(viewInWindow)
-        let desktop = DisplayCoordinateConverter.desktopFrame()
-        let cgRect = CGRect(
-            x: viewInScreen.minX,
-            y: desktop.maxY - viewInScreen.maxY,
-            width: viewInScreen.width,
-            height: viewInScreen.height
-        )
         RightClickPassThrough.setRegion(
-            cgRect,
+            DisplayCoordinateConverter.quartzRect(fromAppKit: viewInScreen),
             windowNumber: window.windowNumber,
             owner: ObjectIdentifier(self)
         )

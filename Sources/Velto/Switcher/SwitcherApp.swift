@@ -63,10 +63,9 @@ final class SwitcherApp: @unchecked Sendable {
         self.bundleIdentifier = runningApplication.bundleIdentifier
         self.localizedName = runningApplication.localizedName
         self.isHidden = runningApplication.isHidden
-        self.axUiElement = AXUIElementCreateApplication(pid)
-        // 元素级超时(只影响这一个元素,不动进程全局值),给窗口枚举留够预算 ——
-        // 进程全局被压到 0.1s 是为了手势命中测试快速失败,对 kAXWindows 太紧。
-        AXUIElementSetMessagingTimeout(axUiElement, AXCallQueue.appMessagingTimeout)
+        // 元素级超时,给窗口枚举留够预算 —— 进程全局被压到 0.1s 是为了手势命中测试
+        // 快速失败,对 kAXWindows 太紧。
+        self.axUiElement = AXClient.application(pid: pid, timeout: AXCallQueue.appMessagingTimeout)
     }
 
     /// 是不是我们应该跟踪的 app。后台 daemon / agent / prohibited app 我们不管。
@@ -131,9 +130,8 @@ final class SwitcherApp: @unchecked Sendable {
     /// 首次 addApp 和(b)kAXWindowCreatedNotification(新窗口有可能开在别的
     /// Space 上)这两个时机付费。
     nonisolated func copyAxWindows(includeBruteForce: Bool = false) -> [AXUIElement]? {
-        var stdValue: CFTypeRef?
-        let stdResult = AXUIElementCopyAttributeValue(axUiElement, kAXWindowsAttribute as CFString, &stdValue)
-        let stdWindows: [AXUIElement] = (stdResult == .success ? (stdValue as? [AXUIElement]) : nil) ?? []
+        let standard = AXClient.elements(kAXWindowsAttribute, of: axUiElement)
+        let stdWindows = standard ?? []
 
         // 对 AX 装哑巴的 app(Telegram / 微信 / 富途)暴力枚举必然空手而归,
         // 却要把预算全烧在**它自己的主线程**上。熔断期内直接跳过。
@@ -168,7 +166,7 @@ final class SwitcherApp: @unchecked Sendable {
 
         let combined = stdWindows + brute.windows
         // 标准调用失败 + 暴力没拿到 → 视为 AX 不响应,nil 让调用方稍后重试
-        if combined.isEmpty && stdResult != .success { return nil }
+        if combined.isEmpty && standard == nil { return nil }
         // 用 AxRef 包一层去重(AXUIElement 本身没 Hashable)
         return Array(Set(combined.map { AxRef(element: $0) })).map(\.element)
     }

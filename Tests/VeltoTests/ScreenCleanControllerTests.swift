@@ -2,14 +2,36 @@ import AppKit
 import XCTest
 @testable import Velto
 
-/// 擦屏助手端到端:真起 HID tap + 黑窗,发合成按键。跑的时候会黑屏约 1 秒、期间吞掉键盘。
 @MainActor
 final class ScreenCleanControllerTests: XCTestCase {
-  func testOnlyUnlockShortcutEndsSession() throws {
+  func testOnlyUnlockShortcutMatches() {
+    let flags: CGEventFlags = [.maskCommand, .maskAlternate, .maskControl]
+    let unlock = Shortcut(keyCode: 37, modifierFlags: flags.rawValue, displayName: "⌃⌥⌘L")
+    func matches(_ keyCode: UInt16, _ flags: CGEventFlags) -> Bool {
+      ScreenCleanController.isUnlock(
+        keyCode: keyCode, modifiers: ModifierFormatter.normalizedRawValue(from: flags), shortcut: unlock
+      )
+    }
+
+    XCTAssertFalse(matches(0, []), "别的键")
+    XCTAssertFalse(matches(unlock.keyCode, []), "解锁键缺修饰键")
+    XCTAssertFalse(matches(unlock.keyCode, [.maskCommand]), "修饰键不全")
+    XCTAssertTrue(matches(unlock.keyCode, flags))
+    // Caps Lock 不算修饰键。
+    XCTAssertTrue(matches(unlock.keyCode, flags.union(.maskAlphaShift)))
+  }
+
+  /// 端到端:真起 HID tap + 黑窗,发合成按键。跑的时候屏幕会黑约 1 秒、期间吞掉键盘,
+  /// 所以默认跳过,要跑时设 `VELTO_LIVE_TESTS=1`。
+  func testLiveSessionEndsOnUnlockShortcut() throws {
+    try XCTSkipUnless(ProcessInfo.processInfo.environment["VELTO_LIVE_TESTS"] == "1", "会黑屏,默认不跑")
     let cleaner = ScreenCleanController.shared
     let unlock = GestureStore.shared.preferences.macAssistant.screenCleanUnlockShortcut
     cleaner.setActive(true)
-    defer { cleaner.setActive(false) }
+    defer {
+      cleaner.setActive(false)
+      resetModifierState()
+    }
     try XCTSkipUnless(cleaner.isActive, "建不了 HID tap(缺辅助功能权限)")
 
     post(keyCode: 0, flags: [])  // A
@@ -29,6 +51,15 @@ final class ScreenCleanControllerTests: XCTestCase {
       event.flags = flags
       event.post(tap: .cghidEventTap)
     }
+  }
+
+  /// 发到 HID 的事件带修饰键时,系统的修饰键状态会一直留着,直到下一个 HID 事件。
+  /// 之后新建的 CGEvent 全都继承它。光标原地发一个不带标志的移动,不打扰任何 App。
+  private func resetModifierState() {
+    let here = CGEvent(source: nil)?.location ?? .zero
+    let move = CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: here, mouseButton: .left)
+    move?.flags = []
+    move?.post(tap: .cghidEventTap)
   }
 
   private func spin(_ seconds: TimeInterval) {

@@ -94,8 +94,13 @@ final class ScreenCleanController {
     NSCursor.unhide()
   }
 
+  nonisolated static func isUnlock(keyCode: UInt16, modifiers: UInt64, shortcut: Shortcut) -> Bool {
+    keyCode == shortcut.keyCode
+      && modifiers == ModifierFormatter.normalizedRawValue(from: CGEventFlags(rawValue: shortcut.modifierFlags))
+  }
+
   private func handleKeyDown(keyCode: UInt16, modifiers: UInt64) {
-    if keyCode == unlock.keyCode, modifiers == unlockModifiers {
+    if Self.isUnlock(keyCode: keyCode, modifiers: modifiers, shortcut: unlock) {
       unlockSoon()
     } else {
       flashHint()

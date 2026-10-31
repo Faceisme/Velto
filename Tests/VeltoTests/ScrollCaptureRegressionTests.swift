@@ -61,6 +61,7 @@ private func framedScrollImage(_ document: CGImage, offset: Int, bodyHeight: Int
   tap.update(captureRect: rect, controlRects: [], allowsScrolling: true)
   let event = try #require(CGEvent(scrollWheelEvent2Source: nil, units: .pixel,
                                   wheelCount: 3, wheel1: -30, wheel2: 18, wheel3: 7))
+  event.flags = []
   event.location = CGPoint(x: 50, y: 50)
   let result = tap.handle(type: .scrollWheel, event: event)?.takeUnretainedValue()
   #expect(result != nil)
@@ -261,6 +262,7 @@ private func framedScrollImage(_ document: CGImage, offset: Int, bodyHeight: Int
   tap.update(captureRect: rect, controlRects: [control], allowsScrolling: true)
   let wheel = try #require(CGEvent(scrollWheelEvent2Source: nil, units: .pixel,
     wheelCount: 2, wheel1: -20, wheel2: 0, wheel3: 0))
+  wheel.flags = []
   wheel.location = CGPoint(x: -300, y: -100)
   wheel.flags = .maskShift
   #expect(tap.handle(type: .scrollWheel, event: wheel) != nil)
@@ -275,6 +277,7 @@ private func framedScrollImage(_ document: CGImage, offset: Int, bodyHeight: Int
   #expect(tap.handle(type: .scrollWheel, event: wheel) == nil)
   let click = try #require(CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown,
                                   mouseCursorPosition: wheel.location, mouseButton: .left))
+  click.flags = []
   #expect(tap.handle(type: .leftMouseDown, event: click) == nil)
   #expect(tap.handle(type: .leftMouseDragged, event: click) == nil)
   click.location = CGPoint(x: control.midX, y: control.midY)
@@ -285,10 +288,11 @@ private func framedScrollImage(_ document: CGImage, offset: Int, bodyHeight: Int
   #expect(tap.handle(type: .leftMouseDragged, event: click) == nil)
   for key in [UInt16(123), 124, 115, 119, 116, 121] {
     let event = try #require(CGEvent(keyboardEventSource: nil, virtualKey: key, keyDown: true))
+    event.flags = []
     #expect(tap.handle(type: .keyDown, event: event) == nil)
   }
-  #expect(ScrollCaptureKeyTap.eventRect(from: CGRect(x: -500, y: 1100, width: 300, height: 200),
-    primaryScreenHeight: 1080) == CGRect(x: -500, y: -220, width: 300, height: 200))
+  #expect(DisplayCoordinateConverter.flipped(CGRect(x: -500, y: 1100, width: 300, height: 200),
+    primaryHeight: 1080) == CGRect(x: -500, y: -220, width: 300, height: 200))
 }
 
 @Test func scrollCaptureSeededOverlapSweep() {
@@ -424,6 +428,7 @@ private func framedScrollImage(_ document: CGImage, offset: Int, bodyHeight: Int
   tap.update(captureRect: rect, controlRects: [], allowsScrolling: true)
   let wheel = try #require(CGEvent(scrollWheelEvent2Source: nil, units: .line,
     wheelCount: 2, wheel1: -3, wheel2: 2, wheel3: 0))
+  wheel.flags = []
   wheel.location = CGPoint(x: 100, y: 100)
   wheel.flags = .maskShift
   #expect(tap.handle(type: .scrollWheel, event: wheel) != nil)
@@ -468,6 +473,7 @@ private func framedScrollImage(_ document: CGImage, offset: Int, bodyHeight: Int
   }
   let wheel = try #require(CGEvent(scrollWheelEvent2Source: nil, units: .line,
     wheelCount: 1, wheel1: -1, wheel2: 0, wheel3: 0))
+  wheel.flags = []
   wheel.setIntegerValueField(.eventTargetUnixProcessID, value: Int64(getpid()))
   wheel.location = CGPoint(x: 100, y: 100)
   let rect = CGRect(x: 0, y: 0, width: 500, height: 500)
@@ -509,6 +515,7 @@ private func framedScrollImage(_ document: CGImage, offset: Int, bodyHeight: Int
   tap.onCancel = { cancels += 1 }
   for code: CGKeyCode in [49, 36, 35, 53] {
     let key = try #require(CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: true))
+    key.flags = []
     if code == 35 { key.flags = [.maskCommand, .maskShift, .maskAlphaShift] }
     #expect(tap.handle(type: .keyDown, event: key) == nil)
     key.setIntegerValueField(.keyboardEventAutorepeat, value: 1)
@@ -522,6 +529,7 @@ private func framedScrollImage(_ document: CGImage, offset: Int, bodyHeight: Int
   #expect(saves == 1)
   #expect(cancels == 1)
   let space = try #require(CGEvent(keyboardEventSource: nil, virtualKey: 49, keyDown: true))
+  space.flags = []
   _ = tap.handle(type: .keyDown, event: space)
   tap.stop()
   _ = tap.handle(type: .keyDown, event: space)
@@ -540,6 +548,7 @@ private func framedScrollImage(_ document: CGImage, offset: Int, bodyHeight: Int
   animator.eventPoster = { _, _ in delivered += 1 }
   let wheel = try #require(CGEvent(scrollWheelEvent2Source: nil, units: .line,
     wheelCount: 2, wheel1: 1, wheel2: 2, wheel3: 0))
+  wheel.flags = []
   wheel.location = CGPoint(x: 100, y: 100)
   wheel.setIntegerValueField(.eventTargetUnixProcessID, value: Int64(getpid()))
   var profile = MouseScrollProfile.defaults
@@ -560,9 +569,6 @@ private func framedScrollImage(_ document: CGImage, offset: Int, bodyHeight: Int
     #expect(event.getDoubleValueField(.scrollWheelEventPointDeltaAxis2) == 0)
   }
   animator.processing(dt: 1.0 / 60)
-  if delivered <= beforeEnter {
-    print("DBG531 delivered=\(delivered) beforeEnter=\(beforeEnter) currentIsFirst=\(ScrollCaptureKeyTap.current === first) flags=\(ModifierFormatter.normalizedRawValue(from: wheel.flags)) handleNil=\(first.handle(type: .scrollWheel, event: wheel) == nil)")
-  }
   #expect(delivered > beforeEnter)
   let beforeCancel = delivered
   first.stop()
@@ -576,9 +582,6 @@ private func framedScrollImage(_ document: CGImage, offset: Int, bodyHeight: Int
   #expect(delivered == beforeCancel, "新会话不能恢复前一会话的惯性")
   submit()
   animator.processing(dt: 1.0 / 60)
-  if delivered <= beforeCancel {
-    print("DBG544 delivered=\(delivered) beforeCancel=\(beforeCancel) currentIsSecond=\(ScrollCaptureKeyTap.current === second) handleNil=\(second.handle(type: .scrollWheel, event: wheel) == nil)")
-  }
   #expect(delivered > beforeCancel, "新会话仍可正常向下滚动")
 }
 

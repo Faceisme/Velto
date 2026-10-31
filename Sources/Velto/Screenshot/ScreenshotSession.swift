@@ -41,7 +41,8 @@ final class ScreenshotSession: ScreenshotOverlayDelegate {
     previousApp = NSWorkspace.shared.frontmostApplication
     // 保留触发前的目标 app,滚动时恢复其前台状态。
     let activeAppPID = previousApp?.processIdentifier ?? 0
-    let windowCandidates = WindowFrameDetector.snapshot()
+    // 打开遮罩之前枚举一次,和冻结的桌面画面对应。
+    let windowCandidates = WindowSnapshot.onScreen()
     ScreenshotHotCornerGuard.shared.activate(displayIDs: snapshots.map(\.displayID))
     windows = ScreenshotOverlayWindow.present(
       for: snapshots, delegate: self, activeAppPID: activeAppPID, preferences: preferences)
@@ -249,7 +250,7 @@ final class ScreenshotSession: ScreenshotOverlayDelegate {
   }
 
   private func scrollEventRect(_ rect: CGRect) -> CGRect {
-    ScrollCaptureKeyTap.eventRect(from: rect, primaryScreenHeight: NSScreen.screens.first?.frame.height ?? 0)
+    DisplayCoordinateConverter.quartzRect(fromAppKit: rect)
   }
 
   private func updateScrollInputLock() {

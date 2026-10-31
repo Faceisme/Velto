@@ -128,14 +128,9 @@ final class SwitcherWindow: @unchecked Sendable {
     /// 默认不限制,免得用户把它们误过滤掉。
     func isOnScreen(_ screen: NSScreen) -> Bool {
         guard let position, let size else { return true }
-        // NSScreen.frame 是 Cocoa 坐标(y 朝上,原点左下)。
-        // AX 给的 position 是 Quartz 坐标(y 朝下,原点左上,基于第一屏)。
-        // 转换一下:把 screen.frame 翻成 Quartz 坐标。
-        guard let primaryScreen = NSScreen.screens.first else { return true }
-        var screenFrame = screen.frame
-        screenFrame.origin.y = primaryScreen.frame.maxY - screenFrame.maxY
+        // AX 给的 position 是 Quartz 坐标,NSScreen.frame 是 AppKit 坐标。
         let windowRect = CGRect(origin: position, size: size)
-        return windowRect.intersects(screenFrame)
+        return windowRect.intersects(DisplayCoordinateConverter.quartzRect(fromAppKit: screen.frame))
     }
 
     /// 当前是不是这个 app 的 hidden 状态(读自 NSRunningApplication 而不是 AX)。
@@ -154,61 +149,6 @@ final class SwitcherWindow: @unchecked Sendable {
 // MARK: - AX 读取的纯函数辅助
 
 enum SwitcherAxRead {
-    /// AX 多属性一次读取 —— 比 N 次单读快很多。
-    /// 在**后台线程**调,主线程会卡。
-    static func multiAttributes(
-        _ axUiElement: AXUIElement,
-        _ keys: [String]
-    ) -> [String: CFTypeRef] {
-        var values: CFArray?
-        let result = AXUIElementCopyMultipleAttributeValues(
-            axUiElement,
-            keys as CFArray,
-            [],
-            &values
-        )
-        guard result == .success, let array = values as? [CFTypeRef] else {
-            return [:]
-        }
-        var dict = [String: CFTypeRef]()
-        for (i, key) in keys.enumerated() where i < array.count {
-            let v = array[i]
-            // .axError 会被以 placeholder 形式返回,过滤掉
-            if CFGetTypeID(v) == AXValueGetTypeID(),
-               AXValueGetType(v as! AXValue) == .axError
-            {
-                continue
-            }
-            dict[key] = v
-        }
-        return dict
-    }
-
-    static func axValuePoint(_ ref: CFTypeRef) -> CGPoint? {
-        guard CFGetTypeID(ref) == AXValueGetTypeID() else { return nil }
-        let v = ref as! AXValue
-        guard AXValueGetType(v) == .cgPoint else { return nil }
-        var p = CGPoint.zero
-        AXValueGetValue(v, .cgPoint, &p)
-        return p
-    }
-
-    static func axValueSize(_ ref: CFTypeRef) -> CGSize? {
-        guard CFGetTypeID(ref) == AXValueGetTypeID() else { return nil }
-        let v = ref as! AXValue
-        guard AXValueGetType(v) == .cgSize else { return nil }
-        var s = CGSize.zero
-        AXValueGetValue(v, .cgSize, &s)
-        return s
-    }
-
-    static func cgWindowId(of axUiElement: AXUIElement) -> CGWindowID? {
-        var wid = CGWindowID(0)
-        let result = _AXUIElementGetWindow(axUiElement, &wid)
-        guard result == .success, wid != 0 else { return nil }
-        return wid
-    }
-
     /// AX 给空 / 给不出来时,从 CG 兜底拿一次。仍空就用 app 名。
     static func bestEffortTitle(
         axTitle: String?,
@@ -221,11 +161,7 @@ enum SwitcherAxRead {
     }
 
     static func cgTitle(for wid: CGWindowID) -> String? {
-        let opts: CGWindowListOption = [.optionIncludingWindow]
-        guard let arr = CGWindowListCopyWindowInfo(opts, wid) as? [[String: Any]] else {
-            return nil
-        }
-        return arr.first?[kCGWindowName as String] as? String
+        WindowSnapshot.window(wid)?.name
     }
 
     private static func nonEmptyTitle(_ value: String?) -> String? {

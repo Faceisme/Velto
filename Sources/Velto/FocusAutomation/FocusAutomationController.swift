@@ -42,6 +42,8 @@ final class FocusAutomationController {
   nonisolated private static let shortcutsTimeout: TimeInterval = 15
   /// 小于这个尺寸的窗口(工具条、浮动面板)不算。
   private static let minWindowSide: CGFloat = 200
+  /// 主线程上的 AX 读取,目标 App 卡死时最多拖这么久。
+  private static let axTimeout: Float = 0.25
   /// 播放器防止显示器睡眠时持有的断言类型(Movist Pro 叫 "Movist Playing")。
   private static let playbackAssertionTypes: Set<String> = [
     kIOPMAssertionTypePreventUserIdleDisplaySleep as String,
@@ -245,68 +247,40 @@ final class FocusAutomationController {
   /// 所以屏幕上没有时,再用辅助功能问一次有没有 AXMinimized 的窗口。
   /// 别的桌面空间(比如全屏播放所在的空间)上的窗口不算;播放中由播放状态兜着。
   private static func hasWindow(pids: Set<pid_t>) -> Bool {
-    let infos = CGWindowListCopyWindowInfo(
-      [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
-    return hasOnScreenWindow(pids: pids, in: infos) || pids.contains(where: hasMinimizedWindow)
+    hasOnScreenWindow(pids: pids, in: .onScreen()) || pids.contains(where: hasMinimizedWindow)
   }
 
   /// 屏幕上有没有够大的窗口。置顶浮动窗口也算:Movist Pro「播放时置顶」一开播就把
   /// 窗口提到 layer 3,只认 layer 0 会判成「窗口=无」,刚开的勿扰两秒后又被关掉
   /// (2026-10-29;之前没露馅是因为它的「通用」设置窗口一直开着撑住了 layer 0)。
-  static func hasOnScreenWindow(pids: Set<pid_t>, in infos: [[String: Any]]) -> Bool {
-    infos.contains { info in
-      guard let pid = info[kCGWindowOwnerPID as String] as? pid_t, pids.contains(pid),
-            let layer = info[kCGWindowLayer as String] as? Int, AppWindowLayer.contains(layer),
-            let bounds = info[kCGWindowBounds as String] as? [String: CGFloat],
-            let w = bounds["Width"], let h = bounds["Height"]
-      else { return false }
-      return w >= minWindowSide && h >= minWindowSide
+  static func hasOnScreenWindow(pids: Set<pid_t>, in snapshot: WindowSnapshot) -> Bool {
+    snapshot.windows.contains {
+      pids.contains($0.pid) && $0.isAppWindow
+        && $0.bounds.width >= minWindowSide && $0.bounds.height >= minWindowSide
     }
   }
 
   private static func hasMinimizedWindow(pid: pid_t) -> Bool {
-    guard !AxDeadPids.isDead(pid) else { return false }
-    let app = AXUIElementCreateApplication(pid)
-    AXUIElementSetMessagingTimeout(app, 0.25)
-    var value: CFTypeRef?
-    guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &value) == .success,
-          let windows = value as? [AXUIElement]
-    else { return false }
-    return windows.contains { window in
-      var minimized: CFTypeRef?
-      return AXUIElementCopyAttributeValue(window, kAXMinimizedAttribute as CFString, &minimized) == .success
-        && (minimized as? Bool) == true
-    }
+    guard let windows = AXClient.windows(ofPid: pid, timeout: axTimeout) else { return false }
+    return windows.contains { AXClient.bool(kAXMinimizedAttribute, of: $0) == true }
   }
 
   /// 窗口里载入的文件名;没有返回 nil。优先读 AXDocument(文件 URL),App 没提供时
   /// 退回看窗口标题:Movist Pro 空播放窗口标题是 App 名,载入后是文件名。
   private static func loadedMediaName(pid: pid_t) -> String? {
-    guard !AxDeadPids.isDead(pid),
-          let appName = NSRunningApplication(processIdentifier: pid)?.localizedName
-    else { return nil }
-    let app = AXUIElementCreateApplication(pid)
-    AXUIElementSetMessagingTimeout(app, 0.25)
-    var value: CFTypeRef?
-    guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &value) == .success,
-          let windows = value as? [AXUIElement]
+    guard let appName = NSRunningApplication(processIdentifier: pid)?.localizedName,
+          let windows = AXClient.windows(ofPid: pid, timeout: axTimeout)
     else { return nil }
     for window in windows {
-      if let document = stringAttribute(window, kAXDocumentAttribute), !document.isEmpty {
+      if let document = AXClient.string(kAXDocumentAttribute, of: window), !document.isEmpty {
         return URL(string: document)?.lastPathComponent ?? document
       }
-      if stringAttribute(window, kAXSubroleAttribute) == kAXStandardWindowSubrole as String,
-         let title = stringAttribute(window, kAXTitleAttribute), !title.isEmpty, title != appName {
+      if AXClient.string(kAXSubroleAttribute, of: window) == kAXStandardWindowSubrole as String,
+         let title = AXClient.string(kAXTitleAttribute, of: window), !title.isEmpty, title != appName {
         return title
       }
     }
     return nil
-  }
-
-  private static func stringAttribute(_ element: AXUIElement, _ attribute: String) -> String? {
-    var value: CFTypeRef?
-    guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success else { return nil }
-    return value as? String
   }
 
   /// 持有「防止显示器睡眠」断言的进程 —— 视频播放器播放时会持有,暂停后释放。

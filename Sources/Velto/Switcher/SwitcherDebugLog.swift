@@ -121,14 +121,12 @@ enum SwitcherDebugLog {
     /// 把一个 AX 窗口下的所有子元素(role/subrole/title/size)dump 出来。
     /// 用来确认那个"鬼窗"到底装了什么控件。
     nonisolated static func describeChildren(of window: AXUIElement) -> String {
-        var value: CFTypeRef?
-        let result = AXUIElementCopyAttributeValue(window, kAXChildrenAttribute as CFString, &value)
-        guard result == .success, let children = value as? [AXUIElement] else {
-            return "<no children attr: result=\(result.rawValue)>"
+        guard let children = AXClient.elements(kAXChildrenAttribute, of: window) else {
+            return "<no children attr>"
         }
         if children.isEmpty { return "<children=[]>" }
         let lines = children.enumerated().map { idx, child -> String in
-            let attrs = SwitcherAxRead.multiAttributes(child, [
+            let attrs = AXClient.values(of: child, [
                 kAXRoleAttribute as String,
                 kAXSubroleAttribute as String,
                 kAXTitleAttribute as String,
@@ -141,7 +139,7 @@ enum SwitcherDebugLog {
             let valueStr = attrs[kAXValueAttribute as String] as? String ?? ""
             let size: String
             if let raw = attrs[kAXSizeAttribute as String],
-               let s = SwitcherAxRead.axValueSize(raw)
+               let s = AXClient.size(from: raw)
             {
                 size = "\(Int(s.width))x\(Int(s.height))"
             } else {

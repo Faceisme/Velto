@@ -125,13 +125,7 @@ enum ScreenshotCapturer {
   /// C1:把 SCDisplay.frame(CG 左上原点)转成 NSScreen 左下原点全局坐标。
   /// 仅在 NSScreen 查不到对应 displayID 的兜底路径用。
   private static func cgFrameToNSFrame(_ cgFrame: CGRect) -> CGRect {
-    let primaryHeight = NSScreen.screens.first?.frame.height ?? cgFrame.height
-    return CGRect(
-      x: cgFrame.origin.x,
-      y: primaryHeight - cgFrame.maxY,
-      width: cgFrame.width,
-      height: cgFrame.height
-    )
+    DisplayCoordinateConverter.appKitRect(fromQuartz: cgFrame)
   }
 
   private static func nsScreen(for id: CGDirectDisplayID) -> NSScreen? {

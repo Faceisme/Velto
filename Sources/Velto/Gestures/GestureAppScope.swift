@@ -62,7 +62,7 @@ enum GestureAppScope {
         frontmostApplication: NSRunningApplication?
     ) -> String? {
         if policy == .windowUnderPointer {
-            if windowNumber > 0, let pid = ownerPID(ofWindow: CGWindowID(windowNumber)),
+            if windowNumber > 0, let pid = WindowSnapshot.window(CGWindowID(windowNumber))?.pid,
                let bundleID = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier {
                 return bundleID
             }
@@ -71,11 +71,6 @@ enum GestureAppScope {
             }
         }
         return (frontmostApplication ?? NSWorkspace.shared.frontmostApplication)?.bundleIdentifier
-    }
-
-    private static func ownerPID(ofWindow windowID: CGWindowID) -> pid_t? {
-        let info = CGWindowListCopyWindowInfo([.optionIncludingWindow], windowID) as? [[String: Any]]
-        return info?.first?[kCGWindowOwnerPID as String] as? pid_t
     }
 }
 

@@ -20,30 +20,20 @@ struct AxCircuitBreakerTests {
     return try String(contentsOf: url, encoding: .utf8)
   }
 
-  /// 命中测试不能再每次调用都重设进程全局超时 —— 那会把切换器的预算一起改掉。
-  @Test("命中测试只设一次进程全局超时")
+  /// 进程全局超时只有 AXClient 这一个写入点,命中测试不能再每次调用都重设 ——
+  /// 那会把切换器的预算一起改掉(历史 bug:1.0s 被 0.1s 永久顶掉)。
+  @Test("进程全局超时只设一次、只有一个来源")
   func globalTimeoutInstalledOnce() throws {
-    let text = try source("Sources/Velto/GestureTargetController.swift")
-
-    #expect(text.contains("installGlobalTimeout"))
-
-    // elementAtPosition 函数体里不允许再出现 SetMessagingTimeout。
-    let marker = "private static func elementAtPosition("
-    let start = try #require(text.range(of: marker))
-    let body = text[start.upperBound...].prefix(600)
-    #expect(!body.contains("AXUIElementSetMessagingTimeout"))
-  }
-
-  /// 全局值必须由 AXCallQueue 与 GestureTargetController 共用同一个常量,
-  /// 否则两边会互相覆盖(历史 bug:1.0s 被 0.1s 永久顶掉)。
-  @Test("全局超时只有一个来源")
-  func globalTimeoutHasSingleSource() throws {
-    let gesture = try source("Sources/Velto/GestureTargetController.swift")
+    let client = try source("Sources/Velto/AXClient.swift")
     let queue = try source("Sources/Velto/Switcher/AXCallQueue.swift")
 
-    #expect(gesture.contains("AXCallQueue.processMessagingTimeout"))
-    #expect(queue.contains("Self.processMessagingTimeout"))
-    #expect(GestureTargetController.axMessagingTimeout == AXCallQueue.processMessagingTimeout)
+    #expect(client.components(separatedBy: "AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide()").count == 2)
+    #expect(queue.contains("AXClient.installProcessTimeout()"))
+    #expect(!queue.contains("AXUIElementSetMessagingTimeout"))
+
+    // 命中测试函数体里不允许再出现 SetMessagingTimeout。
+    let start = try #require(client.range(of: "static func element(at point: CGPoint)"))
+    #expect(!client[start.upperBound...].prefix(400).contains("AXUIElementSetMessagingTimeout"))
   }
 
   /// 切换器需要更长预算,但只能设在自己的 app 元素上(元素级),不能再传 systemWide。
@@ -51,38 +41,55 @@ struct AxCircuitBreakerTests {
   func switcherUsesElementScopedTimeout() throws {
     let text = try source("Sources/Velto/Switcher/SwitcherApp.swift")
 
-    #expect(text.contains("AXUIElementSetMessagingTimeout(axUiElement, AXCallQueue.appMessagingTimeout)"))
-    #expect(!text.contains("AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide()"))
-    #expect(AXCallQueue.appMessagingTimeout > AXCallQueue.processMessagingTimeout)
+    #expect(text.contains("AXClient.application(pid: pid, timeout: AXCallQueue.appMessagingTimeout)"))
+    #expect(!text.contains("AXUIElementCreateSystemWide()"))
+    #expect(AXCallQueue.appMessagingTimeout > AXClient.processTimeout)
   }
 
-  /// 熔断本体:查到空窗口要记一笔,后续命中测试与窗口枚举都要先问一句。
-  @Test("AX 哑巴 app 会被熔断并跳过")
-  func deadPidsAreSkipped() throws {
+  /// 已熔断的 pid 一次 RPC 都不发。
+  @Test("熔断后不再读窗口")
+  func deadPidIsNotQueried() {
+    let pid: pid_t = 0x7f_ff_fd
+    AxDeadPids.mark(pid, source: "test")
+    var reads = 0
+    let windows = AXClient.windows(ofPid: pid, markingEmptyAs: "test") { _ in
+      reads += 1
+      return []
+    }
+    #expect(windows == nil)
+    #expect(reads == 0)
+  }
+
+  /// kAXWindows 空列表或读取失败 → 熔断。
+  @Test("问出空结果才记账")
+  func emptyWindowsMarkDead() {
+    let empty: pid_t = 0x7f_ff_fc
+    #expect(AXClient.windows(ofPid: empty, markingEmptyAs: "test") { _ in [] } == nil)
+    #expect(AxDeadPids.isDead(empty))
+
+    let failed: pid_t = 0x7f_ff_fb
+    #expect(AXClient.windows(ofPid: failed, markingEmptyAs: "test") { _ in nil } == nil)
+    #expect(AxDeadPids.isDead(failed))
+
+    // 不要求记账的调用方(专注自动化)不动账本。
+    let untouched: pid_t = 0x7f_ff_fa
+    #expect(AXClient.windows(ofPid: untouched) { _ in [] } == [])
+    #expect(!AxDeadPids.isDead(untouched))
+  }
+
+  /// 命中测试失败**不能**熔断:那可能只是偶发超时,误伤健康 app 的 ⌥ 拖拽。
+  /// 账本必须是共用的那份,不能各自再开一个 pid 表。
+  @Test("目标定位用共用账本,命中测试失败不熔断")
+  func targetLookupUsesSharedLedger() throws {
     let text = try source("Sources/Velto/GestureTargetController.swift")
 
-    // 账本必须是共用的那份,不能各自再开一个 pid 表。
-    #expect(text.contains("AxDeadPids.isDead(pid)"))
+    #expect(text.contains("AxDeadPids.isDead(candidate.pid)"))
     #expect(!text.contains("Mutex<[pid_t: CFAbsoluteTime]>"))
-
-    // kAXWindows 空 → 熔断,且必须报上来源(日志在账本里打,见下面那条测试)
-    #expect(text.contains("AxDeadPids.mark(targetPid, source:"))
-    // 本地不许再包一层打日志的 markAxDead —— 那正是切换器调用点当初能悄悄
-    // 拉黑 Chrome 的原因(账本外的调用点想打就打、不想打就不打)。
     #expect(!text.contains("func markAxDead"))
-    // 熔断后 axWindow 立刻返回,不再 AXUIElementCreateApplication
-    let marker = "private static func axWindow(matching candidate:"
-    let start = try #require(text.range(of: marker))
-    let body = text[start.upperBound...].prefix(400)
-    let guardIndex = try #require(body.range(of: "axIsDead(targetPid)"))
-    let createIndex = try #require(body.range(of: "AXUIElementCreateApplication"))
-    #expect(guardIndex.lowerBound < createIndex.lowerBound)
+    #expect(text.contains("markingEmptyAs:"))
 
-    // 命中测试路径同样要前置检查
-    #expect(text.contains("axIsDead(topCandidate.pid)"))
-
-    // 命中测试失败**不能**熔断:那可能只是偶发超时,误伤健康 app 的 ⌥ 拖拽。
-    #expect(!text.contains("命中测试全部返回 nil\")"))
+    let start = try #require(text.range(of: "guard let element = AXClient.element(at: point) else {"))
+    #expect(!text[start.upperBound...].prefix(600).contains("AxDeadPids.mark"))
   }
 
   /// 切换器的暴力枚举也要查同一份账本 —— 启动时 `setMaintainsIndex(true)` 遍历
@@ -160,16 +167,13 @@ struct AxCircuitBreakerTests {
     let focus = try source("Sources/Velto/Switcher/SwitcherFocus.swift")
 
     // wid 要一路带到 GestureExecutionTarget,否则熔断时手上什么都没有
-    #expect(target.contains("let cgWindowId: CGWindowID?"))
-    #expect(target.contains("wid: (info[kCGWindowNumber as String] as? NSNumber)?.uint32Value ?? 0"))
-    #expect(target.contains("cgWindowId: candidate.wid == 0 ? nil : candidate.wid"))
+    #expect(target.contains("WindowHandle.windowServer(candidate.id)"))
 
-    // 只在拿不到 AX 窗口时才走兜底 —— 有真窗口时 focus() 那条路更全(kAXMain/kAXFocused)
     let marker = "static func prepareForExecution("
     let start = try #require(target.range(of: marker))
     let body = target[start.upperBound...].prefix(1200)
-    #expect(body.contains("if let window = target.window {"))
-    #expect(body.contains("} else if let wid = target.cgWindowId {"))
+    #expect(body.contains("case .accessibility(let window):"))
+    #expect(body.contains("case .windowServer(let wid):"))
     #expect(body.contains("SwitcherFocus.raiseByWindowServer(pid: pid, cgWindowId: wid)"))
 
     // 兜底本身必须零 AX:熔断的初衷就是别再打扰目标 app 的主线程。
@@ -190,14 +194,14 @@ struct AxCircuitBreakerTests {
 
     #expect(sky.contains("case moveWindow = \"SLSMoveWindow\""))
     #expect(target.contains("static func cgWindowUnderPointer(at point: CGPoint)"))
-    #expect(drag.contains("SLSMoveWindow(CGS_CONNECTION, session.cgWindowID, &origin)"))
+    #expect(drag.contains("SLSMoveWindow(CGS_CONNECTION, wid, &origin)"))
     #expect(drag.contains("GestureTargetController.cgWindowUnderPointer(at: location)"))
 
     // resize 没有等价兜底,CG 会话必须拒绝,别拿 SkyLight 改 shape。
     let marker = "case .resize:"
     let start = try #require(drag.range(of: marker))
     let body = drag[start.upperBound...].prefix(300)
-    #expect(body.contains("guard let window = session.window else { return false }"))
+    #expect(body.contains("guard case .accessibility(let window) = session.handle else { return false }"))
     #expect(!body.contains("SLSMoveWindow"))
   }
 

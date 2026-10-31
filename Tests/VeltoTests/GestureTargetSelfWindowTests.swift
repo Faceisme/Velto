@@ -6,12 +6,13 @@ import Testing
 @Test @MainActor func gestureTargetGuardRecognizesSelfOverlays() {
     let point = CGPoint(x: 100, y: 100)
     func window(pid: pid_t, level: NSWindow.Level = .normal,
-                alpha: Double = 1, onscreen: Bool = true) -> [String: Any] {
-        [kCGWindowOwnerPID as String: pid,
-         kCGWindowLayer as String: level.rawValue,
-         kCGWindowIsOnscreen as String: onscreen,
-         kCGWindowAlpha as String: alpha,
-         kCGWindowBounds as String: CGRect(x: 0, y: 0, width: 200, height: 200).dictionaryRepresentation]
+                alpha: Double = 1, onscreen: Bool = true) -> WindowInfo {
+        WindowInfo(pid: pid, layer: level.rawValue,
+                   bounds: CGRect(x: 0, y: 0, width: 200, height: 200),
+                   alpha: alpha, isOnscreen: onscreen)
+    }
+    func isOverOwn(_ windows: [WindowInfo], at p: CGPoint = point) -> Bool {
+        WindowSnapshot(windows).isOverOwnWindow(at: p)
     }
     let other = window(pid: getpid() + 1)
     let normal = window(pid: getpid())
@@ -19,22 +20,17 @@ import Testing
     // macOS 27 程序坞:layer 20、铺满全屏、鼠标穿透,压在所有普通窗口之上。
     let dock = window(pid: getpid() + 1, level: NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.dockWindow))))
     for level in [NSWindow.Level.normal, .floating, .popUpMenu, .screenSaver] {
-        #expect(GestureTargetController.topmostWindowIsSelf(
-            in: [window(pid: getpid(), level: level), other], at: point))
+        #expect(isOverOwn([window(pid: getpid(), level: level), other]))
     }
-    #expect(!GestureTargetController.topmostWindowIsSelf(in: [other, normal], at: point))
+    #expect(!isOverOwn([other, normal]))
     // 别家高层窗口可能穿透,挡不住下面的自己窗口;别家 layer 0 窗口才算挡住。
-    #expect(GestureTargetController.topmostWindowIsSelf(in: [dock, normal, other], at: point))
-    #expect(GestureTargetController.topmostWindowIsSelf(
-        in: [window(pid: getpid() + 1, level: .screenSaver), overlay], at: point))
-    #expect(!GestureTargetController.topmostWindowIsSelf(in: [dock, other, normal], at: point))
-    #expect(!GestureTargetController.topmostWindowIsSelf(
-        in: [window(pid: getpid(), level: .screenSaver, alpha: 0), other], at: point))
-    #expect(!GestureTargetController.topmostWindowIsSelf(
-        in: [window(pid: getpid(), level: .screenSaver, onscreen: false), other], at: point))
-    #expect(!GestureTargetController.topmostWindowIsSelf(
-        in: [overlay], at: CGPoint(x: 300, y: 300)))
-    #expect(!GestureTargetController.topmostWindowIsSelf(in: [], at: point))
+    #expect(isOverOwn([dock, normal, other]))
+    #expect(isOverOwn([window(pid: getpid() + 1, level: .screenSaver), overlay]))
+    #expect(!isOverOwn([dock, other, normal]))
+    #expect(!isOverOwn([window(pid: getpid(), level: .screenSaver, alpha: 0), other]))
+    #expect(!isOverOwn([window(pid: getpid(), level: .screenSaver, onscreen: false), other]))
+    #expect(!isOverOwn([overlay], at: CGPoint(x: 300, y: 300)))
+    #expect(!isOverOwn([]))
 }
 
 /// 使用真实截图视图与 WindowServer 列表,沿手势的后台 AX 查询入口验证不会回调 UI。
@@ -79,19 +75,16 @@ private struct BindingPickerProbe: View {
     // WindowServer 在下一轮显示提交后才把新窗口列为 onscreen。别用固定 sleep 等:
     // 全量并行跑时这轮提交被主线程占用拖后,100ms 到点时列表里还没有它(实测并行
     // 跑连挂 4/4,串行跑全绿)。轮询到它出现为止。
-    var rows: [[String: Any]] = []
-    var listed: [String: Any]?
+    var snapshot = WindowSnapshot()
+    var listed: WindowInfo?
     for _ in 0..<60 where listed == nil {
         try await Task.sleep(for: .milliseconds(50))
-        rows = CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID) as? [[String: Any]] ?? []
-        listed = rows.first {
-            ($0[kCGWindowNumber as String] as? NSNumber)?.intValue == window.windowNumber
-        }
+        snapshot = WindowSnapshot.onScreen()
+        listed = snapshot.windows.first { Int($0.id) == window.windowNumber }
     }
-    let row = try #require(listed)
-    let bounds = try #require((row[kCGWindowBounds as String] as? NSDictionary).flatMap(CGRect.init(dictionaryRepresentation:)))
+    let bounds = try #require(listed).bounds
     let point = CGPoint(x: bounds.midX, y: bounds.midY)
-    let isSelf = GestureTargetController.topmostWindowIsSelf(in: rows, at: point)
+    let isSelf = snapshot.isOverOwnWindow(at: point)
     let target = await withCheckedContinuation { continuation in
         DispatchQueue(label: "com.velto.test.gesture.target-lookup").async {
             continuation.resume(returning: GestureTargetController.executionTarget(

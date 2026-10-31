@@ -13,8 +13,8 @@ enum BrowserAXReader {
   private static let maxDepth = 60
 
   static func readContext(pid: pid_t, engine: BrowserEngine) -> BrowserPageContext {
-    let app = AXUIElementCreateApplication(pid)
-    guard let window = focusedWindow(of: app) else {
+    let app = AXClient.application(pid: pid)
+    guard let window = AXClient.element(kAXFocusedWindowAttribute, of: app) else {
       return BrowserPageContext(url: nil, addressBarFocused: false)
     }
     let url = findWebAreaURL(in: window, depth: 0)
@@ -24,19 +24,15 @@ enum BrowserAXReader {
 
   // MARK: - URL
 
-  private static func focusedWindow(of app: AXUIElement) -> AXUIElement? {
-    copyElement(app, kAXFocusedWindowAttribute)
-  }
-
   /// DFS 找 role == AXWebArea,读它的 AXURL。
   private static func findWebAreaURL(in element: AXUIElement, depth: Int) -> URL? {
     if depth > maxDepth { return nil }
-    if copyString(element, kAXRoleAttribute) == "AXWebArea" {
-      if let url = copyURL(element, "AXURL"), !isIgnoredScheme(url) {
+    if AXClient.role(of: element) == "AXWebArea" {
+      if let url = AXClient.url("AXURL", of: element), !isIgnoredScheme(url) {
         return normalize(url)
       }
     }
-    guard let children = copyChildren(element) else { return nil }
+    guard let children = AXClient.elements(kAXChildrenAttribute, of: element) else { return nil }
     for child in children {
       if let url = findWebAreaURL(in: child, depth: depth + 1) { return url }
     }
@@ -60,11 +56,11 @@ enum BrowserAXReader {
   /// 判定焦点元素是否地址栏。这是已知脆弱区:靠 role/subrole + 每家浏览器的
   /// identifier 启发式。失效时退化为"不在地址栏",最坏是地址栏没切到默认,不会切错。
   private static func isAddressBarFocused(app: AXUIElement, engine: BrowserEngine) -> Bool {
-    guard let focused = copyElement(app, kAXFocusedUIElementAttribute) else { return false }
-    let role = copyString(focused, kAXRoleAttribute)
+    guard let focused = AXClient.element(kAXFocusedUIElementAttribute, of: app) else { return false }
+    let role = AXClient.role(of: focused)
     guard role == "AXTextField" || role == "AXComboBox" else { return false }
-    let identifier = copyString(focused, "AXIdentifier") ?? ""
-    let desc = copyString(focused, kAXDescriptionAttribute) ?? ""
+    let identifier = AXClient.string("AXIdentifier", of: focused) ?? ""
+    let desc = AXClient.string(kAXDescriptionAttribute, of: focused) ?? ""
     switch engine {
     case .chromium:
       // Chromium 地址栏 AXIdentifier 常见 "address_and_search_bar" / desc 含地址栏文案。
@@ -91,46 +87,10 @@ enum BrowserAXReader {
     var current: AXUIElement? = element
     var depth = 0
     while let node = current, depth < maxDepth {
-      if copyString(node, kAXRoleAttribute) == "AXWebArea" { return true }
-      current = copyElement(node, kAXParentAttribute)
+      if AXClient.role(of: node) == "AXWebArea" { return true }
+      current = AXClient.element(kAXParentAttribute, of: node)
       depth += 1
     }
     return false
-  }
-
-  // MARK: - AX 原语
-
-  private static func copyElement(_ element: AXUIElement, _ attr: String) -> AXUIElement? {
-    var value: CFTypeRef?
-    guard AXUIElementCopyAttributeValue(element, attr as CFString, &value) == .success,
-          let v = value, CFGetTypeID(v) == AXUIElementGetTypeID()
-    else { return nil }
-    return (v as! AXUIElement)
-  }
-
-  private static func copyChildren(_ element: AXUIElement) -> [AXUIElement]? {
-    var value: CFTypeRef?
-    guard AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &value) == .success,
-          let arr = value as? [AXUIElement]
-    else { return nil }
-    return arr
-  }
-
-  private static func copyString(_ element: AXUIElement, _ attr: String) -> String? {
-    var value: CFTypeRef?
-    guard AXUIElementCopyAttributeValue(element, attr as CFString, &value) == .success,
-          let s = value as? String
-    else { return nil }
-    return s
-  }
-
-  private static func copyURL(_ element: AXUIElement, _ attr: String) -> URL? {
-    var value: CFTypeRef?
-    guard AXUIElementCopyAttributeValue(element, attr as CFString, &value) == .success,
-          let v = value
-    else { return nil }
-    if let url = v as? URL { return url }
-    if let s = v as? String { return URL(string: s) }
-    return nil
   }
 }

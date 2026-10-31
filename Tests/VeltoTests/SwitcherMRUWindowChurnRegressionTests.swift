@@ -28,7 +28,7 @@ private func switcherSource(_ file: String) throws -> String {
   #expect(!handler.contains("removeWindow(window)"))
   // 验尸用 WindowServer 权威判定,且不限 on-screen(最小化/其他 Space 也要查得到)
   #expect(source.contains("windowServerKnowsWindow"))
-  #expect(source.contains("CGWindowListCreateDescriptionFromArray"))
+  #expect(source.contains("WindowSnapshot.windows(wids)"))
 }
 
 @Test func reAddedWindowRestoresItsMRUOrder() throws {

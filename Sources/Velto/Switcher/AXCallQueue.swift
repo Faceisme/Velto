@@ -8,7 +8,7 @@ import Foundation
 /// **挂到默认 6 秒** 才超时返回。alt-tab 把全局超时改成 1s 又自己上后台队列,
 /// 我们这里做同样的事,但简化:
 ///   - 后台队列有界并发(见 backgroundConcurrency),同 key 之间仍严格串行
-///   - 全局每次启动一次 AXUIElementSetMessagingTimeout 把 1s 超时设上
+///   - 进程全局超时由 `AXClient.installProcessTimeout` 设一次
 ///   - schedule(key:) 同 key 节流:连续来的同 wid 事件只处理最新一个
 ///
 /// `@unchecked Sendable`:内部用 NSLock 保护可变状态;Swift 看不出来。
@@ -62,21 +62,8 @@ final class AXCallQueue: @unchecked Sendable {
     private var pending: [String: Operation] = [:]
 
     private init() {
-        // 进程级 AX 默认超时是 6s,对交互路径太长。
-        //
-        // ⚠️ 传 systemWide = 设置**整个进程**的默认值(SDK 头文件原话),所以这里
-        // 必须和 GestureTargetController 取同一个值,否则两边会互相覆盖:此前这里
-        // 设 1.0s,而 GestureTargetController.elementAtPosition 每做一次命中测试就
-        // 重设成 0.1s —— 结果第一次手势之后切换器就永久掉到 0.1s 预算,Telegram 那种
-        // 单次 kAXWindows 实测 53ms 的 app 在负载下会假超时、窗口从切换器里掉出去。
-        // 现在全局统一 0.1s(命中测试要的快速失败),真正需要更长预算的切换器改为
-        // 在自己的 app 元素上单独设置 —— 那是元素级的,不污染全局。见 SwitcherApp。
-        AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), Self.processMessagingTimeout)
+        AXClient.installProcessTimeout()
     }
-
-    /// 进程全局 AX 消息超时。改这个值要连 `GestureTargetController.axMessagingTimeout`
-    /// 一起改 —— 两处写的是同一个进程级开关。
-    static let processMessagingTimeout: Float = 0.10
 
     /// 切换器对单个 app 的预算:枚举窗口比一次命中测试贵得多(Telegram 实测 53ms),
     /// 用全局那 0.1s 会误杀。元素级设置只影响这一个元素。

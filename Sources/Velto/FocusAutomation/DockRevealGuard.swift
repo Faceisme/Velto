@@ -75,18 +75,9 @@ final class DockRevealGuard: @unchecked Sendable {
   /// 原生全屏时窗口和屏幕一样大;最大化(程序坞自动隐藏时)窗口左右铺满、贴到底边。
   /// 置顶浮动窗口也算:Movist Pro 播放时窗口在 layer 3。
   static func fullScreenDisplay(pid: pid_t) -> CGRect? {
-    guard let infos = CGWindowListCopyWindowInfo(
-      [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]],
-      // 列表从前往后排,第一个够大的普通窗口就是它最前面的窗口。
-      let front = infos.lazy.compactMap({ info -> CGRect? in
-        guard let owner = info[kCGWindowOwnerPID as String] as? pid_t, owner == pid,
-              let layer = info[kCGWindowLayer as String] as? Int, AppWindowLayer.contains(layer),
-              let dict = info[kCGWindowBounds as String] as? NSDictionary,
-              let rect = CGRect(dictionaryRepresentation: dict),
-              rect.width >= 200, rect.height >= 200
-        else { return nil }
-        return rect
-      }).first
+    // 列表从前往后排,第一个够大的普通窗口就是它最前面的窗口。
+    guard let front = WindowSnapshot.onScreen().appWindows(of: pid)
+      .first(where: { $0.bounds.width >= 200 && $0.bounds.height >= 200 })?.bounds
     else { return nil }
     return activeDisplayBounds().first { display in
       abs(front.minX - display.minX) <= 1 && abs(front.maxX - display.maxX) <= 1

@@ -7,13 +7,11 @@ import Testing
 /// 判成「窗口=无」,刚开的勿扰两秒后又被关掉。
 @Test @MainActor func focusAutomationCountsFloatingPlayerWindow() {
   let movist: pid_t = 23177
-  func window(pid: pid_t = movist, level: NSWindow.Level, width: CGFloat = 1771, height: CGFloat = 996) -> [String: Any] {
-    [kCGWindowOwnerPID as String: pid,
-     kCGWindowLayer as String: level.rawValue,
-     kCGWindowBounds as String: CGRect(x: 74, y: 30, width: width, height: height).dictionaryRepresentation]
+  func window(pid: pid_t = movist, level: NSWindow.Level, width: CGFloat = 1771, height: CGFloat = 996) -> WindowInfo {
+    WindowInfo(pid: pid, layer: level.rawValue, bounds: CGRect(x: 74, y: 30, width: width, height: height))
   }
-  func hasWindow(_ infos: [[String: Any]]) -> Bool {
-    FocusAutomationController.hasOnScreenWindow(pids: [movist], in: infos)
+  func hasWindow(_ windows: [WindowInfo]) -> Bool {
+    FocusAutomationController.hasOnScreenWindow(pids: [movist], in: WindowSnapshot(windows))
   }
   #expect(hasWindow([window(level: .normal)]))
   #expect(hasWindow([window(level: .floating)]))
