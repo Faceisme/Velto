@@ -122,7 +122,8 @@ final class GestureEngine: @unchecked Sendable {
     /// 序列"的真冲突(设置页会在配置期就用箭头提示),清晰手势的命令间余量通常 ≥0.5。
     /// `match` 调试日志记录每次的 runnerUp/margin/ambiguous,便于据实测微调。
     private let ambiguityMargin: CGFloat = 0.05
-    private let syntheticMarker: Int64 = 0x4D474C524550
+    /// 补发的右键带这个标记,tap 看到就放行,不再进手势逻辑。
+    static let rightClickReplayMarker: Int64 = 0x4D474C524550
 
     /// `@MainActor` — 内部要构造 `GestureRecognizer` / `GestureOverlayController`,
     /// 两者都是 `@MainActor`。调用方 (`EventTapManager.init`) 已经在 main actor 上。
@@ -684,7 +685,7 @@ final class GestureEngine: @unchecked Sendable {
 
     private func replayRightClickAsync(down recordedDown: CGEvent?, up recordedUp: CGEvent?, fallbackPoint point: CGPoint) {
         let recorded = recordedDown.flatMap { down in recordedUp.map { RecordedClick(down: down, up: $0) } }
-        DispatchQueue.global(qos: .userInteractive).async { [marker = syntheticMarker] in
+        DispatchQueue.global(qos: .userInteractive).async { [marker = Self.rightClickReplayMarker] in
             if let recorded {
                 recorded.down.setIntegerValueField(.eventSourceUserData, value: marker)
                 recorded.up.setIntegerValueField(.eventSourceUserData, value: marker)
@@ -709,10 +710,6 @@ final class GestureEngine: @unchecked Sendable {
             up.post(tap: .cgSessionEventTap)
         }
     }
-
-    /// Mark indicating events we synthesized ourselves so the tap can let them
-    /// pass through without re-entering gesture logic.
-    var rightClickSyntheticMarker: Int64 { syntheticMarker }
 
     // MARK: - Point buffer
 
