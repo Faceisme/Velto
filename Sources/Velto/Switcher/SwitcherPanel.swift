@@ -76,7 +76,8 @@ final class SwitcherPanel: NSPanel {
         on screen: NSScreen? = nil
     ) {
         // 先定面板屏幕,算可用区域(留点边距,别贴满屏),交给 tiles 决定列数与缩放。
-        let panelScreen = screen ?? NSScreen.screenContainingMouse() ?? NSScreen.main ?? NSScreen.screens.first!
+        guard let panelScreen = screen ?? NSScreen.screenContainingMouse() ?? NSScreen.main ?? NSScreen.screens.first
+        else { return }
         let visible = panelScreen.visibleFrame
         let maxSize = NSSize(width: visible.width * 0.94, height: visible.height * 0.94)
         let contentSize = tilesView.rebuild(
@@ -124,7 +125,9 @@ final class SwitcherPanel: NSPanel {
     }
 
     private func positionedFrame(for contentSize: NSSize, on screen: NSScreen?) -> NSRect {
-        let s = screen ?? NSScreen.screenContainingMouse() ?? NSScreen.main ?? NSScreen.screens.first!
+        guard let s = screen ?? NSScreen.screenContainingMouse() ?? NSScreen.main ?? NSScreen.screens.first else {
+            return NSRect(origin: .zero, size: contentSize)
+        }
         let visible = s.visibleFrame
         let x = visible.midX - contentSize.width / 2
         let y = visible.midY - contentSize.height / 2

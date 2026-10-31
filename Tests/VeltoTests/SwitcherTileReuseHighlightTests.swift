@@ -263,7 +263,7 @@ final class SwitcherTileReuseHighlightTests: XCTestCase {
   func testKeyTapArmedBeforeSnapshot() throws {
     let src = try source("Sources/Velto/Switcher/SwitcherController.swift")
     let arm = try XCTUnwrap(src.range(of: "keyTap.isActive = true"))
-    let snap = try XCTUnwrap(src.range(of: "let snapshot = windowList.snapshot("))
+    let snap = try XCTUnwrap(src.range(of: "windowList.snapshot(applying:"))
     XCTAssertTrue(
       arm.lowerBound < snap.lowerBound,
       "取快照是同步 IPC,期间 isActive 还是 false 的话方向键 / Esc 会漏进前台 app"

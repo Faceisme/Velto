@@ -166,15 +166,17 @@ final class SwitcherController {
 
     /// 按用户偏好算 panel 即将出现的屏幕 —— 用于"屏幕过滤"过滤窗口、以及
     /// panel 自己定位。
-    static func resolvePanelScreen(for choice: SwitcherScreenChoice) -> NSScreen {
+    ///
+    /// nil = 一块屏幕都没有(比如 Mac mini 拔了显示器),这时按触发键也会走到这里。
+    static func resolvePanelScreen(for choice: SwitcherScreenChoice) -> NSScreen? {
         switch choice {
         case .mouse:
-            return NSScreen.screenContainingMouse() ?? NSScreen.main ?? NSScreen.screens.first!
+            return NSScreen.screenContainingMouse() ?? NSScreen.main ?? NSScreen.screens.first
         case .active:
             // "活跃屏幕" = 有 active menubar 的屏幕,简化为前台 app 的 key window 所在屏幕
-            return NSApp.keyWindow?.screen ?? NSScreen.main ?? NSScreen.screens.first!
+            return NSApp.keyWindow?.screen ?? NSScreen.main ?? NSScreen.screens.first
         case .main:
-            return NSScreen.main ?? NSScreen.screens.first!
+            return NSScreen.main ?? NSScreen.screens.first
         }
     }
 
@@ -234,8 +236,8 @@ final class SwitcherController {
         // MRU 提升走异步 AX 链,快速触发时往往还没落地,index 1 会仍是当前
         // 窗口,确认后表现为"切了等于没切"。
         windowList.reconcileFrontmostWithSystem()
-        let snapshot = windowList.snapshot(applying: prefs, panelScreen: panelScreen)
-        guard !snapshot.isEmpty else {
+        let snapshot = panelScreen.map { windowList.snapshot(applying: prefs, panelScreen: $0) } ?? []
+        guard let panelScreen, !snapshot.isEmpty else {
             SwitcherDebugLog.log("summon aborted: 没有可切换的窗口")
             keyTap.isActive = false
             hoverArmPoint = nil
