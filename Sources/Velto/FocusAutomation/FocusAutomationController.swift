@@ -36,6 +36,10 @@ final class FocusAutomationController {
 
   private static let pollInterval: TimeInterval = 1
   private static let retryDelay: TimeInterval = 30
+  /// 退出时最多等关勿扰这么久:系统快捷键确认最长 1.5s,再加一次快捷指令。
+  private static let quitWaitSeconds: TimeInterval = 3
+  /// 单次 `shortcuts` 命令的上限。快捷指令卡住(比如弹了要确认的对话框)时不能一直等。
+  nonisolated private static let shortcutsTimeout: TimeInterval = 15
   /// 小于这个尺寸的窗口(工具条、浮动面板)不算。
   private static let minWindowSide: CGFloat = 200
   /// 播放器防止显示器睡眠时持有的断言类型(Movist Pro 叫 "Movist Playing")。
@@ -79,7 +83,8 @@ final class FocusAutomationController {
     applyPreferences()
   }
 
-  /// 退出 Velto 时调用:同步跑完「关闭」,避免勿扰一直开着。
+  /// 退出 Velto 时调用:等「关闭」跑完,避免勿扰一直开着。等待有上限:快捷指令卡住时
+  /// 宁可留着勿扰,也不能让 Velto 退不出去,后面的清理也还没做。
   func stop() {
     guard running else { return }
     running = false
@@ -95,8 +100,13 @@ final class FocusAutomationController {
       focusApplied = false
       let p = prefs
       let dnd = dndSwitch
-      shortcutQueue.sync {
+      let finished = DispatchSemaphore(value: 0)
+      shortcutQueue.async {
         _ = dnd.turnOff(preferKeyboard: p.preferSystemHotkey, shortcut: p.offShortcutName)
+        finished.signal()
+      }
+      if finished.wait(timeout: .now() + Self.quitWaitSeconds) == .timedOut {
+        FocusAutomationDebugLog.log("退出时关勿扰超过 \(Self.quitWaitSeconds)s,不再等")
       }
     }
   }
@@ -381,14 +391,18 @@ final class FocusAutomationController {
     }
   }
 
-  private enum CLIResult {
+  enum CLIResult: Equatable {
     case success(String)
     case failure(String)
   }
 
   nonisolated private static func runShortcutsCLI(_ arguments: [String]) -> CLIResult {
+    runCLI("/usr/bin/shortcuts", arguments, timeout: shortcutsTimeout)
+  }
+
+  nonisolated static func runCLI(_ path: String, _ arguments: [String], timeout: TimeInterval) -> CLIResult {
     let process = Process()
-    process.executableURL = URL(fileURLWithPath: "/usr/bin/shortcuts")
+    process.executableURL = URL(fileURLWithPath: path)
     process.arguments = arguments
     let out = Pipe()
     let err = Pipe()
@@ -401,9 +415,17 @@ final class FocusAutomationController {
     } catch {
       return .failure(error.localizedDescription)
     }
+    // 下面的读取要等进程结束,卡住就超时杀掉,管道随之关闭,读取才能返回。
+    let pid = process.processIdentifier
+    let watchdog = DispatchWorkItem { kill(pid, SIGKILL) }
+    DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: watchdog)
     let output = out.fileHandleForReading.readDataToEndOfFile()
     let errorOutput = err.fileHandleForReading.readDataToEndOfFile()
     process.waitUntilExit()
+    watchdog.cancel()
+    if process.terminationReason == .uncaughtSignal {
+      return .failure("超过 \(Int(timeout)) 秒没有结束,已终止")
+    }
     if process.terminationStatus == 0 {
       return .success(String(decoding: output, as: UTF8.self))
     }
