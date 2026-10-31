@@ -121,6 +121,11 @@ final class WindowDragController: @unchecked Sendable {
         }
     }
 
+    /// 重置后下一次移动会按当时的位置重新定位窗口,见 `applyUpdate`。
+    func resetTransientState() {
+        resetSession()
+    }
+
     // MARK: - Session start
 
     /// 按下修饰键那一刻就定位光标下的窗口并建立会话,整个按住期间只拖这一个窗口。

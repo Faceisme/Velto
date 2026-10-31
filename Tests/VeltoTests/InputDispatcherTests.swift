@@ -24,6 +24,7 @@ private final class FakeKeyRemap: KeyRemapInput {
   func handleFlagsChanged(event: CGEvent) -> Bool { recorder.hit("keyRemap.flags") }
   func handleKeyDown(event: CGEvent) -> Bool { recorder.hit("keyRemap.keyDown") }
   func handleKeyUp(event: CGEvent) -> Bool { recorder.hit("keyRemap.keyUp") }
+  func resetTransientState() { _ = recorder.hit("keyRemap.reset") }
 }
 
 private final class FakePunctuation: PunctuationInput {
@@ -32,6 +33,7 @@ private final class FakePunctuation: PunctuationInput {
   func handleKeyDown(event: CGEvent) -> Bool { recorder.hit("punctuation.keyDown") }
   func shouldConsumeKeyUp(event: CGEvent) -> Bool { recorder.hit("punctuation.keyUp") }
   func noteMouseDown() { _ = recorder.hit("punctuation.mouseDown") }
+  func resetTransientState() { _ = recorder.hit("punctuation.reset") }
 }
 
 private final class FakeMouseControl: MouseTriggerInput {
@@ -42,6 +44,7 @@ private final class FakeMouseControl: MouseTriggerInput {
     lastType = type
     return recorder.hit("mouseControl")
   }
+  func resetTransientState() { _ = recorder.hit("mouseControl.reset") }
 }
 
 private final class FakeGesture: GestureInput {
@@ -55,6 +58,7 @@ private final class FakeGesture: GestureInput {
   func handleButtonTriggerDown(event: CGEvent, normalizedFlags: UInt64) -> Bool { recorder.hit("gesture.buttonDown") }
   func handleButtonTriggerUp(button: Int64) -> Bool { recorder.hit("gesture.buttonUp") }
   func isHoldingTriggerButton(_ button: Int64) -> Bool { holdingButtons.contains(button) }
+  func resetTransientState() { _ = recorder.hit("gesture.reset") }
 }
 
 /// 增强 Finder、截图只用到 `handleKeyDown`,和窗口快捷键共用一个假实现。
@@ -70,6 +74,7 @@ private final class FakeShortcut: WindowShortcutInput {
   func handleMouseDown(event: CGEvent, normalizedFlags raw: UInt64) -> Bool { recorder.hit("\(name).buttonDown") }
   func handleMouseUp(button: Int64) -> Bool { recorder.hit("\(name).buttonUp") }
   func isHoldingButton(_ button: Int64) -> Bool { holdingButtons.contains(button) }
+  func resetTransientState() { _ = recorder.hit("\(name).reset") }
 }
 
 private final class FakeWindowDrag: WindowDragInput {
@@ -83,12 +88,14 @@ private final class FakeWindowDrag: WindowDragInput {
     _ = recorder.hit("windowDrag.moved")
   }
   func handleFlagsChanged(event: CGEvent, normalizedFlags raw: UInt64) { _ = recorder.hit("windowDrag.flags") }
+  func resetTransientState() { _ = recorder.hit("windowDrag.reset") }
 }
 
 private final class FakeContentZoom: ContentZoomInput {
   let recorder: Recorder
   init(_ recorder: Recorder) { self.recorder = recorder }
   func handleFlagsChanged(normalizedFlags raw: UInt64) { _ = recorder.hit("contentZoom.flags") }
+  func resetTransientState() { _ = recorder.hit("contentZoom.reset") }
 }
 
 private final class Harness {
@@ -629,6 +636,24 @@ struct InputDispatcherRewriteTests {
     let harness = Harness()
     #expect(try !harness.send(.scrollWheel))
     #expect(harness.recorder.calls.isEmpty)
+  }
+}
+
+// MARK: - tap 重启
+
+@Suite("事件分发:tap 重启")
+struct InputDispatcherResetTests {
+  /// tap 被禁用期间事件全丢,哪个模块漏了复位,状态就一直错下去。
+  @Test("每个模块都会复位")
+  func everyModuleResets() {
+    let harness = Harness()
+    harness.dispatcher.resetTransientState()
+    #expect(Set(harness.recorder.calls) == [
+      "keyRemap.reset", "punctuation.reset", "mouseControl.reset", "gesture.reset",
+      "betterFinder.reset", "screenshot.reset", "windowShortcut.reset", "windowDrag.reset",
+      "contentZoom.reset",
+    ])
+    #expect(harness.recorder.calls.count == 9)
   }
 }
 

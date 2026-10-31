@@ -192,7 +192,7 @@ final class GestureEngine: @unchecked Sendable {
     /// tap 被系统禁用再重启时调用:被禁用期间发生的 `rightMouseUp` 会丢失,引擎若停在
     /// `.gesturing` / `.pending` 半路,之后每个新手势都会把它判为 abandoned、连环失灵。
     /// 这里强制收尾回到 idle(不执行任何手势)。tap 线程调用。
-    func abortForTapRestart() {
+    func resetTransientState() {
         // 禁用期间按钮的 up 也会丢,清掉记账,免得之后那颗按钮透传时 up 被误吞。
         heldTriggerButtons.removeAll()
         guard state != .idle else { return }

@@ -90,6 +90,8 @@ final class InputSourcePunctuationController: @unchecked Sendable {
 
   /// 合成事件源建一次复用(每次重建要走 IOKit,是热路径里最重的一步)。tap 线程独占。
   private let eventSource = CGEventSource(stateID: .privateState)
+  /// 测试时替换,不然字符会真的打进当前窗口。
+  var eventPoster: (CGEvent) -> Void = { $0.post(tap: .cghidEventTap) }
 
   /// keycode → (无 Shift, 有 Shift) 的英文字符;nil = 该组合不替换。
   /// 底表对齐 ISP 的映射表,另补上 ISP 原表漏掉、但中文输入法确实会转全角的四个:
@@ -135,6 +137,12 @@ final class InputSourcePunctuationController: @unchecked Sendable {
     guard imeProcessID != pid else { return }
     imeProcessID = pid
     InputSourceSwitchDebugLog.log("强制英文标点 imePID=\(pid.map(String.init) ?? "nil")")
+  }
+
+  /// tap 线程。禁用期间抬起事件丢了,记着的「待吞抬起」不清掉会误吞之后那次抬起。
+  func resetTransientState() {
+    suppressedKeyUpCounts.removeAll()
+    compositionTracker.reset()
   }
 
   /// 在 tap 线程调用:鼠标按下会提交/取消 IME 组字,推演状态跟着归零。
@@ -250,8 +258,8 @@ final class InputSourcePunctuationController: @unchecked Sendable {
           let down = makeSyntheticEvent(source: source, replacement: replacement, keyDown: true, timestamp: originalTimestamp),
           let up = makeSyntheticEvent(source: source, replacement: replacement, keyDown: false, timestamp: originalTimestamp)
     else { return false }
-    down.post(tap: .cghidEventTap)
-    up.post(tap: .cghidEventTap)
+    eventPoster(down)
+    eventPoster(up)
     return true
   }
 

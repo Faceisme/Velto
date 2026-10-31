@@ -491,13 +491,10 @@ final class EventTapManager: @unchecked Sendable {
         }
 
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-            // tap 被系统禁用期间事件全丢(含 rightMouseUp)。重启后必须把手势引擎也复位,
-            // 否则它会卡在 .gesturing 半路,导致之后的手势连环判为 abandoned、整片失灵。
-            mouseControlController.resetTransientState()
-            gestureEngine.abortForTapRestart()
-            windowShortcutController.resetTransientState()
-            // 禁用期间修饰键松开也会丢;拖窗会话靠下一次 flagsChanged 自清,这里只留痕,
-            // 方便对照"resize 拖错窗口"是不是赶上了 tap 被禁用。
+            // tap 被系统禁用期间事件全丢(含 rightMouseUp)。重启后所有模块都要复位,
+            // 否则手势会卡在 .gesturing 半路,之后的手势连环判为 abandoned、整片失灵。
+            // 留痕方便对照"resize 拖错窗口"之类的问题是不是赶上了 tap 被禁用。
+            dispatcher.resetTransientState()
             WindowManagementDebugLog.log(
                 "⚠️ event tap 被系统禁用(\(type == .tapDisabledByTimeout ? "超时" : "用户输入")),已重新启用")
             if let eventTap {

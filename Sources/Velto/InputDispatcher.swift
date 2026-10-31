@@ -43,28 +43,35 @@ enum InputEventOrigin: Equatable {
 
 // MARK: - 各模块接入分发的接口
 
+/// 接入分发的模块都要能清掉瞬态:tap 被系统禁用期间事件全丢,按下没等到抬起的记录留着
+/// 就会出错(手势卡在半路、修饰键粘住、下一次抬起被误吞)。写进协议,新模块不实现就编译
+/// 不过,不会再漏。
+protocol InputModule: AnyObject {
+    func resetTransientState()
+}
+
 /// 全局快捷键:增强 Finder、截图、窗口最大化。
-protocol GlobalShortcutInput: AnyObject {
+protocol GlobalShortcutInput: InputModule {
     func handleKeyDown(event: CGEvent, normalizedFlags raw: UInt64) -> Bool
 }
 
-protocol KeyRemapInput: AnyObject {
+protocol KeyRemapInput: InputModule {
     func handleFlagsChanged(event: CGEvent) -> Bool
     func handleKeyDown(event: CGEvent) -> Bool
     func handleKeyUp(event: CGEvent) -> Bool
 }
 
-protocol PunctuationInput: AnyObject {
+protocol PunctuationInput: InputModule {
     func handleKeyDown(event: CGEvent) -> Bool
     func shouldConsumeKeyUp(event: CGEvent) -> Bool
     func noteMouseDown()
 }
 
-protocol MouseTriggerInput: AnyObject {
+protocol MouseTriggerInput: InputModule {
     func handleTriggerEvent(type: CGEventType, event: CGEvent, normalizedFlags: UInt64) -> Bool
 }
 
-protocol GestureInput: AnyObject {
+protocol GestureInput: InputModule {
     var isHandlingRightMouse: Bool { get }
     func handleRightMouseDown(at location: CGPoint, originalEvent: CGEvent?) -> Bool
     func handleRightMouseDragged(at location: CGPoint) -> Bool
@@ -80,18 +87,26 @@ protocol WindowShortcutInput: GlobalShortcutInput {
     func isHoldingButton(_ button: Int64) -> Bool
 }
 
-protocol WindowDragInput: AnyObject {
+protocol WindowDragInput: InputModule {
     func dragMode(forNormalizedFlags raw: UInt64) -> WindowDragController.DragMode?
     func handleMouseMoved(at location: CGPoint, mode: WindowDragController.DragMode)
     func handleFlagsChanged(event: CGEvent, normalizedFlags raw: UInt64)
 }
 
-protocol ContentZoomInput: AnyObject {
+protocol ContentZoomInput: InputModule {
     func handleFlagsChanged(normalizedFlags raw: UInt64)
 }
 
-extension BetterFinderGlobalShortcutController: GlobalShortcutInput {}
-extension ScreenshotShortcutController: GlobalShortcutInput {}
+extension BetterFinderGlobalShortcutController: GlobalShortcutInput {
+    /// 只匹配 keyDown,没有按住状态。
+    func resetTransientState() {}
+}
+
+extension ScreenshotShortcutController: GlobalShortcutInput {
+    /// 只匹配 keyDown,没有按住状态。
+    func resetTransientState() {}
+}
+
 extension KeyRemapController: KeyRemapInput {}
 extension InputSourcePunctuationController: PunctuationInput {}
 extension MouseControlController: MouseTriggerInput {}
@@ -139,6 +154,13 @@ final class InputDispatcher {
 
     init(modules: Modules) {
         self.modules = modules
+    }
+
+    /// tap 被系统禁用后调用。遍历 `Modules` 的全部字段,新增模块不用在这里登记。
+    func resetTransientState() {
+        for module in Mirror(reflecting: modules).children {
+            (module.value as? any InputModule)?.resetTransientState()
+        }
     }
 
     /// 返回 `true` 表示事件被吞掉。`event` 可能被就地改写(坐标、类型)。

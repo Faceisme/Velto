@@ -75,6 +75,10 @@ final class ContentZoomController: @unchecked Sendable {
         }
     }
 
+    func resetTransientState() {
+        resetSmoothing()
+    }
+
     // MARK: - Smoothing pipeline
 
     private func enqueue(delta: Double) {

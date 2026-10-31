@@ -26,12 +26,15 @@ final class KeyRemapController: @unchecked Sendable {
 
   private var suppressedModifiers: Set<UInt16> = []   // 已吞掉的修饰键 keyCode（Mode B）
   private var activeRemaps: [UInt16: CompiledManipulator] = [:]        // 已按下待 keyUp
+  private var heldModifierRemaps: [UInt16: CompiledManipulator] = [:]  // 修饰键源已按下待松开
   private var previousFlags: CGEventFlags = []
   private var hyperActive: Bool = false               // hyper key 是否激活中
 
   // 合成事件用的 event source 建一次复用。每次按键重建要走 IOKit + 查 HID 状态，
   // 是热路径里最重的一步；这里只在 tap 线程访问，无需加锁。
   private let eventSource = CGEventSource(stateID: .hidSystemState)
+  /// 测试时替换,不然按键会真的发给系统。
+  var eventPoster: (CGEvent) -> Void = { $0.post(tap: .cghidEventTap) }
 
   // MARK: - 更新查找表（在 tap 线程调用）
 
@@ -74,10 +77,7 @@ final class KeyRemapController: @unchecked Sendable {
     modeB_mandatoryCodes = modeCodes
 
     // 规则更新时清空运行状态，避免悬挂
-    suppressedModifiers = []
-    activeRemaps = [:]
-    hyperActive = false
-    previousFlags = []
+    resetTransientState()
 
     if logging {
       let normalKeys = normal.keys.sorted().map { Self.label($0) }.joined(separator: ", ")
@@ -87,6 +87,19 @@ final class KeyRemapController: @unchecked Sendable {
         "| modifierKeyTable: [\(modKeys.isEmpty ? "空" : modKeys)] " +
         "| Mode B mandatory: [\(modeBKeys.isEmpty ? "无" : modeBKeys)]")
     }
+  }
+
+  /// 事件丢了(tap 被系统禁用)或规则换了:已经合成按下、等不到抬起的目标键要补发抬起,
+  /// 否则系统一直当它按着,修饰键类目标会粘住。
+  func resetTransientState() {
+    for manipulator in Array(activeRemaps.values) + Array(heldModifierRemaps.values) {
+      for action in manipulator.toActions { synthesize(action: action, press: false) }
+    }
+    activeRemaps = [:]
+    heldModifierRemaps = [:]
+    suppressedModifiers = []
+    hyperActive = false
+    previousFlags = []
   }
 
   // MARK: - Event handlers（返回 true = 事件已消费，EventTapManager 应 return nil）
@@ -154,6 +167,7 @@ final class KeyRemapController: @unchecked Sendable {
     if logging {
       KeyRemapDebugLog.log("  Mode A 命中: \(Self.label(keyCode)) pressed=\(pressed) → 合成 \(manipulator.toActions.count) 个动作")
     }
+    heldModifierRemaps[keyCode] = pressed ? manipulator : nil
     for action in manipulator.toActions {
       synthesize(action: action, press: pressed)
     }
@@ -261,7 +275,7 @@ final class KeyRemapController: @unchecked Sendable {
       }
       e.flags = flags
       e.setIntegerValueField(.eventSourceUserData, value: marker)
-      e.post(tap: .cghidEventTap)
+      eventPoster(e)
       if logging {
         KeyRemapDebugLog.log("    ✓ 已合成 key \(Self.label(keyCode)) \(press ? "Down" : "Up") flags=\(Self.describeFlags(flags)) → post(.cghidEventTap)")
       }
@@ -276,7 +290,7 @@ final class KeyRemapController: @unchecked Sendable {
       e.type = .flagsChanged
       e.flags = newFlags
       e.setIntegerValueField(.eventSourceUserData, value: marker)
-      e.post(tap: .cghidEventTap)
+      eventPoster(e)
       if logging {
         KeyRemapDebugLog.log("    ✓ 已合成 flagsChanged \(Self.label(keyCode)) \(press ? "on" : "off") flags=\(Self.describeFlags(newFlags)) → post(.cghidEventTap)")
       }
