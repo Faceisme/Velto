@@ -46,22 +46,27 @@ enum BrowserEdgeScroll {
         edge == .top ? pixelsPerEvent : -pixelsPerEvent
     }
 
-    /// `point` 用手势起点:终点可能已经画到标签栏上,而事件落点决定滚哪个容器。
+    /// 事件留在光标当前位置,别改 `location`:post 到 session tap 时事件坐标会把系统光标
+    /// 一起带过去,松手后光标就跳回手势起点。`postToPid` 倒是不动光标,但这样新建的事件
+    /// Chrome 不接(补上窗口号、phase 也不行),鼠标控制能用它是因为复用了真实滚轮事件。
+    static func makeWheelEvent(for edge: Edge) -> CGEvent? {
+        let event = CGEvent(
+            scrollWheelEvent2Source: nil,
+            units: .pixel,
+            wheelCount: 1,
+            wheel1: wheelDelta(for: edge),
+            wheel2: 0,
+            wheel3: 0
+        )
+        event?.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
+        event?.setIntegerValueField(.eventSourceUserData, value: MouseControlController.syntheticScrollMarker)
+        return event
+    }
+
     @MainActor
-    static func send(_ edge: Edge, at point: CGPoint) async {
+    static func send(_ edge: Edge) async {
         for _ in 0..<eventCount {
-            guard let event = CGEvent(
-                scrollWheelEvent2Source: nil,
-                units: .pixel,
-                wheelCount: 1,
-                wheel1: wheelDelta(for: edge),
-                wheel2: 0,
-                wheel3: 0
-            ) else { return }
-            event.location = point
-            event.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
-            event.setIntegerValueField(.eventSourceUserData, value: MouseControlController.syntheticScrollMarker)
-            event.post(tap: .cgSessionEventTap)
+            makeWheelEvent(for: edge)?.post(tap: .cgSessionEventTap)
             try? await Task.sleep(for: eventInterval)
         }
     }

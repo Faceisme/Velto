@@ -39,6 +39,20 @@ struct BrowserEdgeScrollTests {
     #expect(BrowserEdgeScroll.wheelDelta(for: .bottom) < 0)
   }
 
+  /// 带了别处的坐标,post 到 session tap 时会把系统光标带过去(手势松手后光标跳回起点)。
+  @Test("滚轮事件留在光标当前位置")
+  func wheelEventStaysAtCursor() throws {
+    let event = try #require(BrowserEdgeScroll.makeWheelEvent(for: .top))
+    let cursor = try #require(CGEvent(source: nil)).location
+    #expect(event.location == cursor)
+  }
+
+  @Test("滚轮事件带合成标记,不被鼠标控制再处理一遍")
+  func wheelEventCarriesSyntheticMarker() throws {
+    let event = try #require(BrowserEdgeScroll.makeWheelEvent(for: .bottom))
+    #expect(event.getIntegerValueField(.eventSourceUserData) == MouseControlController.syntheticScrollMarker)
+  }
+
   @Test("拿不到 App 时不补滚轮")
   func unknownApplicationIsNotBrowser() {
     #expect(!BrowserEdgeScroll.isBrowser(nil))

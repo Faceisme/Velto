@@ -551,7 +551,6 @@ final class GestureEngine: @unchecked Sendable {
             executeMatchedGesture(
                 shortcut: shortcut,
                 target: target,
-                targetPoint: targetPoint,
                 frontmostApplicationAtGestureStart: frontmostApplicationAtGestureStart
             )
 
@@ -582,7 +581,6 @@ final class GestureEngine: @unchecked Sendable {
                     self.executeMatchedGesture(
                         shortcut: shortcut,
                         target: target,
-                        targetPoint: targetPoint,
                         frontmostApplicationAtGestureStart: frontmostApplicationAtGestureStart
                     )
                 }
@@ -594,7 +592,6 @@ final class GestureEngine: @unchecked Sendable {
     private func executeMatchedGesture(
         shortcut: Shortcut,
         target: GestureExecutionTarget,
-        targetPoint: CGPoint,
         frontmostApplicationAtGestureStart: NSRunningApplication?
     ) {
         GestureTargetController.prepareForExecution(target)
@@ -639,8 +636,8 @@ final class GestureEngine: @unchecked Sendable {
             // 有的网页不响应 ⌘↑/⌘↓,浏览器里先补一组滚轮(必须在按键之前,见 BrowserEdgeScroll)。
             if let edge = BrowserEdgeScroll.edge(for: shortcut),
                BrowserEdgeScroll.isBrowser(watchPid.flatMap(NSRunningApplication.init(processIdentifier:)) ?? front) {
-                WindowManagementDebugLog.log("  🖱 补滚轮 \(edge) @ (\(Int(targetPoint.x)),\(Int(targetPoint.y)))")
-                await BrowserEdgeScroll.send(edge, at: targetPoint)
+                WindowManagementDebugLog.log("  🖱 补滚轮 \(edge)")
+                await BrowserEdgeScroll.send(edge)
             }
             ShortcutSynthesizer.send(shortcut)
             if let watchPid {
