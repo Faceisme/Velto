@@ -129,7 +129,7 @@ enum SwitcherAppearanceStyle: String, Codable, CaseIterable, Hashable {
 /// 持久化路径:嵌在 AppPreferences.switcher 里走同一份 JSON,跟手势 / 窗口管理
 /// 的偏好共享 `GestureStore.savePreferences()`。
 ///
-/// 字段添加规则:**只能加,不能改类型/删字段**。`init(from:)` 用 decodeIfPresent
+/// 字段添加规则:**只能加,不能改类型/删字段**。`init(from:)` 用 decodeField
 /// 兜底 nil → defaults,保证老用户升级时偏好不丢。
 struct SwitcherPreferences: Codable, Equatable {
     /// 总开关。关掉后 Cmd+Tab 会还给系统原生 switcher。
@@ -213,19 +213,19 @@ struct SwitcherPreferences: Codable, Equatable {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         let d = Self.defaults
-        enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? d.enabled
-        debugLoggingEnabled = try c.decodeIfPresent(Bool.self, forKey: .debugLoggingEnabled) ?? d.debugLoggingEnabled
-        triggerShortcut = try c.decodeIfPresent(Shortcut.self, forKey: .triggerShortcut) ?? d.triggerShortcut
-        appsToShow = try c.decodeIfPresent(SwitcherAppsScope.self, forKey: .appsToShow) ?? d.appsToShow
-        spacesToShow = try c.decodeIfPresent(SwitcherSpacesScope.self, forKey: .spacesToShow) ?? d.spacesToShow
-        screensToShow = try c.decodeIfPresent(SwitcherScreensScope.self, forKey: .screensToShow) ?? d.screensToShow
-        minimizedWindows = try c.decodeIfPresent(SwitcherShowMode.self, forKey: .minimizedWindows) ?? d.minimizedWindows
-        hiddenWindows = try c.decodeIfPresent(SwitcherShowMode.self, forKey: .hiddenWindows) ?? d.hiddenWindows
-        fullscreenWindows = try c.decodeIfPresent(SwitcherShowMode.self, forKey: .fullscreenWindows) ?? d.fullscreenWindows
-        windowlessApps = try c.decodeIfPresent(SwitcherShowMode.self, forKey: .windowlessApps) ?? d.windowlessApps
-        sortBy = try c.decodeIfPresent(SwitcherSortOrder.self, forKey: .sortBy) ?? d.sortBy
-        groupBy = try c.decodeIfPresent(SwitcherGroupingMode.self, forKey: .groupBy) ?? d.groupBy
-        showOnScreen = try c.decodeIfPresent(SwitcherScreenChoice.self, forKey: .showOnScreen) ?? d.showOnScreen
-        appearanceStyle = try c.decodeIfPresent(SwitcherAppearanceStyle.self, forKey: .appearanceStyle) ?? d.appearanceStyle
+        enabled = try c.decodeField(Bool.self, forKey: .enabled, in: decoder) ?? d.enabled
+        debugLoggingEnabled = try c.decodeField(Bool.self, forKey: .debugLoggingEnabled, in: decoder) ?? d.debugLoggingEnabled
+        triggerShortcut = try c.decodeField(Shortcut.self, forKey: .triggerShortcut, in: decoder) ?? d.triggerShortcut
+        appsToShow = try c.decodeField(SwitcherAppsScope.self, forKey: .appsToShow, in: decoder) ?? d.appsToShow
+        spacesToShow = try c.decodeField(SwitcherSpacesScope.self, forKey: .spacesToShow, in: decoder) ?? d.spacesToShow
+        screensToShow = try c.decodeField(SwitcherScreensScope.self, forKey: .screensToShow, in: decoder) ?? d.screensToShow
+        minimizedWindows = try c.decodeField(SwitcherShowMode.self, forKey: .minimizedWindows, in: decoder) ?? d.minimizedWindows
+        hiddenWindows = try c.decodeField(SwitcherShowMode.self, forKey: .hiddenWindows, in: decoder) ?? d.hiddenWindows
+        fullscreenWindows = try c.decodeField(SwitcherShowMode.self, forKey: .fullscreenWindows, in: decoder) ?? d.fullscreenWindows
+        windowlessApps = try c.decodeField(SwitcherShowMode.self, forKey: .windowlessApps, in: decoder) ?? d.windowlessApps
+        sortBy = try c.decodeField(SwitcherSortOrder.self, forKey: .sortBy, in: decoder) ?? d.sortBy
+        groupBy = try c.decodeField(SwitcherGroupingMode.self, forKey: .groupBy, in: decoder) ?? d.groupBy
+        showOnScreen = try c.decodeField(SwitcherScreenChoice.self, forKey: .showOnScreen, in: decoder) ?? d.showOnScreen
+        appearanceStyle = try c.decodeField(SwitcherAppearanceStyle.self, forKey: .appearanceStyle, in: decoder) ?? d.appearanceStyle
     }
 }

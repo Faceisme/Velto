@@ -131,7 +131,7 @@ struct GestureAppProfile: Codable, Identifiable, Equatable {
 struct AppPreferences: Codable, Equatable {
     var gesturesEnabled: Bool
     /// 窗口管理(拖窗 / 内容缩放 / 窗口快捷键)总开关。关掉只停这三项,不影响手势 /
-    /// 鼠标控制。带默认值,旧配置(无此字段)解码时按 `decodeIfPresent` 回退到 true。
+    /// 鼠标控制。带默认值,旧配置(无此字段)解码时按 `decodeField` 回退到 true。
     var windowManagementEnabled: Bool = true
     /// 窗口管理调试日志开关。默认关,关闭时日志路径零文件开销。开启后写
     /// ~/Library/Logs/Velto/window-management.log,记录 move/resize 目标定位决策。
@@ -209,29 +209,29 @@ struct AppPreferences: Codable, Equatable {
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        gesturesEnabled = try container.decodeIfPresent(Bool.self, forKey: .gesturesEnabled) ?? Self.defaults.gesturesEnabled
-        windowManagementEnabled = try container.decodeIfPresent(Bool.self, forKey: .windowManagementEnabled) ?? Self.defaults.windowManagementEnabled
-        windowManagementDebugLoggingEnabled = try container.decodeIfPresent(Bool.self, forKey: .windowManagementDebugLoggingEnabled) ?? Self.defaults.windowManagementDebugLoggingEnabled
-        networkMonitorEnabled = try container.decodeIfPresent(Bool.self, forKey: .networkMonitorEnabled) ?? Self.defaults.networkMonitorEnabled
-        showTrail = try container.decodeIfPresent(Bool.self, forKey: .showTrail) ?? Self.defaults.showTrail
-        showMenuBarIcon = try container.decodeIfPresent(Bool.self, forKey: .showMenuBarIcon) ?? Self.defaults.showMenuBarIcon
-        recognitionThreshold = try container.decodeIfPresent(Double.self, forKey: .recognitionThreshold) ?? Self.defaults.recognitionThreshold
-        gestureTimeoutSeconds = try container.decodeIfPresent(Double.self, forKey: .gestureTimeoutSeconds) ?? Self.defaults.gestureTimeoutSeconds
-        scribbleCancelEnabled = try container.decodeIfPresent(Bool.self, forKey: .scribbleCancelEnabled) ?? Self.defaults.scribbleCancelEnabled
-        debugLoggingEnabled = try container.decodeIfPresent(Bool.self, forKey: .debugLoggingEnabled) ?? Self.defaults.debugLoggingEnabled
-        gestureTargetPolicy = try container.decodeIfPresent(GestureTargetPolicy.self, forKey: .gestureTargetPolicy) ?? Self.defaults.gestureTargetPolicy
-        windowMoveModifierFlags = try container.decodeIfPresent(UInt64.self, forKey: .windowMoveModifierFlags) ?? Self.defaults.windowMoveModifierFlags
-        windowResizeModifierFlags = try container.decodeIfPresent(UInt64.self, forKey: .windowResizeModifierFlags) ?? Self.defaults.windowResizeModifierFlags
-        contentZoomModifierFlags = try container.decodeIfPresent(UInt64.self, forKey: .contentZoomModifierFlags) ?? Self.defaults.contentZoomModifierFlags
-        windowMaximizeShortcut = try container.decodeIfPresent(Shortcut.self, forKey: .windowMaximizeShortcut) ?? Self.defaults.windowMaximizeShortcut
-        windowMaximizeButton = try container.decodeIfPresent(MouseButtonTrigger.self, forKey: .windowMaximizeButton)
-        windowMaximizeButtonExcludedApps = try container.decodeIfPresent([String].self, forKey: .windowMaximizeButtonExcludedApps) ?? []
-        mouseControl = try container.decodeIfPresent(MouseControlPreferences.self, forKey: .mouseControl) ?? Self.defaults.mouseControl
-        switcher = try container.decodeIfPresent(SwitcherPreferences.self, forKey: .switcher) ?? Self.defaults.switcher
-        inputSourceSwitch = try container.decodeIfPresent(InputSourceSwitchPreferences.self, forKey: .inputSourceSwitch) ?? Self.defaults.inputSourceSwitch
-        screenshot = try container.decodeIfPresent(ScreenshotPreferences.self, forKey: .screenshot) ?? Self.defaults.screenshot
-        focusAutomation = try container.decodeIfPresent(FocusAutomationPreferences.self, forKey: .focusAutomation) ?? Self.defaults.focusAutomation
-        macAssistant = try container.decodeIfPresent(MacAssistantPreferences.self, forKey: .macAssistant) ?? Self.defaults.macAssistant
+        gesturesEnabled = try container.decodeField(Bool.self, forKey: .gesturesEnabled, in: decoder) ?? Self.defaults.gesturesEnabled
+        windowManagementEnabled = try container.decodeField(Bool.self, forKey: .windowManagementEnabled, in: decoder) ?? Self.defaults.windowManagementEnabled
+        windowManagementDebugLoggingEnabled = try container.decodeField(Bool.self, forKey: .windowManagementDebugLoggingEnabled, in: decoder) ?? Self.defaults.windowManagementDebugLoggingEnabled
+        networkMonitorEnabled = try container.decodeField(Bool.self, forKey: .networkMonitorEnabled, in: decoder) ?? Self.defaults.networkMonitorEnabled
+        showTrail = try container.decodeField(Bool.self, forKey: .showTrail, in: decoder) ?? Self.defaults.showTrail
+        showMenuBarIcon = try container.decodeField(Bool.self, forKey: .showMenuBarIcon, in: decoder) ?? Self.defaults.showMenuBarIcon
+        recognitionThreshold = try container.decodeField(Double.self, forKey: .recognitionThreshold, in: decoder) ?? Self.defaults.recognitionThreshold
+        gestureTimeoutSeconds = try container.decodeField(Double.self, forKey: .gestureTimeoutSeconds, in: decoder) ?? Self.defaults.gestureTimeoutSeconds
+        scribbleCancelEnabled = try container.decodeField(Bool.self, forKey: .scribbleCancelEnabled, in: decoder) ?? Self.defaults.scribbleCancelEnabled
+        debugLoggingEnabled = try container.decodeField(Bool.self, forKey: .debugLoggingEnabled, in: decoder) ?? Self.defaults.debugLoggingEnabled
+        gestureTargetPolicy = try container.decodeField(GestureTargetPolicy.self, forKey: .gestureTargetPolicy, in: decoder) ?? Self.defaults.gestureTargetPolicy
+        windowMoveModifierFlags = try container.decodeField(UInt64.self, forKey: .windowMoveModifierFlags, in: decoder) ?? Self.defaults.windowMoveModifierFlags
+        windowResizeModifierFlags = try container.decodeField(UInt64.self, forKey: .windowResizeModifierFlags, in: decoder) ?? Self.defaults.windowResizeModifierFlags
+        contentZoomModifierFlags = try container.decodeField(UInt64.self, forKey: .contentZoomModifierFlags, in: decoder) ?? Self.defaults.contentZoomModifierFlags
+        windowMaximizeShortcut = try container.decodeField(Shortcut.self, forKey: .windowMaximizeShortcut, in: decoder) ?? Self.defaults.windowMaximizeShortcut
+        windowMaximizeButton = try container.decodeField(MouseButtonTrigger.self, forKey: .windowMaximizeButton, in: decoder)
+        windowMaximizeButtonExcludedApps = try container.decodeField([String].self, forKey: .windowMaximizeButtonExcludedApps, in: decoder) ?? []
+        mouseControl = try container.decodeField(MouseControlPreferences.self, forKey: .mouseControl, in: decoder) ?? Self.defaults.mouseControl
+        switcher = try container.decodeField(SwitcherPreferences.self, forKey: .switcher, in: decoder) ?? Self.defaults.switcher
+        inputSourceSwitch = try container.decodeField(InputSourceSwitchPreferences.self, forKey: .inputSourceSwitch, in: decoder) ?? Self.defaults.inputSourceSwitch
+        screenshot = try container.decodeField(ScreenshotPreferences.self, forKey: .screenshot, in: decoder) ?? Self.defaults.screenshot
+        focusAutomation = try container.decodeField(FocusAutomationPreferences.self, forKey: .focusAutomation, in: decoder) ?? Self.defaults.focusAutomation
+        macAssistant = try container.decodeField(MacAssistantPreferences.self, forKey: .macAssistant, in: decoder) ?? Self.defaults.macAssistant
     }
 
     static let defaults = AppPreferences(
@@ -490,7 +490,7 @@ final class GestureStore {
         decoder: JSONDecoder
     ) -> T? {
         guard let data = UserDefaults.standard.data(forKey: key) else { return nil }
-        return try? decoder.decode(T.self, from: data)
+        return ConfigRecovery.decode(T.self, from: data, key: key, decoder: decoder)
     }
 
     private static func defaultGestures() -> [GestureCommand] {

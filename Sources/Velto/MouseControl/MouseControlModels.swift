@@ -274,12 +274,12 @@ struct MouseControlPreferences: Codable, Equatable {
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled) ?? Self.defaults.enabled
-        debugLoggingEnabled = try container.decodeIfPresent(Bool.self, forKey: .debugLoggingEnabled) ?? Self.defaults.debugLoggingEnabled
-        scroll = try container.decodeIfPresent(MouseScrollProfile.self, forKey: .scroll) ?? Self.defaults.scroll
-        hotkeys = try container.decodeIfPresent(MouseScrollHotkeys.self, forKey: .hotkeys) ?? Self.defaults.hotkeys
-        appRules = try container.decodeIfPresent([MouseAppRule].self, forKey: .appRules) ?? Self.defaults.appRules
-        buttonBindings = try container.decodeIfPresent([MouseButtonBinding].self, forKey: .buttonBindings) ?? Self.defaults.buttonBindings
+        enabled = try container.decodeField(Bool.self, forKey: .enabled, in: decoder) ?? Self.defaults.enabled
+        debugLoggingEnabled = try container.decodeField(Bool.self, forKey: .debugLoggingEnabled, in: decoder) ?? Self.defaults.debugLoggingEnabled
+        scroll = try container.decodeField(MouseScrollProfile.self, forKey: .scroll, in: decoder) ?? Self.defaults.scroll
+        hotkeys = try container.decodeField(MouseScrollHotkeys.self, forKey: .hotkeys, in: decoder) ?? Self.defaults.hotkeys
+        appRules = try container.decodeField([MouseAppRule].self, forKey: .appRules, in: decoder) ?? Self.defaults.appRules
+        buttonBindings = try container.decodeField([MouseButtonBinding].self, forKey: .buttonBindings, in: decoder) ?? Self.defaults.buttonBindings
     }
 
     static let defaults = MouseControlPreferences(

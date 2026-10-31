@@ -20,9 +20,8 @@ final class KeyRemapStore {
   private(set) var debugLoggingEnabled: Bool
 
   private init() {
-    if let data = UserDefaults.standard.data(forKey: storageKey),
-       let saved = try? decoder.decode([KeyRemapRule].self, from: data) {
-      rules = saved
+    if let data = UserDefaults.standard.data(forKey: storageKey) {
+      rules = ConfigRecovery.decode([KeyRemapRule].self, from: data, key: storageKey, decoder: decoder) ?? []
     } else {
       rules = []
     }

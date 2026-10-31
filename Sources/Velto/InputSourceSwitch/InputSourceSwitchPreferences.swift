@@ -154,7 +154,7 @@ struct InputSourceBrowserRule: Codable, Identifiable, Equatable {
 /// 输入法切换的全部用户配置。嵌进 AppPreferences.inputSourceSwitch,与手势/窗口/
 /// 切换器共享同一份 `Velto.preferences` JSON。
 ///
-/// 字段添加规则:**只能加,不能改类型/删字段**。`init(from:)` 用 decodeIfPresent
+/// 字段添加规则:**只能加,不能改类型/删字段**。`init(from:)` 用 decodeField
 /// 兜底 nil → defaults,保证老用户升级时偏好不丢。
 struct InputSourceSwitchPreferences: Codable, Equatable {
   /// 总开关。默认 false —— 自动改用户输入法属于"侵入式",必须用户显式开。
@@ -187,18 +187,18 @@ struct InputSourceSwitchPreferences: Codable, Equatable {
   init(from decoder: Decoder) throws {
     let c = try decoder.container(keyedBy: CodingKeys.self)
     let d = Self.defaults
-    enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? d.enabled
-    debugLoggingEnabled = try c.decodeIfPresent(Bool.self, forKey: .debugLoggingEnabled) ?? d.debugLoggingEnabled
-    systemDefaultInputSourceID = try c.decodeIfPresent(String.self, forKey: .systemDefaultInputSourceID) ?? d.systemDefaultInputSourceID
-    browserAddressDefaultInputSourceID = try c.decodeIfPresent(String.self, forKey: .browserAddressDefaultInputSourceID) ?? d.browserAddressDefaultInputSourceID
-    restoreStrategy = try c.decodeIfPresent(InputSourceRestoreStrategy.self, forKey: .restoreStrategy) ?? d.restoreStrategy
-    cjkFixEnabled = try c.decodeIfPresent(Bool.self, forKey: .cjkFixEnabled) ?? d.cjkFixEnabled
-    cjkFixStrategy = try c.decodeIfPresent(InputSourceCJKFixStrategy.self, forKey: .cjkFixStrategy) ?? d.cjkFixStrategy
-    enabledBrowserBundleIDs = try c.decodeIfPresent(Set<String>.self, forKey: .enabledBrowserBundleIDs) ?? d.enabledBrowserBundleIDs
-    forceEnglishPunctuationEnabled = try c.decodeIfPresent(Bool.self, forKey: .forceEnglishPunctuationEnabled) ?? d.forceEnglishPunctuationEnabled
-    appGroups = try c.decodeIfPresent([InputSourceAppGroup].self, forKey: .appGroups) ?? d.appGroups
-    appRules = try c.decodeIfPresent([InputSourceAppRule].self, forKey: .appRules) ?? d.appRules
-    browserRules = try c.decodeIfPresent([InputSourceBrowserRule].self, forKey: .browserRules) ?? d.browserRules
+    enabled = try c.decodeField(Bool.self, forKey: .enabled, in: decoder) ?? d.enabled
+    debugLoggingEnabled = try c.decodeField(Bool.self, forKey: .debugLoggingEnabled, in: decoder) ?? d.debugLoggingEnabled
+    systemDefaultInputSourceID = try c.decodeField(String.self, forKey: .systemDefaultInputSourceID, in: decoder) ?? d.systemDefaultInputSourceID
+    browserAddressDefaultInputSourceID = try c.decodeField(String.self, forKey: .browserAddressDefaultInputSourceID, in: decoder) ?? d.browserAddressDefaultInputSourceID
+    restoreStrategy = try c.decodeField(InputSourceRestoreStrategy.self, forKey: .restoreStrategy, in: decoder) ?? d.restoreStrategy
+    cjkFixEnabled = try c.decodeField(Bool.self, forKey: .cjkFixEnabled, in: decoder) ?? d.cjkFixEnabled
+    cjkFixStrategy = try c.decodeField(InputSourceCJKFixStrategy.self, forKey: .cjkFixStrategy, in: decoder) ?? d.cjkFixStrategy
+    enabledBrowserBundleIDs = try c.decodeField(Set<String>.self, forKey: .enabledBrowserBundleIDs, in: decoder) ?? d.enabledBrowserBundleIDs
+    forceEnglishPunctuationEnabled = try c.decodeField(Bool.self, forKey: .forceEnglishPunctuationEnabled, in: decoder) ?? d.forceEnglishPunctuationEnabled
+    appGroups = try c.decodeField([InputSourceAppGroup].self, forKey: .appGroups, in: decoder) ?? d.appGroups
+    appRules = try c.decodeField([InputSourceAppRule].self, forKey: .appRules, in: decoder) ?? d.appRules
+    browserRules = try c.decodeField([InputSourceBrowserRule].self, forKey: .browserRules, in: decoder) ?? d.browserRules
   }
 }
 

@@ -117,22 +117,22 @@ struct ScreenshotPreferences: Codable, Equatable {
   init(from decoder: Decoder) throws {
     let c = try decoder.container(keyedBy: CodingKeys.self)
     let d = Self.defaults
-    enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? d.enabled
-    triggerShortcut = try c.decodeIfPresent(Shortcut.self, forKey: .triggerShortcut) ?? d.triggerShortcut
-    copyKeyCode = try c.decodeIfPresent(UInt16.self, forKey: .copyKeyCode) ?? d.copyKeyCode
-    saveShortcut = try c.decodeIfPresent(Shortcut.self, forKey: .saveShortcut) ?? d.saveShortcut
-    cancelKeyCode = try c.decodeIfPresent(UInt16.self, forKey: .cancelKeyCode) ?? d.cancelKeyCode
-    scrollKeyCode = try c.decodeIfPresent(UInt16.self, forKey: .scrollKeyCode) ?? d.scrollKeyCode
-    saveDirectoryPath = try c.decodeIfPresent(String.self, forKey: .saveDirectoryPath) ?? d.saveDirectoryPath
-    saveAlsoCopiesToClipboard = try c.decodeIfPresent(Bool.self, forKey: .saveAlsoCopiesToClipboard) ?? d.saveAlsoCopiesToClipboard
-    imageFormat = try c.decodeIfPresent(ScreenshotImageFormat.self, forKey: .imageFormat) ?? d.imageFormat
-    showMagnifier = try c.decodeIfPresent(Bool.self, forKey: .showMagnifier) ?? d.showMagnifier
-    debugLoggingEnabled = try c.decodeIfPresent(Bool.self, forKey: .debugLoggingEnabled) ?? d.debugLoggingEnabled
-    annotationColor = try c.decodeIfPresent(AnnotationColor.self, forKey: .annotationColor) ?? d.annotationColor
-    annotationLineWidth = try c.decodeIfPresent(CGFloat.self, forKey: .annotationLineWidth) ?? d.annotationLineWidth
-    annotationFontSize = try c.decodeIfPresent(CGFloat.self, forKey: .annotationFontSize) ?? d.annotationFontSize
-    annotationHighlightOpacity = try c.decodeIfPresent(CGFloat.self, forKey: .annotationHighlightOpacity) ?? d.annotationHighlightOpacity
-    annotationMosaicBlockSize = try c.decodeIfPresent(Int.self, forKey: .annotationMosaicBlockSize) ?? d.annotationMosaicBlockSize
-    annotationFillOpacity = try c.decodeIfPresent(CGFloat.self, forKey: .annotationFillOpacity) ?? d.annotationFillOpacity
+    enabled = try c.decodeField(Bool.self, forKey: .enabled, in: decoder) ?? d.enabled
+    triggerShortcut = try c.decodeField(Shortcut.self, forKey: .triggerShortcut, in: decoder) ?? d.triggerShortcut
+    copyKeyCode = try c.decodeField(UInt16.self, forKey: .copyKeyCode, in: decoder) ?? d.copyKeyCode
+    saveShortcut = try c.decodeField(Shortcut.self, forKey: .saveShortcut, in: decoder) ?? d.saveShortcut
+    cancelKeyCode = try c.decodeField(UInt16.self, forKey: .cancelKeyCode, in: decoder) ?? d.cancelKeyCode
+    scrollKeyCode = try c.decodeField(UInt16.self, forKey: .scrollKeyCode, in: decoder) ?? d.scrollKeyCode
+    saveDirectoryPath = try c.decodeField(String.self, forKey: .saveDirectoryPath, in: decoder) ?? d.saveDirectoryPath
+    saveAlsoCopiesToClipboard = try c.decodeField(Bool.self, forKey: .saveAlsoCopiesToClipboard, in: decoder) ?? d.saveAlsoCopiesToClipboard
+    imageFormat = try c.decodeField(ScreenshotImageFormat.self, forKey: .imageFormat, in: decoder) ?? d.imageFormat
+    showMagnifier = try c.decodeField(Bool.self, forKey: .showMagnifier, in: decoder) ?? d.showMagnifier
+    debugLoggingEnabled = try c.decodeField(Bool.self, forKey: .debugLoggingEnabled, in: decoder) ?? d.debugLoggingEnabled
+    annotationColor = try c.decodeField(AnnotationColor.self, forKey: .annotationColor, in: decoder) ?? d.annotationColor
+    annotationLineWidth = try c.decodeField(CGFloat.self, forKey: .annotationLineWidth, in: decoder) ?? d.annotationLineWidth
+    annotationFontSize = try c.decodeField(CGFloat.self, forKey: .annotationFontSize, in: decoder) ?? d.annotationFontSize
+    annotationHighlightOpacity = try c.decodeField(CGFloat.self, forKey: .annotationHighlightOpacity, in: decoder) ?? d.annotationHighlightOpacity
+    annotationMosaicBlockSize = try c.decodeField(Int.self, forKey: .annotationMosaicBlockSize, in: decoder) ?? d.annotationMosaicBlockSize
+    annotationFillOpacity = try c.decodeField(CGFloat.self, forKey: .annotationFillOpacity, in: decoder) ?? d.annotationFillOpacity
   }
 }

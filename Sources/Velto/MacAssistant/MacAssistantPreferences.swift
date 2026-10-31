@@ -18,7 +18,7 @@ struct MacAssistantPreferences: Codable, Equatable {
 
   init(from decoder: Decoder) throws {
     let c = try decoder.container(keyedBy: CodingKeys.self)
-    screenCleanUnlockShortcut = try c.decodeIfPresent(Shortcut.self, forKey: .screenCleanUnlockShortcut)
+    screenCleanUnlockShortcut = try c.decodeField(Shortcut.self, forKey: .screenCleanUnlockShortcut, in: decoder)
       ?? Self.defaults.screenCleanUnlockShortcut
   }
 }

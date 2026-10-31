@@ -118,10 +118,24 @@ public final class BetterFinderPreferencesStore: @unchecked Sendable {
                 persist(cachedPreferences)
             }
         } else {
+            Self.setAsideUndecodableFile(at: fileURL)
             cachedPreferences = .defaults
             persist(cachedPreferences)
         }
         BetterFinderDebugLog.setEnabled(cachedPreferences.debugLoggingEnabled)
+    }
+
+    /// 所有来源都解不出来时马上要写入默认值。文件已经存在就是读不懂,先挪开留底,别覆盖。
+    private static func setAsideUndecodableFile(at url: URL?) {
+        guard let url, FileManager.default.fileExists(atPath: url.path) else { return }
+        let aside = url.deletingPathExtension()
+            .appendingPathExtension("undecodable-\(Int(Date().timeIntervalSince1970)).json")
+        do {
+            try FileManager.default.moveItem(at: url, to: aside)
+            NSLog("BetterFinder preferences undecodable, kept at: %@", aside.path)
+        } catch {
+            NSLog("BetterFinder preferences set-aside failed: %@", error.localizedDescription)
+        }
     }
 
     public func update(_ update: (inout BetterFinderPreferences) -> Void) {

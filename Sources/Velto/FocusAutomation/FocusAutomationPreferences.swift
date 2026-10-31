@@ -45,12 +45,12 @@ struct FocusAutomationPreferences: Codable, Equatable {
   init(from decoder: Decoder) throws {
     let c = try decoder.container(keyedBy: CodingKeys.self)
     let d = Self.defaults
-    enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? d.enabled
-    debugLoggingEnabled = try c.decodeIfPresent(Bool.self, forKey: .debugLoggingEnabled) ?? d.debugLoggingEnabled
-    apps = try c.decodeIfPresent([FocusAutomationApp].self, forKey: .apps) ?? d.apps
-    onShortcutName = try c.decodeIfPresent(String.self, forKey: .onShortcutName) ?? d.onShortcutName
-    offShortcutName = try c.decodeIfPresent(String.self, forKey: .offShortcutName) ?? d.offShortcutName
-    preferSystemHotkey = try c.decodeIfPresent(Bool.self, forKey: .preferSystemHotkey) ?? d.preferSystemHotkey
-    blockDockInFullScreen = try c.decodeIfPresent(Bool.self, forKey: .blockDockInFullScreen) ?? d.blockDockInFullScreen
+    enabled = try c.decodeField(Bool.self, forKey: .enabled, in: decoder) ?? d.enabled
+    debugLoggingEnabled = try c.decodeField(Bool.self, forKey: .debugLoggingEnabled, in: decoder) ?? d.debugLoggingEnabled
+    apps = try c.decodeField([FocusAutomationApp].self, forKey: .apps, in: decoder) ?? d.apps
+    onShortcutName = try c.decodeField(String.self, forKey: .onShortcutName, in: decoder) ?? d.onShortcutName
+    offShortcutName = try c.decodeField(String.self, forKey: .offShortcutName, in: decoder) ?? d.offShortcutName
+    preferSystemHotkey = try c.decodeField(Bool.self, forKey: .preferSystemHotkey, in: decoder) ?? d.preferSystemHotkey
+    blockDockInFullScreen = try c.decodeField(Bool.self, forKey: .blockDockInFullScreen, in: decoder) ?? d.blockDockInFullScreen
   }
 }

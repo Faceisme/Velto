@@ -41,6 +41,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // 预热 ScreenCaptureKit,减少首次截图延迟。
         ScreenshotCapturer.prewarm()
+
+        // 放到下一轮:弹窗是模态的,别挡住上面的启动流程。
+        DispatchQueue.main.async { ConfigRecovery.presentNotices() }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
