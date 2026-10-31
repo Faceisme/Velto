@@ -541,7 +541,7 @@ final class EventTapManager: @unchecked Sendable {
                 ? nil : Unmanaged.passUnretained(event)
         }
 
-        if event.getIntegerValueField(.eventSourceUserData) == MouseControlController.syntheticScrollMarker {
+        if InputEventOrigin(event) == .smoothScroll {
             return Unmanaged.passUnretained(event)
         }
 

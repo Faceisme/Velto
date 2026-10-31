@@ -631,3 +631,39 @@ struct InputDispatcherRewriteTests {
     #expect(harness.recorder.calls.isEmpty)
   }
 }
+
+// MARK: - 事件来源
+
+@Suite("事件来源")
+struct InputEventOriginTests {
+  private func origin(marker: Int64) throws -> InputEventOrigin {
+    let event = try #require(CGEvent(source: nil))
+    event.setIntegerValueField(.eventSourceUserData, value: marker)
+    return InputEventOrigin(event)
+  }
+
+  @Test("每种合成标记都能认出来")
+  func markers() throws {
+    #expect(try origin(marker: shortcutMarker) == .shortcut)
+    #expect(try origin(marker: punctuationMarker) == .punctuation)
+    #expect(try origin(marker: inputSourceFixMarker) == .inputSourceFix)
+    #expect(try origin(marker: replayMarker) == .rightClickReplay)
+    #expect(try origin(marker: MouseControlController.syntheticScrollMarker) == .smoothScroll)
+  }
+
+  @Test("没有标记或标记不认识的算真实设备")
+  func device() throws {
+    #expect(try origin(marker: 0) == .device)
+    #expect(try origin(marker: 12345) == .device)
+  }
+
+  @Test("只有合成的键盘事件算 isSynthesizedKeyboard")
+  func synthesizedKeyboard() {
+    #expect(InputEventOrigin.shortcut.isSynthesizedKeyboard)
+    #expect(InputEventOrigin.punctuation.isSynthesizedKeyboard)
+    #expect(InputEventOrigin.inputSourceFix.isSynthesizedKeyboard)
+    #expect(!InputEventOrigin.device.isSynthesizedKeyboard)
+    #expect(!InputEventOrigin.rightClickReplay.isSynthesizedKeyboard)
+    #expect(!InputEventOrigin.smoothScroll.isSynthesizedKeyboard)
+  }
+}

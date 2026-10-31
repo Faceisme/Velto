@@ -169,11 +169,6 @@ final class InputSourcePunctuationController: @unchecked Sendable {
     return list.contains { ($0[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == pid }
   }
 
-  /// 合成事件标记判断。EventTapManager 先放行这些事件,避免被按键映射或本控制器二次处理。
-  static func isSyntheticEvent(_ event: CGEvent) -> Bool {
-    event.getIntegerValueField(.eventSourceUserData) == syntheticEventMarker
-  }
-
   /// keyDown 热路径。命中时吞掉原事件并自行 post 一组 keyCode=0 + unicode 的合成按键。
   ///
   /// 先查映射表再看 active:非标点键零日志零额外开销;标点键则把每个放行原因

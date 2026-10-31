@@ -1,6 +1,46 @@
 import CoreGraphics
 import Foundation
 
+// MARK: - 事件来源
+
+/// 事件是谁发的。Velto 自己合成的事件都带标记(`eventSourceUserData`),分发时据此放行或
+/// 跳过,否则自己发的事件会被自己再处理一遍。
+enum InputEventOrigin: Equatable {
+    /// 真实设备,或者别的 App 合成的。
+    case device
+    /// 手势、鼠标绑定、按键映射发出的快捷键。
+    case shortcut
+    /// 强制英文标点替换出来的字符。
+    case punctuation
+    /// 输入法切换修复合成的按键。
+    case inputSourceFix
+    /// 手势引擎补发的右键。
+    case rightClickReplay
+    /// 平滑滚动合成的滚轮。
+    case smoothScroll
+
+    init(_ event: CGEvent) {
+        switch event.getIntegerValueField(.eventSourceUserData) {
+        case ShortcutSynthesizer.syntheticEventMarker:
+            self = .shortcut
+        case InputSourcePunctuationController.syntheticEventMarker:
+            self = .punctuation
+        case GestureEngine.rightClickReplayMarker:
+            self = .rightClickReplay
+        case MouseControlController.syntheticScrollMarker:
+            self = .smoothScroll
+        default:
+            // 输入法修复不只看标记:修复进行中自己进程发出的事件也算,所以放在最后判断。
+            self = InputSourceSwitchSelector.isSyntheticEvent(event) ? .inputSourceFix : .device
+        }
+    }
+
+    /// 合成的键盘事件不能再被按键映射改写,也不能污染修饰键状态机。
+    var isSynthesizedKeyboard: Bool {
+        self == .shortcut || self == .punctuation || self == .inputSourceFix
+    }
+}
+
 // MARK: - 各模块接入分发的接口
 
 /// 全局快捷键:增强 Finder、截图、窗口最大化。
@@ -145,7 +185,7 @@ final class InputDispatcher {
     // MARK: - 右键
 
     private func rightMouseDown(_ event: CGEvent, _ raw: UInt64) -> Bool {
-        if event.getIntegerValueField(.eventSourceUserData) == GestureEngine.rightClickReplayMarker {
+        if InputEventOrigin(event) == .rightClickReplay {
             return false
         }
         // 录制手势卡片这种自己想吃右键的 view 已经把屏幕区域登记进来 ——
@@ -170,7 +210,7 @@ final class InputDispatcher {
     }
 
     private func rightMouseDragged(_ event: CGEvent) {
-        if event.getIntegerValueField(.eventSourceUserData) == GestureEngine.rightClickReplayMarker {
+        if InputEventOrigin(event) == .rightClickReplay {
             return
         }
         // 透传区只在引擎"未在手势中"时生效。一旦手势已经在卡片外起手(引擎接管),
@@ -192,7 +232,7 @@ final class InputDispatcher {
     }
 
     private func rightMouseUp(_ event: CGEvent, _ raw: UInt64) -> Bool {
-        if event.getIntegerValueField(.eventSourceUserData) == GestureEngine.rightClickReplayMarker {
+        if InputEventOrigin(event) == .rightClickReplay {
             return false
         }
         if !modules.gesture.isHandlingRightMouse, isInRightClickPassThrough(event) {
@@ -283,10 +323,7 @@ final class InputDispatcher {
 
     private func flagsChanged(_ event: CGEvent, _ raw: UInt64) -> Bool {
         // 合成的「上一个输入法」快捷键 / 按键映射修饰键不能污染鼠标控制/缩放/拖窗的修饰键状态机。
-        let userData = event.getIntegerValueField(.eventSourceUserData)
-        if userData == ShortcutSynthesizer.syntheticEventMarker
-            || userData == InputSourcePunctuationController.syntheticEventMarker
-            || InputSourceSwitchSelector.isSyntheticEvent(event) {
+        if InputEventOrigin(event).isSynthesizedKeyboard {
             return false
         }
         if modules.keyRemap.handleFlagsChanged(event: event) {
@@ -306,16 +343,16 @@ final class InputDispatcher {
     }
 
     private func keyDown(_ event: CGEvent, _ raw: UInt64) -> Bool {
-        let userData = event.getIntegerValueField(.eventSourceUserData)
-        if userData == ShortcutSynthesizer.syntheticEventMarker {
+        switch InputEventOrigin(event) {
+        case .shortcut:
             // 手势 / 鼠标绑定发出的快捷键可能正是 Velto 自己的全局快捷键(如窗口管理的
             // 最大化窗口),交给这几个处理器。它们只执行动作、不再合成按键,不会回环;
             // 按键映射、强制标点等改写类处理照旧跳过。
             return ownGlobalShortcut(event, raw)
-        }
-        if userData == InputSourcePunctuationController.syntheticEventMarker
-            || InputSourceSwitchSelector.isSyntheticEvent(event) {
+        case .punctuation, .inputSourceFix:
             return false
+        case .device, .rightClickReplay, .smoothScroll:
+            break
         }
         if modules.keyRemap.handleKeyDown(event: event) {
             return true
@@ -357,10 +394,7 @@ final class InputDispatcher {
     }
 
     private func keyUp(_ event: CGEvent, _ raw: UInt64) -> Bool {
-        let userData = event.getIntegerValueField(.eventSourceUserData)
-        if userData == ShortcutSynthesizer.syntheticEventMarker
-            || userData == InputSourcePunctuationController.syntheticEventMarker
-            || InputSourceSwitchSelector.isSyntheticEvent(event) {
+        if InputEventOrigin(event).isSynthesizedKeyboard {
             return false
         }
         if modules.punctuation.shouldConsumeKeyUp(event: event) {
