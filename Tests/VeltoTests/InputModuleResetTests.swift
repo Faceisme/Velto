@@ -12,7 +12,10 @@ struct InputModuleResetTests {
   }
 
   private func keyEvent(_ keyCode: CGKeyCode, down: Bool) throws -> CGEvent {
-    try #require(CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: down))
+    let event = try #require(CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: down))
+    // 新建事件会带上系统当前的修饰键状态,测试结果不能跟着真机走。
+    event.flags = []
+    return event
   }
 
   private func flagsEvent(_ keyCode: CGKeyCode, flags: CGEventFlags) throws -> CGEvent {

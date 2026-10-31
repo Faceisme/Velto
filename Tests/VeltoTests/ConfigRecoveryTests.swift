@@ -4,6 +4,15 @@ import betterfinder
 
 @testable import Velto
 
+/// 不落盘的 UserDefaults。真 suite 用完会在 ~/Library/Preferences 留下空 plist,
+/// cfprefsd 又是异步写的,测试结束时删不掉。
+private final class InMemoryDefaults: UserDefaults, @unchecked Sendable {
+  private var values: [String: Any] = [:]
+
+  override func set(_ value: Any?, forKey key: String) { values[key] = value }
+  override func data(forKey key: String) -> Data? { values[key] as? Data }
+}
+
 /// 配置读不出来时不能静默清零:能保住的字段保住,原始数据留底,用户知道发生了什么。
 @Suite("配置恢复")
 @MainActor
@@ -124,10 +133,8 @@ struct ConfigRecoveryTests {
     let file = directory.appendingPathComponent("preferences.json")
     let damaged = Data("{ damaged".utf8)
     try damaged.write(to: file)
-    let suite = "velto-test-\(UUID().uuidString)"
-    defer { UserDefaults().removePersistentDomain(forName: suite) }
 
-    let store = BetterFinderPreferencesStore(defaults: UserDefaults(suiteName: suite), fileURL: file)
+    let store = BetterFinderPreferencesStore(defaults: InMemoryDefaults(), fileURL: file)
 
     #expect(store.preferences == .defaults)
     let aside = try #require(backups(in: directory).first { $0.lastPathComponent.contains("undecodable") })
