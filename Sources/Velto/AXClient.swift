@@ -140,7 +140,9 @@ enum AXClient {
         return pid
     }
 
-    /// 本进程内的查询,廉价。
+    /// 元素所在窗口的 CGWindowID。**要问目标 App**:底下是一次 Mach RPC(`_AXMIGGetWindow`),
+    /// 目标主线程忙时会一直等(2026-11-04 实测:Chrome 新建标签页那一下,每次等 40~50ms)。
+    /// 别在主线程调;只想认出自己跟踪的元素时先用 CFEqual 比,那是本进程内的。
     static func windowID(of element: AXUIElement) -> CGWindowID? {
         var wid = CGWindowID(0)
         let result = _AXUIElementGetWindow(element, &wid)

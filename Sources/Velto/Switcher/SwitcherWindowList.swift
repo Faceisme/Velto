@@ -540,12 +540,20 @@ final class SwitcherWindowList {
     }
 
     private func window(matching element: AXUIElement) -> SwitcherWindow? {
-        if let wid = AXClient.windowID(of: element),
-           let window = windows[wid]
-        {
+        // 窗口级通知带的就是订阅时那个窗口元素,先本地比;对不上才问 wid(一次 RPC)。
+        if let window = Self.trackedWindow(matching: element, in: windows.values) {
             return window
         }
-        return windows.values.first { CFEqual($0.axUiElement, element) }
+        return AXClient.windowID(of: element).flatMap { windows[$0] }
+    }
+
+    /// 按 AX 元素本身找被跟踪的窗口。CFEqual 只比元素里的 pid + 元素 id,在本进程内
+    /// 完成,不向目标 App 发 RPC;`AXClient.windowID` 则要等目标 App 主线程应答。
+    static func trackedWindow(
+        matching element: AXUIElement,
+        in windows: some Sequence<SwitcherWindow>
+    ) -> SwitcherWindow? {
+        windows.first { CFEqual($0.axUiElement, element) }
     }
 
     @discardableResult
@@ -852,10 +860,28 @@ final class SwitcherWindowList {
     /// 后台只对单个 AXUIElement 读 title,完了主线程写回。
     /// 跟 syncWindowsForApp 比省掉了:全量窗口枚举、N 个 multiAttributes 读、
     /// brute force 100ms。
+    ///
+    /// 认窗口不能在主线程问 wid:`_AXUIElementGetWindow` 是到目标 App 的 RPC,标题恰恰在
+    /// 它最忙时变(Chrome 新建标签页那一下要等 40~50ms,一次新建两三次,主线程累计
+    /// 卡 100ms 以上,2026-11-04 实测)。通知带的就是订阅时的窗口元素,本地 CFEqual 即可;
+    /// 对不上(App 重建了 AX 树之类)才去后台问 wid。
     private func updateTitleForWindow(_ element: AXUIElement) {
-        // 主线程拿 wid:_AXUIElementGetWindow 是本进程内的查询,廉价。
-        guard let wid = AXClient.windowID(of: element),
-              let existing = windows[wid] else { return }
+        if let existing = Self.trackedWindow(matching: element, in: windows.values) {
+            scheduleTitleRead(element, for: existing)
+            return
+        }
+        let elementBox = SwitcherAxRefBox(element: element)
+        AXCallQueue.shared.submit { [weak self] in
+            guard let wid = AXClient.windowID(of: elementBox.element) else { return }
+            Task { @MainActor [weak self] in
+                guard let self, let existing = self.windows[wid] else { return }
+                self.scheduleTitleRead(elementBox.element, for: existing)
+            }
+        }
+    }
+
+    private func scheduleTitleRead(_ element: AXUIElement, for existing: SwitcherWindow) {
+        let wid = existing.cgWindowId
         let appLocalizedName = existing.application.localizedName
         let elementBox = SwitcherAxRefBox(element: element)
         AXCallQueue.shared.schedule("title-\(wid)") { [weak self] in
