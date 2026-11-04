@@ -700,11 +700,32 @@ final class SwitcherWindowList {
             // 标准 AX 路径只拿当前 Space —— 这种 case 必须叠上暴力枚举才能抓到。
             // 用事件来源 app 的 pid:后台 app 新建窗口也能同步到正确的 app。
             if let pid = pidOfElement(element) ?? frontmostPid {
-                syncWindowsForApp(pid: pid, includeBruteForce: true)
+                syncForCreatedWindow(element, pid: pid)
             }
 
         default:
             break
+        }
+    }
+
+    /// 新建的是不是窗口,先在后台问一次尺寸再决定扫不扫。输入法指示气泡(切输入法时
+    /// macOS 在光标旁弹的小窗,开在目标 App 进程里,AX 报 AXDialog 84×77)、工具提示
+    /// 这类小浮层也发 kAXWindowCreated,applyProbes 反正会按尺寸丢掉它们,却要先付一轮
+    /// 全量同步 + 暴力枚举 —— 对目标 App 主线程连发几十毫秒 AX 请求,正撞在它刚新建
+    /// 东西的时候(2026-11-04:Chrome 每次新建标签页都因此卡一下)。
+    /// 读不到尺寸(超时 / 元素已销毁)照旧扫:宁可多扫一次,不能漏掉真窗口。
+    private func syncForCreatedWindow(_ element: AXUIElement, pid: pid_t) {
+        let box = SwitcherAxRefBox(element: element)
+        // 不用 schedule(key:):同 key 会被后来者顶掉,真窗口和气泡前后脚到时真窗口那次会被吞。
+        AXCallQueue.shared.submit { [weak self] in
+            let size = AXClient.value(kAXSizeAttribute, of: box.element).flatMap(AXClient.size(from:))
+            if let size, !SwitcherWindowDiscriminator.isWindowSized(size) {
+                SwitcherDebugLog.log("window created pid=\(pid) size=\(Int(size.width))x\(Int(size.height)) 太小不是窗口 → 不扫")
+                return
+            }
+            Task { @MainActor [weak self] in
+                self?.syncWindowsForApp(pid: pid, includeBruteForce: true)
+            }
         }
     }
 

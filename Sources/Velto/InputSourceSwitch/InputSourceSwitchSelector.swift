@@ -36,6 +36,13 @@ enum InputSourceSwitchSelector {
   /// 合成键盘事件的抑制窗口。部分 flagsChanged 事件不一定保留 userData,用 PID + 时间兜底。
   private nonisolated(unsafe) static var syntheticEventEndTime: TimeInterval = 0
 
+  /// 还有没跑完的切换步骤(CJKV 修复序列、落地校验、临时窗口)。跑完或被作废的会从
+  /// pendingWorkItems 里移除。
+  @MainActor
+  static var hasPendingWork: Bool {
+    !pendingWorkItems.isEmpty || temporaryWindow != nil
+  }
+
   @MainActor
   static var isHandlingTemporaryWindowActivation: Bool {
     isShowingTemporaryWindow ||

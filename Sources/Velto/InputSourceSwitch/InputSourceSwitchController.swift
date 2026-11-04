@@ -106,6 +106,7 @@ final class InputSourceSwitchController {
       lastContext = nil
       return
     }
+    let previousBundleID = lastContext?.bundleID
     let isSameContext = (lastContext?.contextID == ctx.contextID)
     lastContext = ctx
     let prefs = ConfigStore.shared.preferences.inputSourceSwitch
@@ -120,21 +121,41 @@ final class InputSourceSwitchController {
     }
     forceReapply = false
 
-    // 一进入新上下文就作废上一上下文 CJKV 修复排定的延时步骤(bounce / 热键 / Command / 兜底
-    // 重选)。否则刚切到 WeChat 排了豆包修复序列,立刻又切回 Claude,那串延时步骤会在 Claude
-    // 里继续跑、把输入法切成豆包。切换分支稍后的 select() 自身也会 cancel,但「无目标」分支会
-    // 直接 return 不经过 select(),故在此统一兜底。(对齐 ISP:switchToInputSource 开头也先 cancel。)
-    InputSourceSwitchSelector.cancelPending()
-
     guard let targetID = decideTarget(for: ctx, prefs: prefs) else {
+      // 作废上一上下文排定的延时步骤,理由见下方 cancelPending 处。
+      InputSourceSwitchSelector.cancelPending()
       InputSourceSwitchDebugLog.log("context=\(ctx.contextID) → 无目标,保持当前")
       return
     }
-    // 对齐 ISP(IndicatorVM.watchState 的 .appChanged):进入新上下文、算出目标键盘后,
+    // 同一个 App 里换上下文(浏览器网页 ↔ 地址栏 ↔ 别的网站)、当前已经是目标、也没有
+    // 进行中的切换序列时,不再切。下面「无条件切一次」防的是**进入 App** 那一刻 IME /
+    // 系统把输入法顶回去;同一个 App 里没有激活这回事,重切一次什么也不改变,却会让
+    // macOS 在光标旁弹出输入法指示气泡 —— 它是目标 App 进程里的一个新窗口。浏览器每次
+    // 新建标签页聚焦地址栏都这样弹一次:Chrome 要现建窗口,切换器又因 kAXWindowCreated
+    // 对 Chrome 做整轮暴力枚举,新建标签页明显卡顿;光标挪出屏幕时气泡不弹,所以只在
+    // 窗口靠右时卡(2026-11-04 实测,停掉 Velto 气泡就不出现)。
+    if Self.isRedundantInAppSwitch(
+      previousBundleID: previousBundleID,
+      bundleID: ctx.bundleID,
+      currentID: InputSourceCatalog.current()?.id,
+      targetID: targetID,
+      hasPendingSwitch: InputSourceSwitchSelector.hasPendingWork
+    ) {
+      InputSourceSwitchDebugLog.log("context=\(ctx.contextID) → 已是 \(targetID)(同一 App 内换上下文),不重切")
+      return
+    }
+
+    // 一进入新上下文就作废上一上下文 CJKV 修复排定的延时步骤(bounce / 热键 / Command / 兜底
+    // 重选)。否则刚切到 WeChat 排了豆包修复序列,立刻又切回 Claude,那串延时步骤会在 Claude
+    // 里继续跑、把输入法切成豆包。select() 自身也会 cancel,这里显式写出来,和上面「无目标」
+    // 分支一致。(对齐 ISP:switchToInputSource 开头也先 cancel。)
+    InputSourceSwitchSelector.cancelPending()
+
+    // 对齐 ISP(IndicatorVM.watchState 的 .appChanged):进入新 App、算出目标键盘后,
     // **无条件切一次**,绝不判断"当前已是它就跳过"。这是 ISP 从不出问题的关键 —— 哪怕 TIS
     // 报当前已是 US,豆包等 CJKV IME 仍可能在英文子模式下"伪装"成底层 US、或激活后才把这个
     // App 顶回中文;唯有硬切一次 TISSelectInputSource 才能把它真正顶掉。同一上下文的重复评估
-    // 早已被上面的 isSameContext 拦掉,这里不会对同一个 App 反复切。
+    // 早已被上面的 isSameContext 拦掉,同一 App 内的多余重切由 isRedundantInAppSwitch 拦掉。
     InputSourceSwitchDebugLog.log("context=\(ctx.contextID) → 应用 \(targetID)")
     isApplyingProgrammaticSwitch = true
     programmaticSwitchGeneration += 1
@@ -152,6 +173,19 @@ final class InputSourceSwitchController {
       guard let self, self.programmaticSwitchGeneration == generation else { return }
       self.isApplyingProgrammaticSwitch = false
     }
+  }
+
+  /// 同一个 App 内换上下文时,这次切换是否多余。上一个上下文不是同一个 App(包括刚启动、
+  /// 锁屏后 lastContext 被清空)、当前不是目标、或还有切换序列在跑(CJKV 修复的 bounce
+  /// 中途、落地校验未到点)时都不算多余,照常硬切。
+  static func isRedundantInAppSwitch(
+    previousBundleID: String?,
+    bundleID: String,
+    currentID: String?,
+    targetID: String,
+    hasPendingSwitch: Bool
+  ) -> Bool {
+    previousBundleID == bundleID && currentID == targetID && !hasPendingSwitch
   }
 
   /// 锁屏界面 / 解锁授权 / 屏保。SecurityAgentHelper 带架构后缀(.arm64/.x86_64),用前缀匹配。

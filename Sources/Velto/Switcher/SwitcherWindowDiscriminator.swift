@@ -18,6 +18,11 @@ enum SwitcherWindowDiscriminator {
         kAXDialogSubrole as String,
     ]
 
+    /// 够不够窗口的个头。再小的是浮层、工具提示、输入法指示气泡。
+    static func isWindowSized(_ size: CGSize) -> Bool {
+        size.width > 100 && size.height > 50
+    }
+
     /// 输入参数都允许 nil —— AX 调用可能漏字段,但我们必须给出确定的 yes/no。
     static func isActualWindow(
         bundleIdentifier: String?,
@@ -31,7 +36,7 @@ enum SwitcherWindowDiscriminator {
         // 报一个空壳 element 但 _AXUIElementGetWindow 拿不到 id)
         guard wid != 0 else { return false }
         // 太小的不是窗口,是浮层/工具提示
-        guard let size, size.width > 100, size.height > 50 else { return false }
+        guard let size, isWindowSized(size) else { return false }
         // subrole 必须在白名单。这条会过滤掉 99% 的非窗口噪音。
         guard let subrole, standardSubroles.contains(subrole) else { return false }
         // JetBrains 系常造出 subrole=AXStandardWindow 但 title 为空、
